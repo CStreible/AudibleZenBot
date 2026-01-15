@@ -326,6 +326,12 @@ class PlatformConnectionWidget(QWidget):
         main_layout.addWidget(self.info_text)
         settings_widget = self.create_platform_section(self.platform_id, True, True, True)
         main_layout.addWidget(settings_widget)
+        # Load stream info at startup on the main thread after the event loop starts
+        try:
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self.refresh_platform_info(self.platform_id))
+        except Exception:
+            pass
 
         # Move Disable platform checkbox to the top
         # Add label next to toggle switch
@@ -1020,7 +1026,11 @@ class PlatformConnectionWidget(QWidget):
                     if 'game_name' in info and 'twitch' in self.platform_widgets:
                         category_widget = self.platform_widgets['twitch'].get('category')
                         if category_widget:
-                            category_widget.setText(info['game_name'])
+                            try:
+                                category_widget.blockSignals(True)
+                                category_widget.setText(info['game_name'])
+                            finally:
+                                category_widget.blockSignals(False)
                             print(f"[Twitch] Loaded category: {info['game_name']}")
                     
                     # Update tags (tags are now in the channel info as a list of strings)
@@ -1148,7 +1158,11 @@ class PlatformConnectionWidget(QWidget):
                         category_widget = self.platform_widgets['kick'].get('category')
                         if category_widget and stream_info['categories']:
                             category_name = stream_info['categories'][0].get('name', '')
-                            category_widget.setText(category_name)
+                            try:
+                                category_widget.blockSignals(True)
+                                category_widget.setText(category_name)
+                            finally:
+                                category_widget.blockSignals(False)
                             print(f"[Kick] Loaded category: {category_name}")
                     
                     # Update tags
