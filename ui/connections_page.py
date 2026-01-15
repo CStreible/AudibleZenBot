@@ -409,62 +409,76 @@ class PlatformConnectionWidget(QWidget):
         title_layout.addWidget(title_input)
         layout.addLayout(title_layout)
         
-        # Go-Live Notification (if supported)
-        if has_notification:
-            notif_layout = QVBoxLayout()
-            notif_label = QLabel("Go-Live Notification:")
-            notif_label.setStyleSheet("color: #ffffff; font-weight: normal; margin-bottom: 5px;")
-            notif_input = QTextEdit()
-            notif_input.setObjectName(f"{platform_name}_notification")
-            notif_input.setPlaceholderText(f"Enter {platform_name} go-live notification...")
-            notif_input.setMaximumHeight(80)
-            self.platform_widgets[platform_name]['notification'] = notif_input
-            notif_input.setStyleSheet("""
-                QTextEdit {
-                    background-color: #2b2b2b;
-                    color: #ffffff;
-                    border: 1px solid #3d3d3d;
-                    border-radius: 3px;
-                    padding: 8px;
-                }
-                QTextEdit:focus {
-                    border: 1px solid #4a90e2;
-                }
-            """)
-            notif_layout.addWidget(notif_label)
-            notif_layout.addWidget(notif_input)
-            layout.addLayout(notif_layout)
-        
-        # Category/Game (if supported)
-        if has_category:
+        # Category and Go-Live Notification (if supported)
+        # Render these in two columns: category on the left, notification on the right.
+        if has_category or has_notification:
             category_layout = QVBoxLayout()
-            row_layout = QHBoxLayout()
-            category_label = QLabel("Stream Category:")
-            category_label.setStyleSheet("color: #ffffff; font-weight: normal;")
-            category_label.setMinimumWidth(150)
-            category_input = QLineEdit()
-            category_input.setObjectName(f"{platform_name}_category")
-            category_input.setPlaceholderText("Enter stream category/game...")
-            self.platform_widgets[platform_name]['category'] = category_input
-            category_input.setStyleSheet("""
-                QLineEdit {
-                    background-color: #2b2b2b;
-                    color: #ffffff;
-                    border: 1px solid #3d3d3d;
-                    border-radius: 3px;
-                    padding: 8px;
-                }
-                QLineEdit:focus {
-                    border: 1px solid #4a90e2;
-                }
-            """)
-            row_layout.addWidget(category_label)
-            row_layout.addWidget(category_input)
-            category_layout.addLayout(row_layout)
+            top_row = QHBoxLayout()
+            left_col = QVBoxLayout()
+            right_col = QVBoxLayout()
 
-            # Only for Twitch: add suggestions list
-            if platform_name == 'twitch':
-                self._setup_twitch_suggestions(platform_name, category_input, category_layout)
+            left_col.setSpacing(6)
+            right_col.setSpacing(6)
+
+            # Category column (left)
+            if has_category:
+                category_label = QLabel("Stream Category:")
+                category_label.setStyleSheet("color: #ffffff; font-weight: normal;")
+                category_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                category_input = QLineEdit()
+                category_input.setObjectName(f"{platform_name}_category")
+                category_input.setPlaceholderText("Enter stream category/game...")
+                self.platform_widgets[platform_name]['category'] = category_input
+                category_input.setStyleSheet("""
+                    QLineEdit {
+                        background-color: #2b2b2b;
+                        color: #ffffff;
+                        border: 1px solid #3d3d3d;
+                        border-radius: 3px;
+                        padding: 8px;
+                    }
+                    QLineEdit:focus {
+                        border: 1px solid #4a90e2;
+                    }
+                """)
+                # Label above input, left-justified
+                left_col.addWidget(category_label, alignment=Qt.AlignmentFlag.AlignLeft)
+                left_col.addWidget(category_input)
+
+                # Only for Twitch: add suggestions list using the left column as anchor
+                if platform_name == 'twitch':
+                    self._setup_twitch_suggestions(platform_name, category_input, category_layout)
+
+            # Notification column (right)
+            if has_notification:
+                notif_label = QLabel("Go-Live Notification:")
+                notif_label.setStyleSheet("color: #ffffff; font-weight: normal; margin-bottom: 5px;")
+                notif_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                notif_input = QTextEdit()
+                notif_input.setObjectName(f"{platform_name}_notification")
+                notif_input.setPlaceholderText(f"Enter {platform_name} go-live notification...")
+                notif_input.setMaximumHeight(80)
+                self.platform_widgets[platform_name]['notification'] = notif_input
+                notif_input.setStyleSheet("""
+                    QTextEdit {
+                        background-color: #2b2b2b;
+                        color: #ffffff;
+                        border: 1px solid #3d3d3d;
+                        border-radius: 3px;
+                        padding: 8px;
+                    }
+                    QTextEdit:focus {
+                        border: 1px solid #4a90e2;
+                    }
+                """)
+                # Label above input, left-justified within its column
+                right_col.addWidget(notif_label, alignment=Qt.AlignmentFlag.AlignLeft)
+                right_col.addWidget(notif_input)
+
+            # Add columns to top row and attach to the main category layout
+            top_row.addLayout(left_col, 1)
+            top_row.addLayout(right_col, 1)
+            category_layout.addLayout(top_row)
 
         if category_layout:
             layout.addLayout(category_layout)
