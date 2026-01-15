@@ -1279,7 +1279,11 @@ class PlatformConnectionWidget(QWidget):
                 if 'category_name' in data and 'trovo' in self.platform_widgets:
                     category_widget = self.platform_widgets['trovo'].get('category')
                     if category_widget:
-                        category_widget.setText(data['category_name'])
+                        try:
+                            category_widget.blockSignals(True)
+                            category_widget.setText(data['category_name'])
+                        finally:
+                            category_widget.blockSignals(False)
                         print(f"[Trovo] Loaded category: {data['category_name']}")
             else:
                 print(f"[Trovo] Channel API request failed: {channel_response.status_code}")
