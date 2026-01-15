@@ -419,6 +419,13 @@ class PlatformConnectionWidget(QWidget):
 
             left_col.setSpacing(6)
             right_col.setSpacing(6)
+            # Ensure columns are top-aligned so inputs don't get extra space above them
+            left_col.setAlignment(Qt.AlignmentFlag.AlignTop)
+            right_col.setAlignment(Qt.AlignmentFlag.AlignTop)
+            top_row.setAlignment(Qt.AlignmentFlag.AlignTop)
+            # Remove extra margins for a tighter layout
+            category_layout.setContentsMargins(0, 0, 0, 0)
+            top_row.setContentsMargins(0, 0, 0, 0)
 
             # Category column (left)
             if has_category:
@@ -476,8 +483,9 @@ class PlatformConnectionWidget(QWidget):
                 right_col.addWidget(notif_input)
 
             # Add columns to top row and attach to the main category layout
-            top_row.addLayout(left_col, 1)
-            top_row.addLayout(right_col, 1)
+            # Use a 3:7 stretch to give the left column roughly 30% width
+            top_row.addLayout(left_col, 3)
+            top_row.addLayout(right_col, 7)
             category_layout.addLayout(top_row)
 
         if category_layout:
