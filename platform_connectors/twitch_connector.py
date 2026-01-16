@@ -253,6 +253,11 @@ class TwitchConnector(BasePlatformConnector):
             self.eventsub_worker.event_signal.connect(self.onEvent)
             self.eventsub_worker.status_signal.connect(self.onEventSubStatus)
             self.eventsub_worker.error_signal.connect(self.onError)
+            # Connect reauth request signal to prompt the user on main thread
+            try:
+                self.eventsub_worker.reauth_signal.connect(self._on_eventsub_reauth_requested)
+            except Exception:
+                pass
             self.eventsub_worker_thread.started.connect(self.eventsub_worker.run)
             self.eventsub_worker_thread.start()
     
@@ -266,6 +271,35 @@ class TwitchConnector(BasePlatformConnector):
         """
         if not self.refresh_token:
             return None
+
+    def _on_eventsub_reauth_requested(self, oauth_url: str):
+        """Handle EventSub worker request to re-authorize the app.
+
+        Shows a confirmation dialog to the user on the main thread; opens the
+        provided `oauth_url` in the browser if the user accepts.
+        """
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            import webbrowser
+
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Re-authorize Twitch for EventSub")
+            msg.setText("AudibleZenBot needs additional Twitch permissions to receive Channel Points, Cheers, and Follower events.")
+            msg.setInformativeText("Click 'Re-authorize' to open Twitch and grant the required permissions.")
+            reauth_btn = msg.addButton("Re-authorize", QMessageBox.ButtonRole.AcceptRole)
+            cancel_btn = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            msg.setDefaultButton(reauth_btn)
+            msg.exec()
+
+            if msg.clickedButton() == reauth_btn:
+                try:
+                    webbrowser.open(oauth_url)
+                    print("[EventSub] Opened browser for re-authorization")
+                except Exception as e:
+                    print(f"[EventSub] Failed to open browser: {e}")
+        except Exception as e:
+            print(f"[TwitchConnector] Error showing re-auth dialog: {e}")
         
         try:
             response = requests.post(
@@ -996,7 +1030,17 @@ class TwitchWorker(QThread):
                         pass
                     if has_cb:
                         try:
-                            self._metadata_callback(username, message, metadata)
+                            # Do NOT invoke metadata callbacks for bot workers —
+                            # bot connections must not cause messages to be shown
+                            # in the UI. If this worker is attached to a bot
+                            # connector, skip calling the metadata callback.
+                            if getattr(self, 'connector', None) and getattr(self.connector, 'is_bot_account', False):
+                                try:
+                                    print(f"[TwitchWorker][TRACE] Skipping metadata callback for bot worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))}")
+                                except Exception:
+                                    pass
+                            else:
+                                self._metadata_callback(username, message, metadata)
                         except Exception as e:
                             print(f"[TwitchWorker] ✗ Error calling metadata callback: {e}")
                             import traceback
@@ -1007,12 +1051,24 @@ class TwitchWorker(QThread):
                         # to be a streamer connector, call its handler directly.
                         try:
                             conn = getattr(self, 'connector', None)
-                            if conn and hasattr(conn, 'onMessageReceivedWithMetadata') and not getattr(conn, 'is_bot_account', False):
-                                print(f"[TwitchWorker][TRACE] Fallback: invoking connector.onMessageReceivedWithMetadata for connector_id={id(conn)}")
-                                try:
-                                    conn.onMessageReceivedWithMetadata(username, message, metadata)
-                                except Exception as e:
-                                    print(f"[TwitchWorker] ✗ Error in fallback connector callback: {e}")
+                            if conn:
+                                # If connector is a streamer connector, call it directly
+                                if hasattr(conn, 'onMessageReceivedWithMetadata') and not getattr(conn, 'is_bot_account', False):
+                                    print(f"[TwitchWorker][TRACE] Fallback: invoking connector.onMessageReceivedWithMetadata for connector_id={id(conn)}")
+                                    try:
+                                        conn.onMessageReceivedWithMetadata(username, message, metadata)
+                                    except Exception as e:
+                                        print(f"[TwitchWorker] ✗ Error in fallback connector callback: {e}")
+                                else:
+                                    # Do NOT forward messages from bot connectors to streamer handlers.
+                                    try:
+                                        if getattr(conn, 'is_bot_account', False):
+                                            try:
+                                                print(f"[TwitchWorker][TRACE] Fallback: bot connector detected, not forwarding message from worker_id={id(self)}")
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
                         except Exception:
                             pass
                 except Exception as e:
@@ -1322,6 +1378,8 @@ class TwitchEventSubWorker(QThread):
     event_signal = pyqtSignal(str, str, dict)  # event_type, username, event_data
     status_signal = pyqtSignal(bool)  # connected
     error_signal = pyqtSignal(str)  # error
+    # Request the main thread to open re-auth flow; payload is the oauth_url
+    reauth_signal = pyqtSignal(str)
     
     EVENTSUB_URL = 'wss://eventsub.wss.twitch.tv/ws'
     
@@ -1336,6 +1394,8 @@ class TwitchEventSubWorker(QThread):
         self.loop = None
         self.session_id = None
         self.subscription_id = None
+        # Populated by validate_token()
+        self.validated_scopes = None
     
     def run(self):
         """Main event loop"""
@@ -1365,6 +1425,8 @@ class TwitchEventSubWorker(QThread):
             if response.status_code == 200:
                 data = response.json()
                 scopes = data.get('scopes', [])
+                # remember scopes for later diagnostic logging
+                self.validated_scopes = scopes
                 print(f"[EventSub] Token validated. Granted scopes:")
                 for scope in scopes:
                     print(f"[EventSub]    ✓ {scope}")
@@ -1393,10 +1455,45 @@ class TwitchEventSubWorker(QThread):
                     print(f"[EventSub] 3. In the app, log out of Twitch")
                     print(f"[EventSub] 4. Log back in - Twitch will ask for NEW permissions")
                     print(f"[EventSub] 5. Click 'Authorize' to grant the required scopes")
+                    try:
+                        import webbrowser
+                        # Construct an OAuth URL to help the user re-authorize with required scopes
+                        twitch_client_id = "h84tx3mvvpk9jyt8rv8p8utfzupz82"
+                        redirect_uri = "http://localhost:8888/callback"
+                        scopes_needed = [
+                            'user:read:email',
+                            'chat:read',
+                            'chat:edit',
+                            'channel:read:subscriptions',
+                            'channel:manage:broadcast',
+                            'channel:read:redemptions',
+                            'bits:read',
+                            'moderator:read:followers'
+                        ]
+                        scope_string = " ".join(scopes_needed)
+                        from urllib.parse import urlencode
+                        params = {
+                            'response_type': 'code',
+                            'client_id': twitch_client_id,
+                            'redirect_uri': redirect_uri,
+                            'scope': scope_string,
+                            'force_verify': 'true'
+                        }
+                        oauth_url = f"https://id.twitch.tv/oauth2/authorize?{urlencode(params)}"
+                        print(f"[EventSub] Requesting re-authorize with required scopes")
+                        try:
+                            # Emit a signal to request reauthorization UI in the main thread
+                            self.reauth_signal.emit(oauth_url)
+                        except Exception as e:
+                            print(f"[EventSub] Could not emit reauth signal: {e}")
+                    except Exception as e:
+                        print(f"[EventSub] Could not open browser for re-auth: {e}")
                 else:
                     print(f"[EventSub] ✓ All required scopes present")
             else:
-                print(f"[EventSub] ⚠ Token validation failed: {response.status_code}")
+                # Print full response body to aid triage
+                body = response.text
+                print(f"[EventSub] ⚠ Token validation failed: {response.status_code} - {body}")
         except Exception as e:
             print(f"[EventSub] Error validating token: {e}")
     
@@ -1562,7 +1659,20 @@ class TwitchEventSubWorker(QThread):
                     sub_id = result['data'][0]['id']
                     print(f"[EventSub] ✓ Subscribed to {sub['name']}! ID: {sub_id}")
                 else:
-                    print(f"[EventSub] ⚠ {sub['name']} subscription failed: {response.status_code} - {response.text}")
+                    # Log full response body and masked token + current validated scopes (if available)
+                    body = response.text
+                    def _mask_token(tkn: str) -> str:
+                        if not tkn:
+                            return '<empty token>'
+                        if len(tkn) <= 10:
+                            return tkn[:4] + '...' + tkn[-2:]
+                        return tkn[:6] + '...' + tkn[-4:]
+
+                    masked = _mask_token(self.oauth_token)
+                    scopes = self.validated_scopes if self.validated_scopes is not None else []
+                    print(f"[EventSub] ⚠ {sub['name']} subscription failed: {response.status_code} - {body}")
+                    print(f"[EventSub]    Masked token: {masked}")
+                    print(f"[EventSub]    Validated scopes: {scopes}")
             except Exception as e:
                 print(f"[EventSub] Error subscribing to {sub['name']}: {e}")
     

@@ -3,6 +3,7 @@ Chat Manager - Manages connections and messages from all platforms
 """
 
 import asyncio
+import time
 from typing import Dict, Optional
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 
@@ -55,6 +56,8 @@ class ChatManager(QObject):
         
         # Bot connectors (for sending messages - bot account)
         self.bot_connectors: Dict[str, object] = {}
+        # Recent incoming message cache to suppress duplicates (platform, user, msg_lower, ts)
+        self._recent_incoming = []
         
 
         
@@ -517,16 +520,33 @@ class ChatManager(QObject):
             keys = []
         print(f"[ChatManager][TRACE] onMessageReceivedWithMetadata: platform={platform_id} username={username} preview={msg_preview} metadata_keys={keys}")
         # Don't emit if platform is disabled
-        if platform_id not in self.disabled_platforms:
-            try:
-                self.message_received.emit(platform_id, username, message, metadata)
-                print(f"[ChatManager][TRACE] Emitted message_received for {platform_id} {username}")
-            except Exception as e:
-                print(f"[ChatManager] ✗ Error emitting message signal: {e}")
-                import traceback
-                traceback.print_exc()
-        else:
+        if platform_id in self.disabled_platforms:
             print(f"[ChatManager] Platform {platform_id} is disabled, message not emitted")
+            return
+
+        # De-duplication: suppress duplicate incoming messages from multiple connections
+        try:
+            now = time.time()
+            msg_key = (platform_id, username, (message or '').strip().lower())
+            # prune old entries
+            self._recent_incoming = [t for t in self._recent_incoming if now - t[3] < 0.8]
+            # check for duplicate
+            for (p, u, m, ts) in self._recent_incoming:
+                if p == msg_key[0] and u == msg_key[1] and m == msg_key[2]:
+                    print(f"[ChatManager][TRACE] Suppressing duplicate message from {username} on {platform_id}: {message[:120]}")
+                    return
+            # record this message
+            self._recent_incoming.append((msg_key[0], msg_key[1], msg_key[2], now))
+        except Exception:
+            pass
+
+        try:
+            self.message_received.emit(platform_id, username, message, metadata)
+            print(f"[ChatManager][TRACE] Emitted message_received for {platform_id} {username}")
+        except Exception as e:
+            print(f"[ChatManager] ✗ Error emitting message signal: {e}")
+            import traceback
+            traceback.print_exc()
     
     def onMessageDeleted(self, platform_id: str, message_id: str):
         """Handle message deletion event from platform (moderator or auto-moderation)"""

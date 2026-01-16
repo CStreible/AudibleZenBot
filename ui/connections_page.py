@@ -1504,15 +1504,39 @@ class PlatformConnectionWidget(QWidget):
         # managed by the FlowLayout, then add to layout and refresh.
         try:
             tag_chip.setParent(tags_display)
+            # Ensure the chip widget is shown and owned by the tags container
             tag_chip.setVisible(True)
+            tag_chip.show()
         except Exception:
             pass
+
         layout.addWidget(tag_chip)
-        layout.invalidate()
+        # Invalidate and activate the layout so FlowLayout recomputes immediately
         try:
-            tags_display.updateGeometry()
-            tags_display.repaint()
-            tags_display.adjustSize()
+            layout.invalidate()
+            try:
+                layout.activate()
+            except Exception:
+                pass
+
+            # Ensure the tags_display container is visible and refreshed
+            try:
+                tags_display.setVisible(True)
+            except Exception:
+                pass
+
+            try:
+                tags_display.updateGeometry()
+            except Exception:
+                pass
+            try:
+                tags_display.adjustSize()
+            except Exception:
+                pass
+            try:
+                tags_display.repaint()
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1976,7 +2000,11 @@ class PlatformConnectionWidget(QWidget):
                     "chat:read",
                     "chat:edit",
                     "channel:read:subscriptions",
-                    "channel:manage:broadcast"
+                    "channel:manage:broadcast",
+                    # Additional scopes required for EventSub subscriptions
+                    "channel:read:redemptions",
+                    "bits:read",
+                    "moderator:read:followers"
                 ]
                 scope_string = " ".join(scopes)
                 state = secrets.token_urlsafe(16)

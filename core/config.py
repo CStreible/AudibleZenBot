@@ -25,6 +25,11 @@ class ConfigManager:
         
         self.config_file = self.config_dir / config_file
         self._lock = threading.RLock()
+        # Verbose config saves can be enabled by env var AZB_VERBOSE_CONFIG=1
+        try:
+            self.verbose = bool(int(os.environ.get('AZB_VERBOSE_CONFIG', '0')))
+        except Exception:
+            self.verbose = False
         self.config: Dict[str, Any] = self.load()
     
     def load(self) -> Dict[str, Any]:
@@ -45,13 +50,14 @@ class ConfigManager:
         with self._lock:
             try:
                 # Debug: Check if trovo streamer_user_id is in config before saving
-                if "platforms" in self.config and "trovo" in self.config["platforms"]:
-                    trovo_keys = list(self.config["platforms"]["trovo"].keys())
-                    has_user_id = "streamer_user_id" in trovo_keys
-                    print(f"[ConfigManager] DEBUG save(): Trovo keys = {trovo_keys}")
-                    print(f"[ConfigManager] DEBUG save(): Has streamer_user_id = {has_user_id}")
-                    if has_user_id:
-                        print(f"[ConfigManager] DEBUG save(): streamer_user_id value = {self.config['platforms']['trovo']['streamer_user_id']}")
+                if self.verbose:
+                    if "platforms" in self.config and "trovo" in self.config["platforms"]:
+                        trovo_keys = list(self.config["platforms"]["trovo"].keys())
+                        has_user_id = "streamer_user_id" in trovo_keys
+                        print(f"[ConfigManager] DEBUG save(): Trovo keys = {trovo_keys}")
+                        print(f"[ConfigManager] DEBUG save(): Has streamer_user_id = {has_user_id}")
+                        if has_user_id:
+                            print(f"[ConfigManager] DEBUG save(): streamer_user_id value = {self.config['platforms']['trovo']['streamer_user_id']}")
                 with open(self.config_file, 'w', encoding='utf-8') as f:
                     json.dump(self.config, f, indent=4)
                     f.flush()  # Ensure data is written to disk

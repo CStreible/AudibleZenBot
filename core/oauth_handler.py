@@ -81,7 +81,16 @@ class OAuthHandler(QObject):
             'token_url': 'https://id.twitch.tv/oauth2/token',
             'client_id': 'YOUR_TWITCH_CLIENT_ID',  # User must set this
             'redirect_uri': 'http://localhost:3000',
-            'scopes': ['chat:read', 'chat:edit', 'user:edit:broadcast', 'channel:manage:broadcast']
+            'scopes': [
+                'chat:read',
+                'chat:edit',
+                'user:edit:broadcast',
+                'channel:manage:broadcast',
+                # Ensure EventSub subscriptions work
+                'channel:read:redemptions',
+                'bits:read',
+                'moderator:read:followers',
+            ]
         },
         'youtube': {
             'auth_url': 'https://accounts.google.com/o/oauth2/v2/auth',
