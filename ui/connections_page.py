@@ -258,7 +258,7 @@ class PlatformConnectionWidget(QWidget):
         self.status_label = QLabel("")
         self.info_text = QTextEdit()
         self.info_text.setReadOnly(True)
-        from ui.automation_page import ToggleSwitch
+        from ui.ui_elements import ToggleSwitch
         self.disable_checkbox = ToggleSwitch(width=34, height=17)
         self.disable_checkbox.setToolTip("Disable platform (mute chat)")
         self.ngrok_manager = None
