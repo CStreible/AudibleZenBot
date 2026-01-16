@@ -163,8 +163,22 @@ class ChatManager(QObject):
             # Start connection in background
             print(f"[ChatManager] Calling connect() for {platform_id}")
             connector.connect(username)
-            self.connection_status_changed.emit(platform_id, True)
-            self.streamer_connection_changed.emit(platform_id, True, username)
+
+            # Wait briefly for the connector to report its actual connected state.
+            # Worker threads may take a short time to emit status; poll up to 3s.
+            import time
+            waited = 0.0
+            timeout = 3.0
+            interval = 0.1
+            while waited < timeout:
+                if getattr(connector, 'connected', False):
+                    break
+                time.sleep(interval)
+                waited += interval
+
+            connected_state = bool(getattr(connector, 'connected', False))
+            self.connection_status_changed.emit(platform_id, connected_state)
+            self.streamer_connection_changed.emit(platform_id, connected_state, username)
             return True
         except Exception as e:
             print(f"[ChatManager] ✗ Error connecting to {platform_id}: {e}")
