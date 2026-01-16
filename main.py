@@ -299,9 +299,9 @@ class MainWindow(QMainWindow):
                         try:
                             success = self.chat_manager.connectPlatform(platform_id, username, token)
                             if success:
-                                print(f"✓ Streamer connected to {platform_id}")
+                                print(f"[OK] Streamer connected to {platform_id}")
                             else:
-                                print(f"⚠ Failed to connect streamer to {platform_id}")
+                                print(f"[WARN] Failed to connect streamer to {platform_id}")
                         except Exception as e:
                             print(f"✗ Error connecting streamer to {platform_id}: {e}")
                             import traceback
@@ -326,9 +326,9 @@ class MainWindow(QMainWindow):
                     print(f"Auto-connecting bot to {platform_id}: {bot_username}")
                     success = self.chat_manager.connectBotAccount(platform_id, bot_username, bot_token, bot_refresh_token)
                     if success:
-                        print(f"✓ Bot connected to {platform_id}")
+                        print(f"[OK] Bot connected to {platform_id}")
                     else:
-                        print(f"⚠ Failed to connect bot to {platform_id}")
+                        print(f"[WARN] Failed to connect bot to {platform_id}")
 
                 else:
                     if bot_connected or bot_logged_in:

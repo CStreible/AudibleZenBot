@@ -130,7 +130,7 @@ class ChatManager(QObject):
         
         connector = self.connectors.get(platform_id)
         if not connector:
-            print(f"[ChatManager] ⚠ No connector found for {platform_id}")
+            print(f"[ChatManager] [WARN] No connector found for {platform_id}")
             return False
         
         try:
@@ -181,7 +181,7 @@ class ChatManager(QObject):
             self.streamer_connection_changed.emit(platform_id, connected_state, username)
             return True
         except Exception as e:
-            print(f"[ChatManager] ✗ Error connecting to {platform_id}: {e}")
+            print(f"[ChatManager] [ERROR] Error connecting to {platform_id}: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -232,7 +232,7 @@ class ChatManager(QObject):
                     channel_to_join = streamer_username
                     print(f"[ChatManager] Bot will join streamer's channel: {channel_to_join}")
                 else:
-                    print(f"[ChatManager] ⚠ No streamer username found, bot will join its own channel")
+                    print(f"[ChatManager] [WARN] No streamer username found, bot will join its own channel")
             
             # Create new connector instance for bot
             if platform_id == 'twitch':
@@ -320,7 +320,7 @@ class ChatManager(QObject):
             
             # Check if connection failed (e.g., invalid token)
             if connect_result is False:
-                print(f"[ChatManager] ⚠️ Bot connection failed for {platform_id}. Clearing saved credentials.")
+                print(f"[ChatManager] [WARN] Bot connection failed for {platform_id}. Clearing saved credentials.")
                 # Clear bot credentials from config
                 # Clear saved bot credentials using ConfigManager
                 self.config.set_platform_config(platform_id, 'bot_token', '')
@@ -332,12 +332,12 @@ class ChatManager(QObject):
                 # Emit signal to update UI - pass username so dialog appears
                 self.bot_connection_changed.emit(platform_id, False, username)
                 
-                print(f"[ChatManager] ⚠️ Bot credentials cleared. Please log out and log back in.")
+                print(f"[ChatManager] [WARN] Bot credentials cleared. Please log out and log back in.")
                 return
             
             # Store bot connector
             self.bot_connectors[platform_id] = bot_connector
-            print(f"[ChatManager] ✓ Bot account connected for {platform_id}: {username}")
+            print(f"[ChatManager] [OK] Bot account connected for {platform_id}: {username}")
             
             # Save bot connection state to config for persistence
             # CRITICAL: Reload config before saving to avoid overwriting other platforms' data
@@ -365,7 +365,7 @@ class ChatManager(QObject):
             print(f"[ChatManager] Bot connector status: connected={getattr(bot_connector, 'connected', 'N/A')}")
             return True
         except Exception as e:
-            print(f"[ChatManager] ✗ Error connecting bot account to {platform_id}: {e}")
+            print(f"[ChatManager] [ERROR] Error connecting bot account to {platform_id}: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -390,27 +390,22 @@ class ChatManager(QObject):
             worker_connected = False
             if has_worker and hasattr(bot_connector.worker, 'websocket') and bot_connector.worker.websocket:
                 worker_connected = True
-            
+
             print(f"[ChatManager] Bot connector found for {platform_id}, connected={getattr(bot_connector, 'connected', False)}, has_worker={has_worker}, worker_connected={worker_connected}")
-            
+
             try:
-                # Check if bot can send messages
-                # For platforms with persistent connections (Twitch, Kick), check connection status
-                # For REST API platforms (Trovo, YouTube, DLive), just check if send_message exists
+                # Determine if bot can send messages
                 if platform_id in ['trovo', 'youtube', 'dlive']:
                     # REST API platforms - no persistent connection needed
                     can_send = hasattr(bot_connector, 'send_message')
                 else:
                     # WebSocket/IRC platforms - check connection status
                     can_send = getattr(bot_connector, 'connected', False) or worker_connected
-                
+
                 if hasattr(bot_connector, 'send_message') and can_send:
                     result = bot_connector.send_message(message)
-                    
-                    # Check if send was successful
                     if result:
-                        print(f"[ChatManager] ✓ Sent message as bot on {platform_id}")
-                        
+                        print(f"[ChatManager] [OK] Sent message as bot on {platform_id}")
                         # Echo the message to chat log (except for Twitch - IRC echoes automatically)
                         if platform_id != 'twitch':
                             from datetime import datetime
@@ -425,53 +420,49 @@ class ChatManager(QObject):
                             self.message_received.emit(platform_id, bot_username, message, metadata)
                         return True
                     else:
-                        print(f"[ChatManager] ✗ Bot send failed for {platform_id}")
+                        print(f"[ChatManager] [ERROR] Bot send failed for {platform_id}")
                         if not allow_fallback:
-                            print(f"[ChatManager] ✗ Fallback disabled, not trying streamer")
+                            print(f"[ChatManager] [ERROR] Fallback disabled, not trying streamer")
                             return False
                         print(f"[ChatManager] Trying fallback to streamer...")
-                        # Fall through to try streamer connector
                 elif not can_send:
-                    print(f"[ChatManager] ⚠ Bot connector not ready for {platform_id}")
+                    print(f"[ChatManager] [WARN] Bot connector not ready for {platform_id}")
                     if not allow_fallback:
-                        print(f"[ChatManager] ✗ Fallback disabled, not trying streamer")
+                        print(f"[ChatManager] [ERROR] Fallback disabled, not trying streamer")
                         return False
                     print(f"[ChatManager] Falling back to streamer...")
                 else:
-                    print(f"[ChatManager] ⚠ Bot connector missing send_message for {platform_id}")
+                    print(f"[ChatManager] [WARN] Bot connector missing send_message for {platform_id}")
                     if not allow_fallback:
-                        print(f"[ChatManager] ✗ Fallback disabled, not trying streamer")
+                        print(f"[ChatManager] [ERROR] Fallback disabled, not trying streamer")
                         return False
             except Exception as e:
-                print(f"[ChatManager] ✗ Error sending as bot on {platform_id}: {e}")
+                print(f"[ChatManager] [ERROR] Error sending as bot on {platform_id}: {e}")
                 import traceback
                 traceback.print_exc()
                 if not allow_fallback:
-                    print(f"[ChatManager] ✗ Fallback disabled after exception")
+                    print(f"[ChatManager] [ERROR] Fallback disabled after exception")
                     return False
         else:
             print(f"[ChatManager] No bot connector for {platform_id}")
             if not allow_fallback:
-                print(f"[ChatManager] ✗ Fallback disabled, not trying streamer")
+                print(f"[ChatManager] [ERROR] Fallback disabled, not trying streamer")
                 return False
             print(f"[ChatManager] Using streamer as fallback...")
-        
+
         # Fallback to streamer connector (only if allowed)
         if not allow_fallback:
-            print(f"[ChatManager] ✗ Bot send failed and fallback disabled for {platform_id}")
+            print(f"[ChatManager] [ERROR] Bot send failed and fallback disabled for {platform_id}")
             return False
-        
+
         connector = self.connectors.get(platform_id)
         if connector and hasattr(connector, 'send_message'):
             print(f"[ChatManager] Streamer connector found for {platform_id}, connected={getattr(connector, 'connected', False)}")
             try:
                 if getattr(connector, 'connected', False):
                     result = connector.send_message(message)
-                    
-                    # Check if send was successful
                     if result:
-                        print(f"[ChatManager] ✓ Sent message as streamer on {platform_id}")
-                        
+                        print(f"[ChatManager] [OK] Sent message as streamer on {platform_id}")
                         # Echo the message to chat log (except for Twitch - IRC echoes automatically)
                         if platform_id != 'twitch':
                             from datetime import datetime
@@ -486,16 +477,16 @@ class ChatManager(QObject):
                             self.message_received.emit(platform_id, streamer_username, message, metadata)
                         return True
                     else:
-                        print(f"[ChatManager] ✗ Streamer send also failed for {platform_id}")
+                        print(f"[ChatManager] [ERROR] Streamer send also failed for {platform_id}")
                         return False
                 else:
-                    print(f"[ChatManager] ⚠ Streamer connector not connected for {platform_id}")
+                    print(f"[ChatManager] [WARN] Streamer connector not connected for {platform_id}")
             except Exception as e:
-                print(f"[ChatManager] ✗ Error sending as streamer on {platform_id}: {e}")
+                print(f"[ChatManager] [ERROR] Error sending as streamer on {platform_id}: {e}")
                 import traceback
                 traceback.print_exc()
-        
-        print(f"[ChatManager] ✗ Failed to send message on {platform_id} - no available connectors")
+
+        print(f"[ChatManager] [ERROR] Failed to send message on {platform_id} - no available connectors")
         return False
     
     def disablePlatform(self, platform_id: str, disabled: bool):
@@ -565,6 +556,15 @@ class ChatManager(QObject):
         try:
             self.message_received.emit(platform_id, username, message, metadata)
             print(f"[ChatManager][TRACE] Emitted message_received for {platform_id} {username}")
+            # Persistent diagnostic log to track emitted messages
+            try:
+                log_dir = os.path.join(os.getcwd(), 'logs')
+                os.makedirs(log_dir, exist_ok=True)
+                diag_file = os.path.join(log_dir, 'chatmanager_emitted.log')
+                with open(diag_file, 'a', encoding='utf-8', errors='replace') as df:
+                    df.write(f"{time.time():.3f} platform={platform_id} username={username} preview={repr(message)[:200]} metadata_keys={list(metadata.keys())}\n")
+            except Exception:
+                pass
         except Exception as e:
             print(f"[ChatManager] ✗ Error emitting message signal: {e}")
             import traceback

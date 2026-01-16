@@ -4,6 +4,7 @@ Connects to Twitch IRC chat using websockets
 """
 
 import asyncio
+import os
 import re
 import time
 import requests
@@ -205,7 +206,12 @@ class TwitchConnector(BasePlatformConnector):
             if self.is_bot_account and streamer_conn and hasattr(streamer_conn, 'onMessageReceivedWithMetadata'):
                 try:
                     self.worker.set_metadata_callback(streamer_conn.onMessageReceivedWithMetadata)
-                    print(f"[TwitchConnector][TRACE] bot-worker wired to streamer handler: worker_id={id(self.worker)} streamer_connector_id={id(streamer_conn)}")
+                    # Mark worker as allowed to forward to streamer (explicit wiring)
+                    try:
+                        self.worker._forward_to_streamer = True
+                    except Exception:
+                        pass
+                    print(f"[TwitchConnector][TRACE] bot-worker wired to streamer handler: worker_id={id(self.worker)} streamer_connector_id={id(streamer_conn)} forward_flag_set={getattr(self.worker, '_forward_to_streamer', False)}")
                 except Exception:
                     pass
             else:
@@ -602,6 +608,15 @@ class TwitchConnector(BasePlatformConnector):
             print(f"[TwitchConnector][TRACE][EMITTER] id={id(self)} username_attr={getattr(self, 'username', None)} is_bot={getattr(self, 'is_bot_account', False)}")
         except Exception:
             pass
+        # Persistent diagnostic log to ensure messages are recorded even if stdout is lost
+        try:
+            log_dir = os.path.join(os.getcwd(), 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+            diag_file = os.path.join(log_dir, 'connector_incoming.log')
+            with open(diag_file, 'a', encoding='utf-8', errors='replace') as df:
+                df.write(f"{time.time():.3f} connector_id={id(self)} username={username} message_preview={repr(message)[:200]} metadata_keys={list(metadata.keys())}\n")
+        except Exception:
+            pass
         self.message_received_with_metadata.emit('twitch', username, message, metadata)
 
     
@@ -733,6 +748,9 @@ class TwitchWorker(QThread):
         # Initialize callbacks to known defaults to avoid attribute errors
         self._metadata_callback = None
         self._deletion_callback = None
+        # When True, allow this worker to forward parsed messages to a streamer handler
+        # (used when a bot connector is explicitly wired to a streamer connector)
+        self._forward_to_streamer = False
         # If a connector was provided and appears to be a streamer connector,
         # attach its metadata callback as a safe fallback in case connect()
         # did not explicitly call `set_metadata_callback` (race / reconnection path).
@@ -753,6 +771,9 @@ class TwitchWorker(QThread):
         self.seen_message_ids = set()  # Track processed messages
         self.max_seen_ids = 10000  # Prevent unbounded growth
         self.last_message_time = None  # For health monitoring
+        # Timestamp of last successfully parsed PRIVMSG (seconds since epoch)
+        # Used to allow a short grace period to flush parsed messages before reconnecting
+        self._last_parsed_time = None
         self.connection_timeout = 300  # 5 minutes
     
     def run(self):
@@ -814,6 +835,17 @@ class TwitchWorker(QThread):
                             )
                             self.last_message_time = time.time()  # Update health timestamp
                             messages_received += 1
+                            # Optional raw IRC logging for diagnostics. Enable by setting
+                            # environment variable AZB_RAW_IRC_LOG=1 before launching the app.
+                            try:
+                                if os.environ.get('AZB_RAW_IRC_LOG') == '1':
+                                    log_dir = os.path.join(os.getcwd(), 'logs')
+                                    os.makedirs(log_dir, exist_ok=True)
+                                    fname = os.path.join(log_dir, f"raw_irc_{self.channel}.log")
+                                    with open(fname, 'a', encoding='utf-8', errors='replace') as f:
+                                        f.write(f"{self.last_message_time:.3f} worker={id(self)} {repr(raw_data)}\n")
+                            except Exception:
+                                pass
                             
                             # IRC messages can arrive concatenated or split
                             # Add to buffer and process complete messages
@@ -899,6 +931,17 @@ class TwitchWorker(QThread):
                     if time_since_last > self.connection_timeout:
                         print(f"[Twitch] Connection appears dead ({int(time_since_last)}s since last message)")
                         print(f"[Twitch] Forcing reconnection...")
+                        # If we parsed a message very recently, give a short grace
+                        try:
+                            grace = 1.5
+                            if self._last_parsed_time:
+                                since_parsed = time.time() - self._last_parsed_time
+                                if since_parsed < grace:
+                                    wait = grace - since_parsed
+                                    print(f"[Twitch] Recent parsed message (\n{since_parsed:.3f}s ago); waiting {wait:.3f}s to flush before reconnect")
+                                    await asyncio.sleep(wait)
+                        except Exception:
+                            pass
                         await websocket.close()
                         break
             except asyncio.CancelledError:
@@ -971,6 +1014,17 @@ class TwitchWorker(QThread):
                                 self.connector.config.set_platform_config(section, 'username', self.connector.username)
                             print("[TwitchWorker] Saved refreshed tokens and username to config.")
                         print("[TwitchWorker] Token refreshed. Reconnecting...")
+                        # Give a small grace window to flush any recently parsed messages
+                        try:
+                            grace = 1.5
+                            if self._last_parsed_time:
+                                since_parsed = time.time() - self._last_parsed_time
+                                if since_parsed < grace:
+                                    wait = grace - since_parsed
+                                    print(f"[TwitchWorker] Waiting {wait:.3f}s to flush parsed messages before reconnect")
+                                    await asyncio.sleep(wait)
+                        except Exception:
+                            pass
                         # Force reconnect by stopping and restarting
                         self.running = False
                         # Optionally, emit error or status signal here
@@ -1007,6 +1061,11 @@ class TwitchWorker(QThread):
             result = self.parse_privmsg(raw_message)
             if result:
                 username, message, metadata = result
+                try:
+                    # record last parsed time to allow short grace before reconnect
+                    self._last_parsed_time = time.time()
+                except Exception:
+                    pass
                 
                 # Check for bits in chat messages (Cheers)
                 if 'bits=' in raw_message and metadata.get('bits'):
@@ -1030,11 +1089,14 @@ class TwitchWorker(QThread):
                         pass
                     if has_cb:
                         try:
-                            # Do NOT invoke metadata callbacks for bot workers —
-                            # bot connections must not cause messages to be shown
-                            # in the UI. If this worker is attached to a bot
-                            # connector, skip calling the metadata callback.
-                            if getattr(self, 'connector', None) and getattr(self.connector, 'is_bot_account', False):
+                            # Normally we skip invoking metadata callbacks for bot
+                            # connectors to avoid duplicate UI messages. However,
+                            # if this worker was explicitly wired to forward to a
+                            # streamer handler (flag `_forward_to_streamer`), allow
+                            # the callback to run so parsed messages reach the UI.
+                            is_bot = getattr(self, 'connector', None) and getattr(self.connector, 'is_bot_account', False)
+                            forward_allowed = getattr(self, '_forward_to_streamer', False)
+                            if is_bot and not forward_allowed:
                                 try:
                                     print(f"[TwitchWorker][TRACE] Skipping metadata callback for bot worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))}")
                                 except Exception:
@@ -1042,7 +1104,7 @@ class TwitchWorker(QThread):
                             else:
                                 self._metadata_callback(username, message, metadata)
                         except Exception as e:
-                            print(f"[TwitchWorker] ✗ Error calling metadata callback: {e}")
+                            print(f"[TwitchWorker] [ERROR] Error calling metadata callback: {e}")
                             import traceback
                             traceback.print_exc()
                     else:
@@ -1303,15 +1365,23 @@ class TwitchWorker(QThread):
             # With tags: @badge-info=;badges=;color=#... :username!username@username.tmi.twitch.tv PRIVMSG #channel :message
             
             # Try with tags first - use more flexible pattern to handle usernames with underscores, hyphens, etc.
-            match = re.search(
-                r':([a-zA-Z0-9_]+)!.*?PRIVMSG\s+#\w+\s+:(.+)',
-                raw_message
-            )
-            
+            # More permissive match: capture anything up to '!' as username
+            # and accept any non-space channel name after PRIVMSG
+            match = re.search(r':([^!]+)!.*?PRIVMSG\s+[^\s]+\s+:(.+)', raw_message)
+
             if match:
                 username = match.group(1)
                 message = match.group(2).strip()
-                print(f"[Twitch Parser] ✓ Parsed: {username}: {message[:50]}")
+                print(f"[Twitch Parser] [OK] Parsed: {username}: {message[:50]}")
+                try:
+                    import time, os
+                    log_dir = os.path.join(os.getcwd(), 'logs')
+                    os.makedirs(log_dir, exist_ok=True)
+                    fname = os.path.join(log_dir, f"parsed_irc_{self.channel}.log")
+                    with open(fname, 'a', encoding='utf-8', errors='replace') as f:
+                        f.write(f"{time.time():.3f} PARSED worker={id(self)} username={username!r} preview={message[:200]!r}\n")
+                except Exception:
+                    pass
                 return username, message, metadata
             
             # Try simpler pattern
@@ -1326,15 +1396,34 @@ class TwitchWorker(QThread):
                         message_parts = parts[1].split(':', 1)
                         if len(message_parts) >= 2:
                             message = message_parts[1].strip()
-                            print(f"[Twitch Parser] ✓ Parsed (alt): {username}: {message[:50]}")
+                            print(f"[Twitch Parser] [OK] Parsed (alt): {username}: {message[:50]}")
+                            try:
+                                import time, os
+                                log_dir = os.path.join(os.getcwd(), 'logs')
+                                os.makedirs(log_dir, exist_ok=True)
+                                fname = os.path.join(log_dir, f"parsed_irc_{self.channel}.log")
+                                with open(fname, 'a', encoding='utf-8', errors='replace') as f:
+                                    f.write(f"{time.time():.3f} PARSED_ALT worker={id(self)} username={username!r} preview={message[:200]!r}\n")
+                            except Exception:
+                                pass
                             return username, message, metadata
             
-            # If we get here, parsing failed
-            print(f"[Twitch Parser] ✗ Failed to parse PRIVMSG")
+            # If we get here, parsing failed - dump diagnostics
+            print(f"[Twitch Parser] [FAIL] Failed to parse PRIVMSG")
             print(f"[Twitch Parser] Raw: {raw_message[:200]}")
+            try:
+                # If raw logging enabled, append the failing raw line for easier diagnosis
+                if os.environ.get('AZB_RAW_IRC_LOG') == '1':
+                    log_dir = os.path.join(os.getcwd(), 'logs')
+                    os.makedirs(log_dir, exist_ok=True)
+                    fname = os.path.join(log_dir, f"raw_irc_parse_fail_{self.channel}.log")
+                    with open(fname, 'a', encoding='utf-8', errors='replace') as f:
+                        f.write(f"{time.time():.3f} PARSE_FAIL worker={id(self)} {repr(raw_message)}\n")
+            except Exception:
+                pass
                 
         except Exception as e:
-            print(f"[Twitch Parser] ✗ Exception parsing message: {e}")
+            print(f"[Twitch Parser] [ERROR] Exception parsing message: {e}")
             print(f"[Twitch Parser] Raw message: {raw_message[:200]}")
             import traceback
             traceback.print_exc()
@@ -1354,7 +1443,7 @@ class TwitchWorker(QThread):
             await self.ws.send(f'PRIVMSG #{self.channel} :{message}')
             print(f"[TwitchWorker] Message sent to Twitch IRC")
         else:
-            print(f"[TwitchWorker] ⚠ Cannot send: ws={self.ws is not None}, running={self.running}")
+            print(f"[TwitchWorker] [WARN] Cannot send: ws={self.ws is not None}, running={self.running}")
     
     def send_message(self, message: str):
         """Send message to Twitch chat"""
@@ -1367,7 +1456,7 @@ class TwitchWorker(QThread):
             print(f"[TwitchWorker] Message queued to event loop")
             return True
         else:
-            print(f"[TwitchWorker] ⚠ Cannot queue message: loop={self.loop is not None}, ws={self.ws is not None}")
+            print(f"[TwitchWorker] [WARN] Cannot queue message: loop={self.loop is not None}, ws={self.ws is not None}")
             return False
 
 
@@ -1421,7 +1510,7 @@ class TwitchEventSubWorker(QThread):
                 headers={'Authorization': f'OAuth {self.oauth_token}'},
                 timeout=10
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 scopes = data.get('scopes', [])
@@ -1429,8 +1518,8 @@ class TwitchEventSubWorker(QThread):
                 self.validated_scopes = scopes
                 print(f"[EventSub] Token validated. Granted scopes:")
                 for scope in scopes:
-                    print(f"[EventSub]    ✓ {scope}")
-                
+                    print(f"[EventSub]    [OK] {scope}")
+
                 # Check for required scopes
                 required_scopes = {
                     'channel:read:redemptions': 'Channel Points Redemptions',
@@ -1438,16 +1527,16 @@ class TwitchEventSubWorker(QThread):
                     'bits:read': 'Cheers/Bits',
                     'moderator:read:followers': 'Followers'
                 }
-                
+
                 missing = []
                 for scope, name in required_scopes.items():
                     if scope not in scopes:
                         missing.append(f"{scope} ({name})")
-                
+
                 if missing:
-                    print(f"[EventSub] ⚠ Missing scopes:")
+                    print(f"[EventSub] [WARN] Missing scopes:")
                     for scope in missing:
-                        print(f"[EventSub]    ✗ {scope}")
+                        print(f"[EventSub]    [MISSING] {scope}")
                     print(f"[EventSub]")
                     print(f"[EventSub] To fix this:")
                     print(f"[EventSub] 1. Go to: https://twitch.tv/settings/connections")
@@ -1489,11 +1578,11 @@ class TwitchEventSubWorker(QThread):
                     except Exception as e:
                         print(f"[EventSub] Could not open browser for re-auth: {e}")
                 else:
-                    print(f"[EventSub] ✓ All required scopes present")
+                    print(f"[EventSub] [OK] All required scopes present")
             else:
                 # Print full response body to aid triage
                 body = response.text
-                print(f"[EventSub] ⚠ Token validation failed: {response.status_code} - {body}")
+                print(f"[EventSub] [WARN] Token validation failed: {response.status_code} - {body}")
         except Exception as e:
             print(f"[EventSub] Error validating token: {e}")
     
@@ -1657,7 +1746,7 @@ class TwitchEventSubWorker(QThread):
                 if response.status_code == 202:
                     result = response.json()
                     sub_id = result['data'][0]['id']
-                    print(f"[EventSub] ✓ Subscribed to {sub['name']}! ID: {sub_id}")
+                    print(f"[EventSub] [OK] Subscribed to {sub['name']}! ID: {sub_id}")
                 else:
                     # Log full response body and masked token + current validated scopes (if available)
                     body = response.text
@@ -1670,7 +1759,7 @@ class TwitchEventSubWorker(QThread):
 
                     masked = _mask_token(self.oauth_token)
                     scopes = self.validated_scopes if self.validated_scopes is not None else []
-                    print(f"[EventSub] ⚠ {sub['name']} subscription failed: {response.status_code} - {body}")
+                    print(f"[EventSub] [WARN] {sub['name']} subscription failed: {response.status_code} - {body}")
                     print(f"[EventSub]    Masked token: {masked}")
                     print(f"[EventSub]    Validated scopes: {scopes}")
             except Exception as e:

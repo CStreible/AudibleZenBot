@@ -112,11 +112,11 @@ class LogManager:
             self.tee_stderr.enable()
             
             self.enabled = True
-            print(f"[Logger] ✓ Logging enabled: {log_path}")
+            print(f"[Logger] [OK] Logging enabled: {log_path}")
             return True
             
         except Exception as e:
-            print(f"[Logger] ✗ Error starting logging: {e}")
+            print(f"[Logger] [ERROR] Error starting logging: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -142,10 +142,10 @@ class LogManager:
             self.tee_stderr.disable()
             
             self.enabled = False
-            print("[Logger] ✓ Logging disabled")
+            print("[Logger] [OK] Logging disabled")
             
         except Exception as e:
-            print(f"[Logger] ✗ Error stopping logging: {e}")
+            print(f"[Logger] [ERROR] Error stopping logging: {e}")
     
     def set_log_folder(self, folder_path):
         """Set the log folder and restart logging if enabled"""

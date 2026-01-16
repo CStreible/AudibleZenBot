@@ -3080,10 +3080,28 @@ class ConnectionsPage(QWidget):
                 widget.streamer_login_btn.setText("Logout")
                 print(f"[ConnectionsPage] Updated streamer UI for {platform_id}: {streamer_display_name}")
             else:
-                # Update UI to show streamer as logged out
-                widget.streamer_display_name.setText("")
-                widget.streamer_login_btn.setText("Login")
-                print(f"[ConnectionsPage] Cleared streamer UI for {platform_id}")
+                # If the streamer account is still considered "logged in" in
+                # the config but the connector is temporarily disconnected,
+                # show a persistent reconnecting indicator instead of
+                # clearing the logged-in UI. Only clear when the account is
+                # actually logged out.
+                from core.config import ConfigManager
+                config = ConfigManager()
+                platform_cfg = config.get_platform_config(platform_id) or {}
+                if platform_cfg.get('streamer_logged_in', False):
+                    # Keep display name but indicate reconnecting
+                    display_name = platform_cfg.get('streamer_display_name', '') or platform_cfg.get('streamer_username', '')
+                    if display_name:
+                        widget.streamer_display_name.setText(display_name)
+                    widget.streamer_login_btn.setText("Logout")
+                    widget.status_label.setText("Streamer disconnected — reconnecting...")
+                    print(f"[ConnectionsPage] Streamer {platform_id} appears logged in; showing reconnecting indicator")
+                else:
+                    # Update UI to show streamer as logged out
+                    widget.streamer_display_name.setText("")
+                    widget.streamer_login_btn.setText("Login")
+                    widget.status_label.setText("Streamer account logged out.")
+                    print(f"[ConnectionsPage] Cleared streamer UI for {platform_id}")
 
     def initUI(self):
         """Initialize the connections page UI"""
