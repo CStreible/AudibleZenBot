@@ -242,6 +242,7 @@ class PlatformConnectionWidget(QWidget):
     """Widget for managing a single platform connection"""
     
     connect_requested = pyqtSignal(str, str, str)  # platform, username, token
+    disable_changed = pyqtSignal(str, bool)
     # DLive OAuth JavaScript-based logic removed. Implement a new flow or manual entry as needed.
     config = ConfigManager()
     
@@ -339,6 +340,11 @@ class PlatformConnectionWidget(QWidget):
         disable_row.setAlignment(Qt.AlignmentFlag.AlignLeft)
         disable_row.setSpacing(8)
         disable_row.addWidget(self.disable_checkbox)
+        # Connect disable toggle to handler that saves state and notifies parent
+        try:
+            self.disable_checkbox.stateChanged.connect(self._on_disable_toggled)
+        except Exception:
+            pass
         disable_label = QLabel("Disable platform")
         disable_label.setStyleSheet("color: #BB6BD9; font-size: 11pt; font-weight: bold; margin-top: 10px; margin-bottom: 12px;")
         disable_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
@@ -567,6 +573,25 @@ class PlatformConnectionWidget(QWidget):
             oauth_warning.setWordWrap(True)
             oauth_warning.setVisible(False)  # Hidden by default
             self.platform_widgets[platform_name]['oauth_warning'] = oauth_warning
+            # Reconnect button (shown when OAuth scope issues are detected)
+            reconnect_btn = QPushButton("Reconnect")
+            reconnect_btn.setVisible(False)
+            reconnect_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f39c12;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 6px 12px;
+                }
+                QPushButton:hover {
+                    background-color: #d68910;
+                }
+            """)
+            # Clicking reconnect triggers the normal login flow
+            reconnect_btn.clicked.connect(lambda: self.streamer_login_btn.click())
+            self.platform_widgets[platform_name]['reconnect_btn'] = reconnect_btn
+            layout.addWidget(reconnect_btn)
             layout.addWidget(oauth_warning)
         
         # Buttons row
@@ -693,7 +718,7 @@ class PlatformConnectionWidget(QWidget):
             if not query_text or len(query_text.strip()) < min_chars:
                 suggestions_list.clear()
                 popup.hide()
-                spinner.setVisible(False)
+                
                 return
 
             # no-op: spinner removed
@@ -778,7 +803,7 @@ class PlatformConnectionWidget(QWidget):
                 # hide immediately
                 suggestions_list.clear()
                 popup.hide()
-                spinner.setVisible(False)
+                
                 timer.stop()
                 return
             # no searching indicator (removed)
@@ -818,33 +843,30 @@ class PlatformConnectionWidget(QWidget):
 
         # Keyboard navigation support: arrow keys, Enter, Esc
         class _KeyFilter(QObject):
-            def eventFilter(self, obj, event):
-                if event.type() == QEvent.Type.KeyPress:
-                    key = event.key()
+            def eventFilter(self, a0, a1):
+                if a1.type() == QEvent.Type.KeyPress:
+                    key = a1.key()
                     # If typing in the category input and user presses Down, move focus to suggestions
-                    if obj is category_input:
+                    if a0 is category_input:
                         if key == Qt.Key.Key_Down and popup.isVisible() and suggestions_list.count() > 0:
                             suggestions_list.setFocus()
                             suggestions_list.setCurrentRow(0)
                             return True
                         if key == Qt.Key.Key_Escape:
                             popup.setVisible(False)
-                            spinner.setVisible(False)
                             return False
                     # If focus is on suggestions list, handle navigation and selection
-                    if obj is suggestions_list:
+                    if a0 is suggestions_list:
                         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                             current = suggestions_list.currentItem()
                             if current:
                                 category_input.setText(current.text())
                             suggestions_list.clear()
                             popup.setVisible(False)
-                            spinner.setVisible(False)
                             category_input.setFocus()
                             return True
                         if key == Qt.Key.Key_Escape:
                             popup.setVisible(False)
-                            spinner.setVisible(False)
                             category_input.setFocus()
                             return True
                         if key == Qt.Key.Key_Up:
@@ -874,6 +896,11 @@ class PlatformConnectionWidget(QWidget):
             tags_display = self.findChild(QFrame, f"{platform_name}_tags_display")
             if tags_display:
                 layout = tags_display.layout()
+                # Ensure a layout exists on the tags display
+                if layout is None:
+                    layout = QHBoxLayout(tags_display)
+                    layout.setContentsMargins(5, 5, 5, 5)
+                    layout.setSpacing(5)
                 
                 # Create tag chip
                 tag_chip = QFrame()
@@ -909,8 +936,14 @@ class PlatformConnectionWidget(QWidget):
                 remove_btn.clicked.connect(lambda: self.remove_tag(platform_name, tag_text, tag_chip))
                 chip_layout.addWidget(remove_btn)
                 
-                # Insert before stretch
-                layout.insertWidget(layout.count() - 1, tag_chip)
+                # Insert before stretch (guard insertWidget existence)
+                try:
+                    if hasattr(layout, 'insertWidget'):
+                        layout.insertWidget(layout.count() - 1, tag_chip)
+                    else:
+                        layout.addWidget(tag_chip)
+                except Exception:
+                    layout.addWidget(tag_chip)
                 
                 print(f"[ConnectionsPage] Added tag '{tag_text}' for {platform_name}")
     
@@ -1344,8 +1377,14 @@ class PlatformConnectionWidget(QWidget):
         remove_btn.clicked.connect(lambda: self.remove_tag(platform_name, tag_text, tag_chip))
         chip_layout.addWidget(remove_btn)
         
-        # Insert before stretch
-        layout.insertWidget(layout.count() - 1, tag_chip)
+        # Insert before stretch (guard insertWidget existence)
+        try:
+            if hasattr(layout, 'insertWidget'):
+                layout.insertWidget(layout.count() - 1, tag_chip)
+            else:
+                layout.addWidget(tag_chip)
+        except Exception:
+            layout.addWidget(tag_chip)
 
     def save_platform_info(self, platform_name):
         """Save stream info locally and update platform API"""
@@ -2728,10 +2767,67 @@ class PlatformConnectionWidget(QWidget):
             elif username:
                 self.bot_display_name.setText(username)
                 self.status_label.setText(f"Bot logged in: {username}")
+        # Load disable state for this platform (persist across runs)
+        try:
+            disabled = platform_config.get('disabled', False)
+            # Reflect in UI without triggering handler
+            try:
+                self.disable_checkbox.blockSignals(True)
+                self.disable_checkbox.setChecked(bool(disabled))
+                # Ensure the knob offset matches the checked state so visuals are correct on startup
+                try:
+                    offset_val = self.disable_checkbox._get_offset_for_state(bool(disabled))
+                    # Use the property setter for the offset
+                    try:
+                        self.disable_checkbox.set_offset(float(offset_val))
+                    except Exception:
+                        try:
+                            self.disable_checkbox.offset = float(offset_val)
+                        except Exception:
+                            pass
+                    self.disable_checkbox.update()
+                except Exception:
+                    pass
+            finally:
+                self.disable_checkbox.blockSignals(False)
+            # Notify parent/page about disable state so chat manager can apply it
+            try:
+                self.disable_changed.emit(self.platform_id, bool(disabled))
+            except Exception:
+                pass
+        except Exception:
+            pass
     
     def setConfig(self, config):
         """Set the config manager for saving state"""
         self.config = config
+    
+    def _on_disable_toggled(self, state):
+        """Handle toggle and persist disabled state to config, then notify listeners"""
+        is_disabled = False
+        try:
+            is_disabled = bool(self.disable_checkbox.isChecked())
+        except Exception:
+            is_disabled = False
+        try:
+            if hasattr(self, 'config') and self.config:
+                # Save under platform config key 'disabled'
+                try:
+                    self.config.set_platform_config(self.platform_id, 'disabled', is_disabled)
+                    self.config.save()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'append_status_message'):
+                self.append_status_message(f"[Platform] {'Disabled' if is_disabled else 'Enabled'} platform: {self.platform_name}")
+        except Exception:
+            pass
+        try:
+            self.disable_changed.emit(self.platform_id, is_disabled)
+        except Exception:
+            pass
     
     def setConnectionState(self, connected):
         """Stub for legacy compatibility - now handled by account-specific methods"""
@@ -2890,11 +2986,20 @@ class ConnectionsPage(QWidget):
         ]
         for platform_name, platform_id in platforms:
             widget = PlatformConnectionWidget(platform_name, platform_id, self.chat_manager)
+            # Provide config to the widget so it can read/save settings
+            try:
+                widget.setConfig(self.config)
+            except Exception:
+                pass
             widget.connect_requested.connect(self.onPlatformConnect)
+            # Notify page when disable state changes so chat_manager can be updated
+            try:
+                widget.disable_changed.connect(self.onDisableChanged)
+            except Exception:
+                pass
             # widget.disconnect_requested.connect(self.onPlatformDisconnect)
             # widget.auth_requested.connect(self.onAuthRequested)
             # widget.disable_changed.connect(self.onDisableChanged)
-            # widget.setConfig(self.config)
             widget.ngrok_manager = self.ngrok_manager
             widget.loadAccountStates()
             self.tabs.addTab(widget, platform_name)
