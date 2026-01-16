@@ -1,0 +1,1650 @@
+"""
+Twitch Platform Connector
+Connects to Twitch IRC chat using websockets
+"""
+
+import asyncio
+import re
+import time
+import requests
+import json
+from typing import Optional
+from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.base_connector import BasePlatformConnector
+from core.badge_manager import get_badge_manager
+import websockets
+
+
+class TwitchConnector(BasePlatformConnector):
+    """Connector for Twitch chat via IRC"""
+    # Singleton instance for streamer connector (non-bot). Bot connectors may be multiple.
+    _streamer_instance = None
+
+    def __new__(cls, config=None, is_bot_account=False):
+        # If creating a streamer connector and one already exists, return it.
+        if not is_bot_account:
+            inst = cls._streamer_instance
+            if inst is not None:
+                try:
+                    print(f"[TwitchConnector][TRACE] __new__: reusing existing streamer connector id={id(inst)}")
+                except Exception:
+                    pass
+                return inst
+        # Otherwise create a fresh instance
+        obj = super().__new__(cls)
+        if not is_bot_account:
+            cls._streamer_instance = obj
+        return obj
+    
+    # Default Twitch credentials
+    DEFAULT_CLIENT_ID = "h84tx3mvvpk9jyt8rv8p8utfzupz82"
+    DEFAULT_CLIENT_SECRET = "5sovebmqm745eq6be0vptv47tvvl74"
+    DEFAULT_ACCESS_TOKEN = "vwjvk83rarr5x8sw4agwgc3ciq09br"
+    DEFAULT_REFRESH_TOKEN = "olha5lgahozz0eqhe8me2c1sbkhn9qli9o4wxezitgj96212ul"
+    
+    def __init__(self, config=None, is_bot_account=False):
+        # Avoid re-running __init__ when singleton __new__ returns existing instance.
+        # Use object.__getattribute__ to read the flag without invoking PyQt's
+        # machinery (which requires QObject.__init__ to have been called).
+        try:
+            initialized = object.__getattribute__(self, '_initialized')
+        except Exception:
+            initialized = False
+
+        if initialized:
+            try:
+                print(f"[TwitchConnector][TRACE] __init__: skipping re-init for existing connector id={id(self)} is_bot={is_bot_account}")
+            except Exception:
+                pass
+            return
+
+        # First-time init — call superclass init
+        super().__init__()
+        self.worker_thread = None
+        self.worker = None
+        self.eventsub_worker_thread = None
+        self.eventsub_worker = None
+        self.config = config
+        self.is_bot_account = is_bot_account
+        self.oauth_token = self.DEFAULT_ACCESS_TOKEN
+        self.refresh_token = self.DEFAULT_REFRESH_TOKEN
+        self.client_id = self.DEFAULT_CLIENT_ID
+        self.client_secret = self.DEFAULT_CLIENT_SECRET
+        self.username = None
+        self.broadcaster_id = None
+        # Use separate config sections for bot and streamer
+        section = 'bot_refresh_token' if self.is_bot_account else 'streamer_refresh_token'
+        if self.config:
+            platform_cfg = self.config.get_platform_config('twitch')
+            token = platform_cfg.get('oauth_token', '')
+            if token:
+                self.oauth_token = token
+            refresh = platform_cfg.get(section, '')
+            if refresh:
+                self.refresh_token = refresh
+            print(f"[TwitchConnector] refresh set to: {refresh[:20] if refresh else 'None'}...")
+            username = platform_cfg.get('username', '')
+            if username:
+                self.username = username
+        # Recent local echoes to suppress duplicate incoming IRC echo
+        self._recent_local_echoes = []  # list of (message_lower, timestamp)
+        try:
+            print(f"[TwitchConnector][TRACE] __init__: id={id(self)} is_bot={self.is_bot_account} username={self.username}")
+        except Exception:
+            pass
+        # Mark initialized so future __init__ calls (from reused singleton) are no-ops
+        try:
+            self._initialized = True
+        except Exception:
+            pass
+    
+    def set_token(self, token: str):
+        """Set OAuth token for authentication"""
+        section = 'twitch_bot' if self.is_bot_account else 'twitch_streamer'
+        token_prefix = token[:20] if token else "None"
+        print(f"[TwitchConnector] set_token called with: {token_prefix}...")
+        if token:
+            self.oauth_token = token
+            print(f"[TwitchConnector] Token updated to: {self.oauth_token[:20]}...")
+            if self.config:
+                self.config.set_platform_config(section, 'oauth_token', token)
+        else:
+            # If config is blank, use default
+            config_token = self.config.get_platform_config(section).get('oauth_token', '') if self.config else ''
+            if not config_token:
+                self.oauth_token = self.DEFAULT_ACCESS_TOKEN
+
+    def set_username(self, username: str):
+        section = 'twitch_bot' if self.is_bot_account else 'twitch_streamer'
+        self.username = username
+        # Persist username to config for correct account type
+        if self.config:
+            self.config.set_platform_config(section, 'username', username)
+        # Emit a signal to update the UI if available (for bot or streamer)
+        if hasattr(self, 'connection_status'):
+            # True means connected, triggers UI update in ConnectionsPage
+            self.connection_status.emit(True)
+    
+    def set_bot_username(self, bot_username: str):
+        """Set the bot username for authentication (used when joining a different channel)"""
+        self.bot_username = bot_username
+    
+    def connect(self, username: str):
+        """Connect to Twitch chat"""
+        # Early-return if already connected to the same channel and worker is running
+        try:
+            already_connected = getattr(self, 'connected', False)
+            same_user = getattr(self, 'username', None) == username
+            worker_running = bool(getattr(self, 'worker', None) and getattr(self.worker, 'running', False))
+            if already_connected and same_user and worker_running:
+                try:
+                    print(f"[TwitchConnector][TRACE] connect: already connected for {username} connector_id={id(self)} worker_id={id(self.worker)} is_bot={self.is_bot_account}")
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            pass
+
+        # Not already connected (or different username) - ensure prior state cleared
+        self.disconnect()
+        self.username = username
+        
+        # Ensure we have a valid token
+        if not self.oauth_token or self.oauth_token == "":
+            self.oauth_token = self.DEFAULT_ACCESS_TOKEN
+        
+        # Try to refresh token if needed
+        # Bot accounts can refresh using their own refresh token
+        if not self.is_bot_account:
+            self.refresh_access_token()
+        else:
+            # Bot account: check if we have a refresh token for the bot
+            print(f"[TwitchConnector] Bot account refresh check: refresh_token={self.refresh_token[:20] if self.refresh_token else 'None'}...")
+            if self.refresh_token and self.refresh_token != self.DEFAULT_REFRESH_TOKEN:
+                print(f"[TwitchConnector] Bot account has refresh token, attempting refresh...")
+                refresh_result = self.refresh_access_token()
+                if refresh_result is False:
+                    print(f"[TwitchConnector] ⚠️ Bot token refresh failed with invalid token. Connection aborted.")
+                    print(f"[TwitchConnector] Bot needs to log out and log back in to get fresh credentials.")
+                    return False
+            else:
+                print(f"[TwitchConnector] Bot account has no refresh token or using default, skipping refresh")
+        
+        # Fetch Twitch badges
+        try:
+            badge_manager = get_badge_manager()
+            badge_manager.fetch_twitch_badges(self.client_id, self.oauth_token)
+        except Exception as e:
+            print(f"Error fetching badges: {e}")
+        
+        # Create worker thread for async connection
+        # For bot accounts, we might connect to a different channel than our username
+        # Use bot_username if set (for bot accounts), otherwise use username (for streamer)
+        nick_for_auth = getattr(self, 'bot_username', username)
+        print(f"[TwitchConnector] Connecting: channel={username}, nick={nick_for_auth}, has_bot_username={hasattr(self, 'bot_username')}")
+        self.worker = TwitchWorker(
+            username,  # Channel to join
+            self.oauth_token,
+            self.client_id,
+            self.refresh_token,
+            self.client_secret,
+            nick=nick_for_auth,  # Nick for authentication
+            connector=self  # Pass connector reference for API calls
+        )
+        try:
+            print(f"[TwitchConnector][TRACE] Created worker id={id(self.worker)} for connector_id={id(self)} is_bot={self.is_bot_account}")
+        except Exception:
+            pass
+        # Ensure worker holds a direct reference to this connector object
+        try:
+            self.worker.connector = self
+            # If this is a bot connector and ChatManager attached a streamer_connector,
+            # wire incoming metadata to the streamer's handler so messages parsed by
+            # the bot connection still reach the UI.
+            streamer_conn = getattr(self, 'streamer_connector', None)
+            if self.is_bot_account and streamer_conn and hasattr(streamer_conn, 'onMessageReceivedWithMetadata'):
+                try:
+                    self.worker.set_metadata_callback(streamer_conn.onMessageReceivedWithMetadata)
+                    print(f"[TwitchConnector][TRACE] bot-worker wired to streamer handler: worker_id={id(self.worker)} streamer_connector_id={id(streamer_conn)}")
+                except Exception:
+                    pass
+            else:
+                # For streamer connectors, ensure the worker has the connector's handler
+                if not self.is_bot_account:
+                    try:
+                        self.worker.set_metadata_callback(self.onMessageReceivedWithMetadata)
+                    except Exception:
+                        pass
+            print(f"[TwitchConnector][TRACE] post-create wiring: worker_id={id(self.worker)} connector_id={id(self)}")
+        except Exception:
+            pass
+        self.worker_thread = QThread()
+        
+        self.worker.moveToThread(self.worker_thread)
+        # For bot accounts we do NOT connect incoming message callbacks because
+        # bot connectors are intended for sending only; otherwise IRC echoes
+        # from the channel can be parsed by the bot connector and emit
+        # messages that the UI isn't subscribed to (causing missing UI updates).
+        if not self.is_bot_account:
+            self.worker.message_signal.connect(self.onMessageReceived)
+            self.worker.set_metadata_callback(self.onMessageReceivedWithMetadata)
+            self.worker.set_deletion_callback(self.onMessageDeleted)
+        else:
+            # Still connect status and error signals for bot connector health
+            print(f"[TwitchConnector] Bot account: skipping incoming message wiring for {nick_for_auth}")
+        # Always connect status and error signals
+        self.worker.status_signal.connect(self.onStatusChanged)
+        self.worker.error_signal.connect(self.onError)
+        
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker_thread.start()
+        
+        # Only start EventSub worker for streamer account
+        if not self.is_bot_account:
+            print(f"[TwitchConnector] Starting EventSub worker for channel points")
+            self.eventsub_worker = TwitchEventSubWorker(
+                self.oauth_token,
+                self.client_id,
+                username
+            )
+            self.eventsub_worker_thread = QThread()
+            self.eventsub_worker.moveToThread(self.eventsub_worker_thread)
+            self.eventsub_worker.redemption_signal.connect(self.onRedemption)
+            self.eventsub_worker.event_signal.connect(self.onEvent)
+            self.eventsub_worker.status_signal.connect(self.onEventSubStatus)
+            self.eventsub_worker.error_signal.connect(self.onError)
+            self.eventsub_worker_thread.started.connect(self.eventsub_worker.run)
+            self.eventsub_worker_thread.start()
+    
+    def refresh_access_token(self):
+        """Refresh the access token using refresh token
+        
+        Returns:
+            True: Token refreshed successfully
+            False: Token refresh failed with invalid token (400)
+            None: No refresh attempted (no refresh token)
+        """
+        if not self.refresh_token:
+            return None
+        
+        try:
+            response = requests.post(
+                'https://id.twitch.tv/oauth2/token',
+                data={
+                    'client_id': self.client_id,
+                    'client_secret': self.client_secret,
+                    'grant_type': 'refresh_token',
+                    'refresh_token': self.refresh_token
+                },
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                self.oauth_token = data.get('access_token', self.oauth_token)
+                new_refresh = data.get('refresh_token')
+                if new_refresh:
+                    self.refresh_token = new_refresh
+                print(f"Twitch token refreshed successfully")
+                return True
+            elif response.status_code == 400:
+                print(f"⚠️ Token refresh failed: Invalid refresh token")
+                print(f"[DEBUG] Refresh token used: {self.refresh_token}")
+                print(f"Response: {response.text}")
+                return False
+            else:
+                print(f"Token refresh failed: {response.status_code}")
+                print(f"Response: {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"Error refreshing token: {e}")
+    
+    def disconnect(self):
+        """Disconnect from Twitch"""
+        try:
+            print(f"[TwitchConnector][TRACE] disconnect called: connector_id={id(self)} worker_id={id(self.worker) if getattr(self, 'worker', None) is not None else None} connected={getattr(self, 'connected', False)} is_bot={getattr(self, 'is_bot_account', False)}")
+        except Exception:
+            pass
+        if self.worker:
+            try:
+                self.worker.stop()
+            except Exception as e:
+                print(f"[TwitchConnector] Error stopping worker: {e}")
+        if self.worker_thread:
+            try:
+                if self.worker_thread.isRunning():
+                    self.worker_thread.quit()
+                    self.worker_thread.wait(5000)  # Wait up to 5 seconds
+                    if self.worker_thread.isRunning():
+                        print(f"[TwitchConnector] Warning: Worker thread did not stop in time. Forcing terminate()")
+                        self.worker_thread.terminate()
+                        self.worker_thread.wait(2000)  # Wait up to 2 seconds after terminate
+                        if self.worker_thread.isRunning():
+                            print(f"[TwitchConnector] Error: Worker thread still running after terminate()")
+            except Exception as e:
+                print(f"[TwitchConnector] Error stopping worker thread: {e}")
+        if self.eventsub_worker:
+            try:
+                self.eventsub_worker.stop()
+            except Exception as e:
+                print(f"[TwitchConnector] Error stopping eventsub worker: {e}")
+        if self.eventsub_worker_thread:
+            try:
+                self.eventsub_worker_thread.quit()
+                self.eventsub_worker_thread.wait()
+            except Exception as e:
+                print(f"[TwitchConnector] Error stopping eventsub worker thread: {e}")
+        self.connected = False
+        self.connection_status.emit(False)
+        self.worker = None
+        self.worker_thread = None
+        self.eventsub_worker = None
+        self.eventsub_worker_thread = None
+        try:
+            print(f"[TwitchConnector][TRACE] disconnected: connector_id={id(self)}")
+        except Exception:
+            pass
+    
+    def send_message(self, message: str):
+        """Send a message to Twitch chat"""
+        print(f"[TwitchConnector] send_message called: worker={self.worker is not None}, connected={self.connected}, message={message[:50]}")
+        if self.worker and self.connected:
+            print(f"[TwitchConnector] Calling worker.send_message()")
+            result = self.worker.send_message(message)
+            return result
+        else:
+            print(f"[TwitchConnector] ⚠ Cannot send: worker={self.worker is not None}, connected={self.connected}")
+            return False
+    
+    def delete_message(self, message_id: str):
+        """Delete a message from Twitch chat"""
+        if not message_id:
+            return
+        
+        try:
+            headers = {
+                'Client-ID': self.client_id,
+                'Authorization': f'Bearer {self.oauth_token}'
+            }
+            
+            # Get broadcaster ID if not cached
+            if not hasattr(self, 'broadcaster_id') or not self.broadcaster_id:
+                # Fetch broadcaster ID from username
+                user_response = requests.get(
+                    'https://api.twitch.tv/helix/users',
+                    headers=headers,
+                    params={'login': self.username}
+                )
+                
+                if user_response.status_code == 200:
+                    users = user_response.json().get('data', [])
+                    if users:
+                        self.broadcaster_id = users[0]['id']
+                        print(f"[Twitch] Cached broadcaster_id: {self.broadcaster_id}")
+                    else:
+                        print(f"[Twitch] Could not find user ID for {self.username}")
+                        return
+                else:
+                    print(f"[Twitch] Failed to get broadcaster ID: {user_response.status_code}")
+                    return
+            
+            # Delete message via Twitch API
+            response = requests.delete(
+                f'https://api.twitch.tv/helix/moderation/chat',
+                headers=headers,
+                params={
+                    'broadcaster_id': self.broadcaster_id,
+                    'moderator_id': self.broadcaster_id,
+                    'message_id': message_id
+                }
+            )
+            
+            if response.status_code == 204:
+                print(f"[Twitch] Message deleted: {message_id}")
+                return True
+            else:
+                print(f"[Twitch] Failed to delete message: {response.status_code}")
+                print(f"[Twitch] Response body: {response.text}")
+                print(f"[Twitch] Broadcaster ID: {self.broadcaster_id}")
+                return False
+        except Exception as e:
+            print(f"[Twitch] Error deleting message: {e}")
+            return False
+    
+    def get_custom_reward(self, reward_id: str):
+        """Fetch custom reward details from Twitch API"""
+        try:
+            headers = {
+                'Client-ID': self.client_id,
+                'Authorization': f'Bearer {self.oauth_token}'
+            }
+            
+            # Get broadcaster ID if not cached
+            if not hasattr(self, 'broadcaster_id') or not self.broadcaster_id:
+                # Fetch broadcaster ID from username
+                user_response = requests.get(
+                    'https://api.twitch.tv/helix/users',
+                    headers=headers,
+                    params={'login': self.username}
+                )
+                
+                if user_response.status_code == 200:
+                    users = user_response.json().get('data', [])
+                    if users:
+                        self.broadcaster_id = users[0]['id']
+                else:
+                    print(f"[Twitch] Failed to get broadcaster ID: {user_response.status_code}")
+                    return None
+            
+            # Fetch custom reward details
+            response = requests.get(
+                'https://api.twitch.tv/helix/channel_points/custom_rewards',
+                headers=headers,
+                params={
+                    'broadcaster_id': self.broadcaster_id,
+                    'id': reward_id
+                }
+            )
+            
+            if response.status_code == 200:
+                rewards = response.json().get('data', [])
+                if rewards:
+                    reward = rewards[0]
+                    return {
+                        'title': reward.get('title', 'Unknown Reward'),
+                        'cost': reward.get('cost', 0)
+                    }
+                else:
+                    print(f"[Twitch] No reward found for ID: {reward_id}")
+                    return None
+            else:
+                print(f"[Twitch] Failed to fetch reward: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"[Twitch] Error fetching custom reward: {e}")
+            return None
+    
+    def ban_user(self, username: str, user_id: Optional[str] = None):
+        """Ban a user from Twitch chat"""
+        if not username:
+            return
+        
+        try:
+            headers = {
+                'Client-ID': self.client_id,
+                'Authorization': f'Bearer {self.oauth_token}',
+                'Content-Type': 'application/json'
+            }
+            
+            # Get user ID if not provided
+            if not user_id:
+                user_response = requests.get(
+                    'https://api.twitch.tv/helix/users',
+                    headers=headers,
+                    params={'login': username}
+                )
+                if user_response.status_code == 200:
+                    users = user_response.json().get('data', [])
+                    if users:
+                        user_id = users[0]['id']
+            
+            if not user_id:
+                print(f"[Twitch] Could not find user ID for {username}")
+                return
+            
+            # Get broadcaster ID if not cached
+            if not hasattr(self, 'broadcaster_id') or not self.broadcaster_id:
+                # Fetch broadcaster ID from username
+                broadcaster_response = requests.get(
+                    'https://api.twitch.tv/helix/users',
+                    headers=headers,
+                    params={'login': self.username}
+                )
+                
+                if broadcaster_response.status_code == 200:
+                    users = broadcaster_response.json().get('data', [])
+                    if users:
+                        self.broadcaster_id = users[0]['id']
+                        print(f"[Twitch] Cached broadcaster_id: {self.broadcaster_id}")
+                    else:
+                        print(f"[Twitch] Could not find broadcaster ID for {self.username}")
+                        return
+                else:
+                    print(f"[Twitch] Failed to get broadcaster ID: {broadcaster_response.status_code}")
+                    return
+            
+            # Ban user via Twitch API
+            response = requests.post(
+                'https://api.twitch.tv/helix/moderation/bans',
+                headers=headers,
+                json={
+                    'data': {
+                        'user_id': user_id,
+                        'broadcaster_id': self.broadcaster_id,
+                        'moderator_id': self.broadcaster_id
+                    }
+                }
+            )
+            
+            if response.status_code == 200:
+                print(f"[Twitch] User banned: {username}")
+            else:
+                print(f"[Twitch] Failed to ban user: {response.status_code}")
+        except Exception as e:
+            print(f"[Twitch] Error banning user: {e}")
+    
+    def onMessageReceived(self, username: str, message: str):
+        """Handle received message"""
+        self.message_received.emit('twitch', username, message, {})
+    
+    def onMessageReceivedWithMetadata(self, username: str, message: str, metadata: dict):
+        """Handle received message with metadata"""
+        # Suppress incoming IRC echo that matches a recent local echo (sent by this streamer)
+        try:
+            now = time.time()
+            msg_l = message.strip().lower() if message else ''
+            for m, ts in list(self._recent_local_echoes):
+                if m == msg_l and (now - ts) < 5.0:
+                    print(f"[TwitchConnector][TRACE] Suppressing incoming IRC echo matching local echo: {message}")
+                    try:
+                        self._recent_local_echoes.remove((m, ts))
+                    except Exception:
+                        pass
+                    return
+            # prune old entries
+            self._recent_local_echoes = [(m, t) for (m, t) in self._recent_local_echoes if (now - t) < 10.0]
+        except Exception:
+            pass
+        print(f"[TwitchConnector] onMessageReceivedWithMetadata: {username}, {message}, {metadata}")
+        # TRACE: explicit incoming trace for debugging send vs receive timing
+        try:
+            print(f"[TwitchConnector][TRACE][INCOMING] username={username} message_preview={message[:120]} metadata_keys={list(metadata.keys())}")
+        except Exception:
+            print("[TwitchConnector][TRACE][INCOMING] failed to print metadata preview")
+        # Diagnostic: emitter instance id
+        try:
+            print(f"[TwitchConnector][TRACE][EMITTER] id={id(self)} username_attr={getattr(self, 'username', None)} is_bot={getattr(self, 'is_bot_account', False)}")
+        except Exception:
+            pass
+        self.message_received_with_metadata.emit('twitch', username, message, metadata)
+
+    
+    def onMessageDeleted(self, message_id: str):
+        """Handle message deletion event from platform"""
+        print(f"[TwitchConnector] Message deleted by platform/moderator: {message_id}")
+        self.message_deleted.emit('twitch', message_id)
+    
+    def onRedemption(self, username: str, reward_title: str, reward_cost: int, user_input: str):
+        """Handle channel points redemption from EventSub"""
+        import datetime
+        print(f"[TwitchConnector] Redemption: {username} redeemed {reward_title} ({reward_cost} points)")
+        
+        # Format message
+        if user_input:
+            message = f"🌟 redeemed {reward_title} ({reward_cost} points) - \"{user_input}\""
+        else:
+            message = f"🌟 redeemed {reward_title} ({reward_cost} points)"
+        
+        # Create metadata
+        metadata = {
+            'timestamp': datetime.datetime.now(),
+            'event_type': 'redemption',
+            'color': None,
+            'badges': [],
+            'message_id': None,
+            'reward_title': reward_title,
+            'reward_cost': reward_cost
+        }
+        
+        self.message_received_with_metadata.emit('twitch', username, message, metadata)
+    
+    def onEvent(self, event_type: str, username: str, event_data: dict):
+        """Handle general EventSub events"""
+        import datetime
+        print(f"[TwitchConnector] Event: {event_type} - {username}")
+        
+        # Format message based on event type
+        if event_type == 'stream.online':
+            message = f"📡 went live!"
+            username = event_data.get('broadcaster_name', username)
+        elif event_type == 'follow':
+            message = f"💜 followed the channel"
+        elif event_type == 'subscribe':
+            tier = event_data.get('tier', '1000')
+            tier_name = {'1000': 'Tier 1', '2000': 'Tier 2', '3000': 'Tier 3'}.get(tier, 'Tier 1')
+            is_gift = event_data.get('is_gift', False)
+            if is_gift:
+                message = f"⭐ received a gifted subscription ({tier_name})"
+            else:
+                message = f"⭐ subscribed ({tier_name})"
+        elif event_type == 'gift':
+            tier = event_data.get('tier', '1000')
+            tier_name = {'1000': 'Tier 1', '2000': 'Tier 2', '3000': 'Tier 3'}.get(tier, 'Tier 1')
+            total = event_data.get('total', 1)
+            cumulative = event_data.get('cumulative_total')
+            if total == 1:
+                message = f"🎁 gifted a subscription ({tier_name})"
+            else:
+                message = f"🎁 gifted {total} subscriptions ({tier_name})"
+            if cumulative:
+                message += f" [Total: {cumulative}]"
+        elif event_type == 'cheer':
+            bits = event_data.get('bits', 0)
+            cheer_message = event_data.get('message', '')
+            if cheer_message:
+                message = f"💎 cheered {bits} bits - \"{cheer_message}\""
+            else:
+                message = f"💎 cheered {bits} bits"
+        else:
+            message = f"Event: {event_type}"
+        
+        # Create metadata
+        metadata = {
+            'timestamp': datetime.datetime.now(),
+            'event_type': event_type,
+            'color': None,
+            'badges': [],
+            'message_id': None
+        }
+        metadata.update(event_data)
+        
+        self.message_received_with_metadata.emit('twitch', username, message, metadata)
+    
+    def onEventSubStatus(self, connected: bool):
+        """Handle EventSub connection status"""
+        print(f"[TwitchConnector] EventSub connected: {connected}")
+    
+    def onStatusChanged(self, connected: bool):
+        """Handle connection status change"""
+        self.connected = connected
+        self.connection_status.emit(connected)
+    
+    def onError(self, error: str):
+        """Handle error"""
+        self.error_occurred.emit(error)
+
+
+class TwitchWorker(QThread):
+    """Worker thread for Twitch IRC connection"""
+    
+    message_signal = pyqtSignal(str, str)  # username, message
+    status_signal = pyqtSignal(bool)  # connected
+    error_signal = pyqtSignal(str)  # error
+
+    def set_metadata_callback(self, callback):
+        self._metadata_callback = callback
+        try:
+            print(f"[TwitchWorker][TRACE] set_metadata_callback: worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))} callback_set={callback is not None}")
+        except Exception:
+            pass
+    
+    def set_deletion_callback(self, callback):
+        """Set callback for message deletion events"""
+        self._deletion_callback = callback
+    
+    IRC_SERVER = 'wss://irc-ws.chat.twitch.tv:443'
+    
+    def __init__(self, channel: str, oauth_token: Optional[str] = None, 
+                 client_id: Optional[str] = None, refresh_token: Optional[str] = None,
+                 client_secret: Optional[str] = None, nick: Optional[str] = None, connector=None):
+        super().__init__()
+        self.channel = channel.lower()
+        self.oauth_token = oauth_token
+        self.client_id = client_id
+        self.refresh_token = refresh_token
+        self.client_secret = client_secret
+        self.connector = connector  # Reference to connector for API calls
+        # Initialize callbacks to known defaults to avoid attribute errors
+        self._metadata_callback = None
+        self._deletion_callback = None
+        # If a connector was provided and appears to be a streamer connector,
+        # attach its metadata callback as a safe fallback in case connect()
+        # did not explicitly call `set_metadata_callback` (race / reconnection path).
+        try:
+            if self.connector and hasattr(self.connector, 'onMessageReceivedWithMetadata') and not getattr(self.connector, 'is_bot_account', False):
+                self._metadata_callback = getattr(self.connector, 'onMessageReceivedWithMetadata')
+                print(f"[TwitchWorker][TRACE] __init__: worker_id={id(self)} auto-attached metadata_callback to connector_id={id(self.connector)}")
+        except Exception:
+            pass
+        self.running = False
+        self.ws = None
+        self.loop = None
+        # Use provided nick or fallback to channel name
+        self.bot_nick = nick.lower() if nick else channel.lower()
+        self.last_token_refresh = time.time()
+        
+        # Message reliability features
+        self.seen_message_ids = set()  # Track processed messages
+        self.max_seen_ids = 10000  # Prevent unbounded growth
+        self.last_message_time = None  # For health monitoring
+        self.connection_timeout = 300  # 5 minutes
+    
+    def run(self):
+        """Run the Twitch IRC connection"""
+        self.running = True
+        
+        # Create new event loop for this thread
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        try:
+            # Always try real connection (we have default credentials)
+            self.loop.run_until_complete(self.connect_to_twitch())
+        except Exception as e:
+            self.error_signal.emit(f"Connection error: {str(e)}")
+            self.status_signal.emit(False)
+        finally:
+            if self.loop and not self.loop.is_closed():
+                self.loop.close()
+    
+    async def connect_to_twitch(self):
+        """Connect to Twitch IRC via WebSocket with unlimited retry"""
+        retry_count = 0
+        
+        while self.running:
+            try:
+                async with websockets.connect(self.IRC_SERVER) as websocket:
+                    self.ws = websocket
+                    retry_count = 0  # Reset on successful connection
+                    
+                    # Authenticate
+                    await self.authenticate()
+                    
+                    # Join channel
+                    await websocket.send(f'JOIN #{self.channel}')
+                    
+                    self.status_signal.emit(True)
+                    print(f"Connected to Twitch channel: {self.channel}")
+                    
+                    # Start health monitoring
+                    health_task = asyncio.create_task(self.health_check_loop(websocket))
+                    
+                    # Listen for messages with buffer for partial messages
+                    last_refresh_check = time.time()
+                    message_buffer = ''  # Buffer for partial IRC messages
+                    messages_received = 0
+                    messages_parsed = 0
+                    
+                    while self.running:
+                        try:
+                            # Check if token needs refresh (every 30 minutes)
+                            if time.time() - last_refresh_check > 1800:
+                                await self.refresh_token_if_needed()
+                                last_refresh_check = time.time()
+                            
+                            raw_data = await asyncio.wait_for(
+                                websocket.recv(), 
+                                timeout=1.0
+                            )
+                            self.last_message_time = time.time()  # Update health timestamp
+                            messages_received += 1
+                            
+                            # IRC messages can arrive concatenated or split
+                            # Add to buffer and process complete messages
+                            message_buffer += raw_data
+                            
+                            # Split by line breaks (IRC standard)
+                            while '\r\n' in message_buffer:
+                                message, message_buffer = message_buffer.split('\r\n', 1)
+                                if message.strip():  # Only process non-empty
+                                    await self.handle_message(message)
+                                    messages_parsed += 1
+                            
+                            # Log stats periodically
+                            if messages_received % 100 == 0:
+                                print(f"[Twitch Stats] Received: {messages_received}, Parsed: {messages_parsed}, Buffer size: {len(message_buffer)}")
+                            
+                        except asyncio.TimeoutError:
+                            continue
+                        except websockets.ConnectionClosed:
+                            print(f"[Twitch] Connection closed. Stats - Received: {messages_received}, Parsed: {messages_parsed}")
+                            break
+                    
+                    # Cancel health monitoring
+                    health_task.cancel()
+                    try:
+                        await health_task
+                    except asyncio.CancelledError:
+                        pass
+                    
+                    # If we exit cleanly, don't retry
+                    if not self.running:
+                        break
+                            
+            except Exception as e:
+                retry_count += 1
+                wait_time = min(2 ** retry_count, 300)  # Cap at 5 minutes
+                self.error_signal.emit(f"WebSocket error (attempt {retry_count}): {str(e)}")
+                if self.running:
+                    print(f"Retrying Twitch connection in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    break
+                    
+        self.status_signal.emit(False)
+        self.ws = None
+    
+    async def refresh_token_if_needed(self):
+        """Refresh token during active connection"""
+        if not self.refresh_token or not self.client_id or not self.client_secret:
+            return
+        
+        try:
+            response = requests.post(
+                'https://id.twitch.tv/oauth2/token',
+                data={
+                    'client_id': self.client_id,
+                    'client_secret': self.client_secret,
+                    'grant_type': 'refresh_token',
+                    'refresh_token': self.refresh_token
+                },
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                self.oauth_token = data.get('access_token', self.oauth_token)
+                new_refresh = data.get('refresh_token')
+                if new_refresh:
+                    self.refresh_token = new_refresh
+                print("Token refreshed during connection")
+        except Exception as e:
+            print(f"Error refreshing token: {e}")
+    
+    async def health_check_loop(self, websocket):
+        """Monitor connection health and force reconnect if dead"""
+        while self.running:
+            try:
+                await asyncio.sleep(30)  # Check every 30 seconds
+                
+                if self.last_message_time:
+                    time_since_last = time.time() - self.last_message_time
+                    
+                    if time_since_last > self.connection_timeout:
+                        print(f"[Twitch] Connection appears dead ({int(time_since_last)}s since last message)")
+                        print(f"[Twitch] Forcing reconnection...")
+                        await websocket.close()
+                        break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"[Twitch] Health check error: {e}")
+    
+    async def authenticate(self):
+        """Authenticate with Twitch IRC"""
+        if not self.ws:
+            return
+        
+        # Remove 'oauth:' prefix if present
+        token = self.oauth_token
+        if token.startswith('oauth:'):
+            token = token[6:]
+        
+        token_prefix = token[:20] if token else "None"
+        print(f"[TwitchWorker] Authenticating with token: {token_prefix}... as {self.bot_nick}")
+        
+        # Send authentication
+        await self.ws.send(f'PASS oauth:{token}')
+        await self.ws.send(f'NICK {self.bot_nick}')
+        
+        # Request capabilities for better message parsing
+        await self.ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership')
+        
+        print(f"Authenticated with Twitch as {self.bot_nick}")
+    
+    async def handle_message(self, raw_message: str):
+        """Parse and handle IRC message"""
+        # Handle PING - keep connection alive
+        if raw_message.startswith('PING'):
+            if self.ws is not None:
+                await self.ws.send('PONG :tmi.twitch.tv')
+            return
+        
+        # Log successful authentication
+        if '001' in raw_message or 'Welcome' in raw_message:
+            print("Twitch authentication successful!")
+            return
+        
+        # Log join confirmation
+        if f'JOIN #{self.channel}' in raw_message:
+            print(f"Successfully joined #{self.channel}")
+            return
+        
+        # Check for error messages (NOTICE, msg_banned, msg_suspended, etc.)
+        if 'NOTICE' in raw_message or 'msg_banned' in raw_message or 'msg_suspended' in raw_message:
+            print(f"⚠️ Twitch IRC Notice/Error: {raw_message}")
+            # Detect login/authentication failure and auto-refresh token
+            if (
+                'Login authentication failed' in raw_message
+                or 'Login unsuccessful' in raw_message
+                or 'authentication failed' in raw_message
+                or 'Error logging in' in raw_message
+                or 'Improperly formatted auth' in raw_message
+            ):
+                print("[TwitchWorker] Detected authentication failure. Attempting token refresh and reconnect...")
+                if self.connector and hasattr(self.connector, 'refresh_access_token'):
+                    refresh_result = self.connector.refresh_access_token()
+                    if refresh_result:
+                        # Save new tokens and username to config if available
+                        if hasattr(self.connector, 'config') and self.connector.config:
+                            section = 'twitch_bot' if getattr(self.connector, 'is_bot_account', False) else 'twitch_streamer'
+                            self.connector.config.set_platform_config(section, 'oauth_token', self.connector.oauth_token)
+                            self.connector.config.set_platform_config(section, 'refresh_token', self.connector.refresh_token)
+                            # Also persist username if available
+                            if getattr(self.connector, 'username', None):
+                                self.connector.config.set_platform_config(section, 'username', self.connector.username)
+                            print("[TwitchWorker] Saved refreshed tokens and username to config.")
+                        print("[TwitchWorker] Token refreshed. Reconnecting...")
+                        # Force reconnect by stopping and restarting
+                        self.running = False
+                        # Optionally, emit error or status signal here
+                        # self.error_signal.emit('Twitch token refreshed, reconnecting...')
+                    else:
+                        print("[TwitchWorker] Token refresh failed. Manual re-authentication required.")
+                return
+            return
+        
+        # Parse CLEARMSG (message deletion)
+        if 'CLEARMSG' in raw_message:
+            result = self.parse_clearmsg(raw_message)
+            if result:
+                message_id = result
+                print(f"[Twitch] Message deleted by moderator: {message_id}")
+                if hasattr(self, '_deletion_callback') and self._deletion_callback:
+                    self._deletion_callback(message_id)
+            return
+        
+        # Parse USERNOTICE (events like subs, raids, bits, etc.)
+        if 'USERNOTICE' in raw_message:
+            result = self.parse_usernotice(raw_message)
+            if result:
+                username, message, metadata = result
+                print(f"[Twitch] Event: {username}: {message}")
+                print(f"[Twitch Event Metadata] {metadata.get('event_type', 'unknown')}")
+                self.message_signal.emit(username, message)
+                if hasattr(self, '_metadata_callback') and self._metadata_callback:
+                    self._metadata_callback(username, message, metadata)
+            return
+        
+        # Parse PRIVMSG (chat messages)
+        if 'PRIVMSG' in raw_message:
+            result = self.parse_privmsg(raw_message)
+            if result:
+                username, message, metadata = result
+                
+                # Check for bits in chat messages (Cheers)
+                if 'bits=' in raw_message and metadata.get('bits'):
+                    bits = metadata['bits']
+                    metadata['event_type'] = 'bits'
+                    metadata['amount'] = bits
+                    message = f"💎 cheered {bits} bits: {message}"
+                    print(f"[Twitch] Bits: {username} - {bits}")
+                
+                print(f"[Twitch] {username}: {message}")  # Debug log
+                print(f"[Twitch Metadata] Color: {metadata.get('color')}, Badges: {metadata.get('badges')}")  # Debug metadata
+                
+                # Emit signal with error handling
+                try:
+                    self.message_signal.emit(username, message)
+                    # Diagnostic: show which worker/connector will call metadata callback
+                    try:
+                        has_cb = hasattr(self, '_metadata_callback') and self._metadata_callback
+                        print(f"[TwitchWorker][TRACE] handle_message: worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))} has_metadata_callback={bool(has_cb)}")
+                    except Exception:
+                        pass
+                    if has_cb:
+                        try:
+                            self._metadata_callback(username, message, metadata)
+                        except Exception as e:
+                            print(f"[TwitchWorker] ✗ Error calling metadata callback: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    else:
+                        # Defensive fallback: if no metadata callback was set
+                        # but the worker has a connector reference that appears
+                        # to be a streamer connector, call its handler directly.
+                        try:
+                            conn = getattr(self, 'connector', None)
+                            if conn and hasattr(conn, 'onMessageReceivedWithMetadata') and not getattr(conn, 'is_bot_account', False):
+                                print(f"[TwitchWorker][TRACE] Fallback: invoking connector.onMessageReceivedWithMetadata for connector_id={id(conn)}")
+                                try:
+                                    conn.onMessageReceivedWithMetadata(username, message, metadata)
+                                except Exception as e:
+                                    print(f"[TwitchWorker] ✗ Error in fallback connector callback: {e}")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    print(f"[Twitch] ✗ Error emitting message signal: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                # CRITICAL: Parse failure - don't silently drop the message!
+                print(f"[Twitch] ⚠️ PARSE FAILURE - Message will be dropped!")
+                print(f"[Twitch] Raw IRC (first 500 chars): {raw_message[:500]}")
+    
+    def parse_clearmsg(self, raw_message: str):
+        """Parse CLEARMSG to extract deleted message ID
+        
+        CLEARMSG format: @target-msg-id=xxx-xxx-xxx :tmi.twitch.tv CLEARMSG #channel :message text
+        """
+        try:
+            # Extract target-msg-id from IRC tags
+            if raw_message.startswith('@') and 'target-msg-id=' in raw_message:
+                tag_part = raw_message.split(' ', 1)[0]
+                for tag in tag_part[1:].split(';'):
+                    if tag.startswith('target-msg-id='):
+                        message_id = tag.split('=', 1)[1]
+                        return message_id
+        except Exception as e:
+            print(f"[Twitch] Error parsing CLEARMSG: {e}")
+        return None
+    
+    def parse_usernotice(self, raw_message: str):
+        """Parse USERNOTICE to extract event information (subs, raids, channel points, etc.)
+        
+        USERNOTICE format: @badge-info=;badges=;...;msg-id=raid;... :tmi.twitch.tv USERNOTICE #channel :message
+        """
+        try:
+            import datetime
+            
+            # Initialize metadata
+            metadata = {
+                'timestamp': datetime.datetime.now(),
+                'color': None,
+                'badges': [],
+                'message_id': None
+            }
+            
+            # Extract IRC tags (required for USERNOTICE)
+            tags = {}
+            if raw_message.startswith('@'):
+                tag_part = raw_message.split(' ', 1)[0]
+                for tag in tag_part[1:].split(';'):
+                    if '=' in tag:
+                        key, value = tag.split('=', 1)
+                        tags[key] = value
+                        metadata[key] = value
+                
+                # Extract message ID
+                if 'id' in tags:
+                    metadata['message_id'] = tags['id']
+                
+                # Extract color
+                if 'color' in tags and tags['color']:
+                    metadata['color'] = tags['color']
+                
+                # Extract badges
+                if 'badges' in tags and tags['badges']:
+                    badge_list = []
+                    for badge_pair in tags['badges'].split(','):
+                        if '/' in badge_pair:
+                            badge_list.append(badge_pair)
+                    metadata['badges'] = badge_list
+            
+            # Get the event type from msg-id tag
+            msg_id = tags.get('msg-id', '')
+            
+            # Extract username (login or display-name)
+            username = tags.get('display-name') or tags.get('login', 'Unknown')
+            
+            # Default message
+            message = ""
+            
+            # Handle different event types
+            if msg_id == 'raid':
+                viewers = tags.get('msg-param-viewerCount', '0')
+                metadata['event_type'] = 'raid'
+                metadata['viewers'] = viewers
+                message = f"📢 raided with {viewers} viewer{'s' if int(viewers) != 1 else ''}"
+            
+            elif msg_id in ['sub', 'resub']:
+                months = tags.get('msg-param-cumulative-months', '1')
+                metadata['event_type'] = 'subscription'
+                metadata['months'] = months
+                message = f"⭐ subscribed ({months} month{'s' if int(months) > 1 else ''})"
+            
+            elif msg_id in ['subgift', 'anonsubgift']:
+                recipient = tags.get('msg-param-recipient-display-name', 'someone')
+                metadata['event_type'] = 'subscription'
+                message = f"💝 gifted a sub to {recipient}"
+                if msg_id == 'anonsubgift':
+                    username = 'Anonymous'
+            
+            elif msg_id in ['submysterygift', 'anonsubmysterygift']:
+                gift_count = tags.get('msg-param-mass-gift-count', tags.get('msg-param-sender-count', '1'))
+                metadata['event_type'] = 'subscription'
+                metadata['gift_count'] = gift_count
+                message = f"💝 gifted {gift_count} subscription{'s' if int(gift_count) != 1 else ''} to the community!"
+                if msg_id == 'anonsubmysterygift':
+                    username = 'Anonymous'
+            
+            elif msg_id == 'ritual' and tags.get('msg-param-ritual-name') == 'new_chatter':
+                metadata['event_type'] = 'highlight'
+                message = "🎉 is new to the chat!"
+            
+            elif msg_id == 'bitsbadgetier':
+                threshold = tags.get('msg-param-threshold', '0')
+                metadata['event_type'] = 'bits'
+                metadata['threshold'] = threshold
+                message = f"💎 unlocked a new bits badge tier ({threshold})!"
+            
+            # Channel point redemptions (AUTOMATIC REWARDS ONLY via IRC)
+            # NOTE: Custom channel points rewards require EventSub subscription
+            # IRC only receives automatic rewards like "Highlight My Message"
+            elif msg_id in ['highlighted-message', 'skip-subs-mode-message']:
+                metadata['event_type'] = 'redemption'
+                
+                # Try to extract the actual message if present
+                message_match = re.search(r'USERNOTICE #\w+ :(.+)', raw_message)
+                actual_message = message_match.group(1) if message_match else ""
+                
+                # Get reward details from API if available
+                reward_name = 'Highlight My Message'  # Default for highlighted-message
+                reward_cost = 'unknown'
+                
+                custom_reward_id = tags.get('custom-reward-id')
+                if custom_reward_id and self.connector:
+                    reward_info = self.connector.get_custom_reward(custom_reward_id)
+                    if reward_info:
+                        reward_name = reward_info['title']
+                        reward_cost = str(reward_info['cost'])
+                
+                # Format: username redeemed <reward name> (<points>)
+                # If user message included, highlight it at the end
+                if actual_message:
+                    message = f"🌟 redeemed {reward_name} ({reward_cost} points) - \"{actual_message}\""
+                else:
+                    message = f"🌟 redeemed {reward_name} ({reward_cost} points)"
+            
+            # Community pay forward
+            elif msg_id == 'communitypayforward':
+                prior_gifter = tags.get('msg-param-prior-gifter-display-name', 'someone')
+                metadata['event_type'] = 'subscription'
+                message = f"💝 paid forward a gift sub from {prior_gifter}"
+            
+            # Standard gift paid upgrade
+            elif msg_id == 'standardpayforward':
+                metadata['event_type'] = 'subscription'
+                message = "💝 paid forward a gift sub"
+            
+            # Gift upgrade (user continuing a gifted sub)
+            elif msg_id in ['giftpaidupgrade', 'primepaidupgrade']:
+                metadata['event_type'] = 'subscription'
+                message = "⭐ continued their subscription"
+            
+            # Announcement (special message type)
+            elif msg_id == 'announcement':
+                message_match = re.search(r'USERNOTICE #\w+ :(.+)', raw_message)
+                actual_message = message_match.group(1) if message_match else ""
+                metadata['event_type'] = 'highlight'
+                message = f"📣 {actual_message}"
+            
+            else:
+                # Unknown event type - try to extract any message
+                message_match = re.search(r'USERNOTICE #\w+ :(.+)', raw_message)
+                if message_match:
+                    message = message_match.group(1)
+                else:
+                    message = f"triggered event: {msg_id}"
+            
+            return username, message, metadata
+            
+        except Exception as e:
+            print(f"[Twitch] Error parsing USERNOTICE: {e}")
+            print(f"[Twitch] Raw message: {raw_message}")
+        
+        return None
+    
+    def parse_privmsg(self, raw_message: str):
+        """Parse PRIVMSG to extract username, message, and metadata (color, badges)"""
+        try:
+            import datetime
+            
+            # Initialize metadata
+            metadata = {
+                'timestamp': datetime.datetime.now(),
+                'color': None,
+                'badges': [],
+                'emotes': None,
+                'message_id': None
+            }
+            
+            # Extract IRC tags if present (starts with @)
+            tags = {}
+            if raw_message.startswith('@'):
+                tag_part = raw_message.split(' ', 1)[0]
+                for tag in tag_part[1:].split(';'):
+                    if '=' in tag:
+                        key, value = tag.split('=', 1)
+                        tags[key] = value
+                        metadata[key] = value  # Store all tags in metadata
+                
+                # Extract message ID from tags (needed for deletion)
+                if 'id' in tags and tags['id']:
+                    metadata['message_id'] = tags['id']
+                
+                # Extract color from tags
+                if 'color' in tags and tags['color']:
+                    metadata['color'] = tags['color']
+                
+                # Extract badges from tags (keep badge/version format)
+                if 'badges' in tags and tags['badges']:
+                    badge_list = []
+                    for badge_pair in tags['badges'].split(','):
+                        if '/' in badge_pair:
+                            # Keep the full badge/version format (e.g., 'broadcaster/1')
+                            badge_list.append(badge_pair)
+                    metadata['badges'] = badge_list
+                
+                # Extract emotes from tags
+                if 'emotes' in tags and tags['emotes']:
+                    metadata['emotes'] = tags['emotes']
+            
+            # IRC format can be:
+            # Simple: :username!username@username.tmi.twitch.tv PRIVMSG #channel :message
+            # With tags: @badge-info=;badges=;color=#... :username!username@username.tmi.twitch.tv PRIVMSG #channel :message
+            
+            # Try with tags first - use more flexible pattern to handle usernames with underscores, hyphens, etc.
+            match = re.search(
+                r':([a-zA-Z0-9_]+)!.*?PRIVMSG\s+#\w+\s+:(.+)',
+                raw_message
+            )
+            
+            if match:
+                username = match.group(1)
+                message = match.group(2).strip()
+                print(f"[Twitch Parser] ✓ Parsed: {username}: {message[:50]}")
+                return username, message, metadata
+            
+            # Try simpler pattern
+            if 'PRIVMSG' in raw_message and ':' in raw_message:
+                parts = raw_message.split('PRIVMSG')
+                if len(parts) >= 2:
+                    # Extract username from first part - more flexible pattern
+                    username_match = re.search(r':([a-zA-Z0-9_]+)!', parts[0])
+                    if username_match:
+                        username = username_match.group(1)
+                        # Extract message from second part (after the second :)
+                        message_parts = parts[1].split(':', 1)
+                        if len(message_parts) >= 2:
+                            message = message_parts[1].strip()
+                            print(f"[Twitch Parser] ✓ Parsed (alt): {username}: {message[:50]}")
+                            return username, message, metadata
+            
+            # If we get here, parsing failed
+            print(f"[Twitch Parser] ✗ Failed to parse PRIVMSG")
+            print(f"[Twitch Parser] Raw: {raw_message[:200]}")
+                
+        except Exception as e:
+            print(f"[Twitch Parser] ✗ Exception parsing message: {e}")
+            print(f"[Twitch Parser] Raw message: {raw_message[:200]}")
+            import traceback
+            traceback.print_exc()
+        
+        return None
+    
+    def stop(self):
+        """Stop the worker"""
+        self.running = False
+        if self.loop and self.ws:
+            asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
+    
+    async def send_message_async(self, message: str):
+        """Send message to Twitch chat (async)"""
+        if self.ws and self.running:
+            print(f"[TwitchWorker] Sending PRIVMSG to #{self.channel}: {message[:50]}")
+            await self.ws.send(f'PRIVMSG #{self.channel} :{message}')
+            print(f"[TwitchWorker] Message sent to Twitch IRC")
+        else:
+            print(f"[TwitchWorker] ⚠ Cannot send: ws={self.ws is not None}, running={self.running}")
+    
+    def send_message(self, message: str):
+        """Send message to Twitch chat"""
+        print(f"[TwitchWorker] send_message called: loop={self.loop is not None}, ws={self.ws is not None}")
+        if self.loop and self.ws:
+            asyncio.run_coroutine_threadsafe(
+                self.send_message_async(message), 
+                self.loop
+            )
+            print(f"[TwitchWorker] Message queued to event loop")
+            return True
+        else:
+            print(f"[TwitchWorker] ⚠ Cannot queue message: loop={self.loop is not None}, ws={self.ws is not None}")
+            return False
+
+
+class TwitchEventSubWorker(QThread):
+    """Worker thread for Twitch EventSub WebSocket connection"""
+    
+    redemption_signal = pyqtSignal(str, str, int, str)  # username, reward_title, reward_cost, user_input
+    event_signal = pyqtSignal(str, str, dict)  # event_type, username, event_data
+    status_signal = pyqtSignal(bool)  # connected
+    error_signal = pyqtSignal(str)  # error
+    
+    EVENTSUB_URL = 'wss://eventsub.wss.twitch.tv/ws'
+    
+    def __init__(self, oauth_token: str, client_id: str, broadcaster_login: str):
+        super().__init__()
+        self.oauth_token = oauth_token
+        self.client_id = client_id
+        self.broadcaster_login = broadcaster_login
+        self.broadcaster_id = None
+        self.running = False
+        self.ws = None
+        self.loop = None
+        self.session_id = None
+        self.subscription_id = None
+    
+    def run(self):
+        """Main event loop"""
+        print(f"[EventSub] Worker starting...")
+        self.running = True
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        try:
+            self.loop.run_until_complete(self.connect_and_listen())
+        except Exception as e:
+            print(f"[EventSub] Error in event loop: {e}")
+            self.error_signal.emit(f"EventSub error: {e}")
+        finally:
+            self.loop.close()
+            print(f"[EventSub] Worker stopped")
+    
+    async def validate_token(self):
+        """Validate OAuth token and show granted scopes"""
+        try:
+            response = requests.get(
+                'https://id.twitch.tv/oauth2/validate',
+                headers={'Authorization': f'OAuth {self.oauth_token}'},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                scopes = data.get('scopes', [])
+                print(f"[EventSub] Token validated. Granted scopes:")
+                for scope in scopes:
+                    print(f"[EventSub]    ✓ {scope}")
+                
+                # Check for required scopes
+                required_scopes = {
+                    'channel:read:redemptions': 'Channel Points Redemptions',
+                    'channel:read:subscriptions': 'Subscribers & Gift Subs',
+                    'bits:read': 'Cheers/Bits',
+                    'moderator:read:followers': 'Followers'
+                }
+                
+                missing = []
+                for scope, name in required_scopes.items():
+                    if scope not in scopes:
+                        missing.append(f"{scope} ({name})")
+                
+                if missing:
+                    print(f"[EventSub] ⚠ Missing scopes:")
+                    for scope in missing:
+                        print(f"[EventSub]    ✗ {scope}")
+                    print(f"[EventSub]")
+                    print(f"[EventSub] To fix this:")
+                    print(f"[EventSub] 1. Go to: https://twitch.tv/settings/connections")
+                    print(f"[EventSub] 2. Find 'AudibleZenBot' and click 'Disconnect'")
+                    print(f"[EventSub] 3. In the app, log out of Twitch")
+                    print(f"[EventSub] 4. Log back in - Twitch will ask for NEW permissions")
+                    print(f"[EventSub] 5. Click 'Authorize' to grant the required scopes")
+                else:
+                    print(f"[EventSub] ✓ All required scopes present")
+            else:
+                print(f"[EventSub] ⚠ Token validation failed: {response.status_code}")
+        except Exception as e:
+            print(f"[EventSub] Error validating token: {e}")
+    
+    async def connect_and_listen(self):
+        """Connect to EventSub and listen for events"""
+        retry_count = 0
+        max_retries = 5
+        
+        while self.running and retry_count < max_retries:
+            try:
+                print(f"[EventSub] Connecting to {self.EVENTSUB_URL}...")
+                
+                async with websockets.connect(self.EVENTSUB_URL) as ws:
+                    self.ws = ws
+                    self.status_signal.emit(True)
+                    print(f"[EventSub] Connected!")
+                    
+                    # Wait for welcome message
+                    welcome_msg = await ws.recv()
+                    welcome_data = json.loads(welcome_msg)
+                    
+                    if welcome_data.get('metadata', {}).get('message_type') == 'session_welcome':
+                        self.session_id = welcome_data['payload']['session']['id']
+                        print(f"[EventSub] Session ID: {self.session_id}")
+                        
+                        # Validate token and show granted scopes
+                        await self.validate_token()
+                        
+                        # Get broadcaster ID
+                        await self.get_broadcaster_id()
+                        
+                        if self.broadcaster_id:
+                            # Subscribe to channel points redemptions
+                            await self.subscribe_to_redemptions()
+                        else:
+                            print(f"[EventSub] ⚠ Could not get broadcaster ID")
+                    
+                    # Listen for messages
+                    while self.running:
+                        try:
+                            message = await asyncio.wait_for(ws.recv(), timeout=10)
+                            await self.handle_message(message)
+                        except asyncio.TimeoutError:
+                            # Send keepalive ping
+                            continue
+                        except websockets.exceptions.ConnectionClosed:
+                            print(f"[EventSub] Connection closed")
+                            break
+                    
+            except Exception as e:
+                print(f"[EventSub] Connection error: {e}")
+                retry_count += 1
+                if self.running and retry_count < max_retries:
+                    print(f"[EventSub] Retrying in 5 seconds... ({retry_count}/{max_retries})")
+                    await asyncio.sleep(5)
+            finally:
+                self.ws = None
+                self.status_signal.emit(False)
+        
+        print(f"[EventSub] Connection loop ended")
+    
+    async def get_broadcaster_id(self):
+        """Get broadcaster user ID from username"""
+        try:
+            headers = {
+                'Client-ID': self.client_id,
+                'Authorization': f'Bearer {self.oauth_token}'
+            }
+            
+            response = requests.get(
+                'https://api.twitch.tv/helix/users',
+                headers=headers,
+                params={'login': self.broadcaster_login},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                users = response.json().get('data', [])
+                if users:
+                    self.broadcaster_id = users[0]['id']
+                    print(f"[EventSub] Broadcaster ID: {self.broadcaster_id}")
+                else:
+                    print(f"[EventSub] No user found for login: {self.broadcaster_login}")
+            else:
+                print(f"[EventSub] Failed to get user ID: {response.status_code}")
+        except Exception as e:
+            print(f"[EventSub] Error getting broadcaster ID: {e}")
+    
+    async def subscribe_to_redemptions(self):
+        """Subscribe to EventSub events"""
+        headers = {
+            'Client-ID': self.client_id,
+            'Authorization': f'Bearer {self.oauth_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        # List of subscriptions to create
+        subscriptions = [
+            {
+                'name': 'channel points redemptions',
+                'type': 'channel.channel_points_custom_reward_redemption.add',
+                'version': '1',
+                'condition': {'broadcaster_user_id': self.broadcaster_id}
+            },
+            {
+                'name': 'stream online',
+                'type': 'stream.online',
+                'version': '1',
+                'condition': {'broadcaster_user_id': self.broadcaster_id}
+            },
+            {
+                'name': 'followers',
+                'type': 'channel.follow',
+                'version': '2',
+                'condition': {
+                    'broadcaster_user_id': self.broadcaster_id,
+                    'moderator_user_id': self.broadcaster_id
+                }
+            },
+            {
+                'name': 'subscribers',
+                'type': 'channel.subscribe',
+                'version': '1',
+                'condition': {'broadcaster_user_id': self.broadcaster_id}
+            },
+            {
+                'name': 'gift subscriptions',
+                'type': 'channel.subscription.gift',
+                'version': '1',
+                'condition': {'broadcaster_user_id': self.broadcaster_id}
+            },
+            {
+                'name': 'cheers',
+                'type': 'channel.cheer',
+                'version': '1',
+                'condition': {'broadcaster_user_id': self.broadcaster_id}
+            }
+        ]
+        
+        # Subscribe to each event type
+        for sub in subscriptions:
+            try:
+                subscription_data = {
+                    'type': sub['type'],
+                    'version': sub['version'],
+                    'condition': sub['condition'],
+                    'transport': {
+                        'method': 'websocket',
+                        'session_id': self.session_id
+                    }
+                }
+                
+                print(f"[EventSub] Subscribing to {sub['name']}...")
+                response = requests.post(
+                    'https://api.twitch.tv/helix/eventsub/subscriptions',
+                    headers=headers,
+                    json=subscription_data,
+                    timeout=10
+                )
+                
+                if response.status_code == 202:
+                    result = response.json()
+                    sub_id = result['data'][0]['id']
+                    print(f"[EventSub] ✓ Subscribed to {sub['name']}! ID: {sub_id}")
+                else:
+                    print(f"[EventSub] ⚠ {sub['name']} subscription failed: {response.status_code} - {response.text}")
+            except Exception as e:
+                print(f"[EventSub] Error subscribing to {sub['name']}: {e}")
+    
+    async def handle_message(self, message: str):
+        """Handle incoming EventSub message"""
+        try:
+            data = json.loads(message)
+            message_type = data.get('metadata', {}).get('message_type')
+            
+            if message_type == 'session_keepalive':
+                # Keepalive message, no action needed
+                pass
+            
+            elif message_type == 'notification':
+                # Event notification
+                event = data.get('payload', {}).get('event', {})
+                subscription_type = data.get('payload', {}).get('subscription', {}).get('type')
+                
+                if subscription_type == 'channel.channel_points_custom_reward_redemption.add':
+                    # Channel points redemption
+                    username = event.get('user_name', event.get('user_login', 'Unknown'))
+                    reward = event.get('reward', {})
+                    reward_title = reward.get('title', 'Unknown Reward')
+                    reward_cost = reward.get('cost', 0)
+                    user_input = event.get('user_input', '')
+                    
+                    print(f"[EventSub] Redemption: {username} -> {reward_title} ({reward_cost})")
+                    self.redemption_signal.emit(username, reward_title, reward_cost, user_input)
+                
+                elif subscription_type == 'stream.online':
+                    # Stream went online
+                    broadcaster_name = event.get('broadcaster_user_name', event.get('broadcaster_user_login', 'Broadcaster'))
+                    stream_type = event.get('type', 'live')
+                    print(f"[EventSub] Stream online: {broadcaster_name} ({stream_type})")
+                    self.event_signal.emit('stream.online', broadcaster_name, {'type': stream_type})
+                
+                elif subscription_type == 'channel.follow':
+                    # New follower
+                    username = event.get('user_name', event.get('user_login', 'Unknown'))
+                    print(f"[EventSub] New follower: {username}")
+                    self.event_signal.emit('follow', username, {})
+                
+                elif subscription_type == 'channel.subscribe':
+                    # New subscriber
+                    username = event.get('user_name', event.get('user_login', 'Unknown'))
+                    tier = event.get('tier', '1000')
+                    is_gift = event.get('is_gift', False)
+                    print(f"[EventSub] New subscriber: {username} (Tier: {tier}, Gift: {is_gift})")
+                    self.event_signal.emit('subscribe', username, {'tier': tier, 'is_gift': is_gift})
+                
+                elif subscription_type == 'channel.subscription.gift':
+                    # User gifted subscriptions
+                    username = event.get('user_name', event.get('user_login', 'Anonymous'))
+                    if event.get('is_anonymous', False):
+                        username = 'Anonymous'
+                    tier = event.get('tier', '1000')
+                    total = event.get('total', 1)
+                    cumulative_total = event.get('cumulative_total')
+                    print(f"[EventSub] Gift subs: {username} gifted {total} (Tier: {tier})")
+                    self.event_signal.emit('gift', username, {'tier': tier, 'total': total, 'cumulative_total': cumulative_total})
+                
+                elif subscription_type == 'channel.cheer':
+                    # User cheered
+                    username = event.get('user_name', event.get('user_login', 'Anonymous'))
+                    if event.get('is_anonymous', False):
+                        username = 'Anonymous'
+                    bits = event.get('bits', 0)
+                    cheer_message = event.get('message', '')
+                    print(f"[EventSub] Cheer: {username} - {bits} bits")
+                    self.event_signal.emit('cheer', username, {'bits': bits, 'message': cheer_message})
+            
+            elif message_type == 'session_reconnect':
+                # Server requesting reconnect
+                reconnect_url = data.get('payload', {}).get('session', {}).get('reconnect_url')
+                print(f"[EventSub] Server requested reconnect to: {reconnect_url}")
+            
+        except Exception as e:
+            print(f"[EventSub] Error handling message: {e}")
+    
+    def stop(self):
+        """Stop the EventSub worker"""
+        print(f"[EventSub] Stopping worker...")
+        self.running = False
+        if self.ws and self.loop is not None:
+            asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)

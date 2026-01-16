@@ -1413,12 +1413,16 @@ QTabBar::tab:hover {
                     # Use streamer connector directly
                     connector = self.chat_manager.connectors.get('twitch')
                     if connector and hasattr(connector, 'send_message') and getattr(connector, 'connected', False):
-                        connector.send_message(message)
-                        print(f"[TimerMessages] ✓ Twitch: Sent via persistent streamer connection ({username})")
-                        
-                        # Don't echo - Twitch IRC echoes back our own messages
-                        
-                        return True
+                        print(f"[TimerMessages][TRACE] Twitch streamer send: connector_connected={getattr(connector, 'connected', False)} username={username}")
+                        result = connector.send_message(message)
+                        print(f"[TimerMessages][TRACE] Twitch streamer send result: {result}")
+                        if result:
+                            print(f"[TimerMessages] ✓ Twitch: Sent via persistent streamer connection ({username})")
+                            # Don't echo - Twitch IRC echoes back our own messages
+                            return True
+                        else:
+                            print(f"[TimerMessages] ✗ Twitch: send_message returned False for streamer ({username})")
+                            return False
                     else:
                         print(f"[TimerMessages] ✗ Twitch: Streamer connector not available")
                         return False
@@ -1592,12 +1596,10 @@ QTabBar::tab:hover {
     
     def save_timer_config(self):
         """Save timer configuration to config file"""
-        # CRITICAL: Reload config before saving to avoid overwriting other platforms' data
-        self.config.config = self.config.load()
         config_data = self.config.get('timer_messages', {})
         config_data['groups'] = self.timer_groups
+        # Use ConfigManager.set which reloads and saves atomically
         self.config.set('timer_messages', config_data)
-        self.config.save()
     
     def load_timer_config(self):
         """Load timer configuration from config file"""

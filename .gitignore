@@ -1,0 +1,25 @@
+# Configuration files
+config.json
+*.pyc
+__pycache__/
+*.log
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Distribution
+dist/
+build/
+*.egg-info/

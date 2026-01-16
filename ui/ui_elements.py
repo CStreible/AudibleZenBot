@@ -3,7 +3,12 @@
 Place shared widgets here (ToggleSwitch, future shared controls).
 """
 from PyQt6.QtWidgets import QCheckBox
-from PyQt6.QtCore import Qt, QRect, QPropertyAnimation, pyqtProperty
+"""Common UI elements for the AudibleZenBot application.
+
+Place shared widgets here (ToggleSwitch, future shared controls).
+"""
+from PyQt6.QtWidgets import QCheckBox, QLayout, QWidgetItem
+from PyQt6.QtCore import Qt, QRect, QPropertyAnimation, pyqtProperty, QSize, QPoint
 from PyQt6.QtGui import QPainter, QColor, QBrush, QPen
 
 
@@ -94,3 +99,89 @@ class ToggleSwitch(QCheckBox):
         self.update()
 
     offset = pyqtProperty(float, fget=get_offset, fset=set_offset)
+
+
+class FlowLayout(QLayout):
+    """Flow layout that arranges child widgets horizontally and wraps them.
+
+    Adapted for reuse in the project's UI. Keeps visual behavior minimal and
+    acts like a wrapping HBoxLayout.
+    """
+
+    def __init__(self, parent=None, margin=0, spacing=5):
+        super().__init__(parent)
+        if parent is not None:
+            self.setContentsMargins(margin, margin, margin, margin)
+        self._spacing = spacing
+        self.item_list = []
+
+    def addItem(self, item):
+        self.item_list.append(item)
+
+    def addWidget(self, w):
+        self.addItem(QWidgetItem(w))
+
+    def count(self):
+        return len(self.item_list)
+
+    def itemAt(self, idx):
+        if 0 <= idx < len(self.item_list):
+            return self.item_list[idx]
+        return None
+
+    def takeAt(self, idx):
+        if 0 <= idx < len(self.item_list):
+            return self.item_list.pop(idx)
+        return None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self.doLayout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self.doLayout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self.item_list:
+            size = size.expandedTo(item.sizeHint())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+
+    def doLayout(self, rect, testOnly):
+        x = rect.x()
+        y = rect.y()
+        lineHeight = 0
+
+        effectiveRect = rect.adjusted(self.contentsMargins().left(), self.contentsMargins().top(), -self.contentsMargins().right(), -self.contentsMargins().bottom())
+        x = effectiveRect.x()
+        y = effectiveRect.y()
+
+        for item in self.item_list:
+            widgetSize = item.sizeHint()
+            spaceX = self._spacing
+            spaceY = self._spacing
+            nextX = x + widgetSize.width() + spaceX
+            if nextX - spaceX > effectiveRect.right() and lineHeight > 0:
+                x = effectiveRect.x()
+                y = y + lineHeight + spaceY
+                nextX = x + widgetSize.width() + spaceX
+                lineHeight = 0
+
+            if not testOnly:
+                item.setGeometry(QRect(QPoint(x, y), widgetSize))
+
+            x = nextX
+            lineHeight = max(lineHeight, widgetSize.height())
+
+        return y + lineHeight - rect.y() + self.contentsMargins().bottom()

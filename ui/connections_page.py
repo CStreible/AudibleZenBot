@@ -1023,6 +1023,56 @@ class PlatformConnectionWidget(QWidget):
         
         # Try to get credentials from config if connector doesn't have them
         twitch_config = self.config.get_platform_config('twitch') if self.config else {}
+
+        # Pre-populate UI from locally saved stream_info so local settings
+        # (like Go-Live notification) persist across restarts even when
+        # the platform API doesn't return live info immediately.
+        try:
+            stream_info = twitch_config.get('stream_info', {}) if isinstance(twitch_config, dict) else {}
+            if 'twitch' in self.platform_widgets and stream_info:
+                widgets = self.platform_widgets['twitch']
+                # Title
+                if stream_info.get('title') and widgets.get('title'):
+                    try:
+                        widgets['title'].blockSignals(True)
+                        widgets['title'].setText(stream_info.get('title', ''))
+                    finally:
+                        widgets['title'].blockSignals(False)
+
+                # Category
+                if stream_info.get('category') and widgets.get('category'):
+                    try:
+                        widgets['category'].blockSignals(True)
+                        widgets['category'].setText(stream_info.get('category', ''))
+                    finally:
+                        widgets['category'].blockSignals(False)
+
+                # Notification (QTextEdit)
+                if 'notification' in stream_info and widgets.get('notification'):
+                    try:
+                        widgets['notification'].setPlainText(stream_info.get('notification', ''))
+                    except Exception:
+                        try:
+                            widgets['notification'].setText(stream_info.get('notification', ''))
+                        except Exception:
+                            pass
+
+                # Tags
+                if stream_info.get('tags') and widgets.get('tags_display'):
+                    try:
+                        tags_display = widgets['tags_display']
+                        layout = tags_display.layout()
+                        if layout is not None:
+                            while layout.count() > 0:
+                                item = layout.takeAt(0)
+                                if item and item.widget():
+                                    item.widget().deleteLater()
+                        for tag_name in stream_info.get('tags', []):
+                            self.add_tag_chip('twitch', tag_name, tags_display)
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[ConnectionsPage] Failed to pre-populate Twitch stream_info from config: {e}")
         
         client_id = getattr(connector, 'client_id', None) if connector else None
         if not client_id:
@@ -2863,11 +2913,9 @@ class PlatformConnectionWidget(QWidget):
                     pass
             finally:
                 self.disable_checkbox.blockSignals(False)
-            # Notify parent/page about disable state so chat manager can apply it
-            try:
-                self.disable_changed.emit(self.platform_id, bool(disabled))
-            except Exception:
-                pass
+            # Do not emit `disable_changed` during initialization to avoid
+            # triggering duplicate connect/disconnect cycles. The toggle
+            # handler `_on_disable_toggled` will emit when user changes it.
         except Exception:
             pass
     
