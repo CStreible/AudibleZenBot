@@ -336,10 +336,18 @@ class ChatManager(QObject):
             # Emit signal to update UI
             self.bot_connection_changed.emit(platform_id, True, username)
             
-            # Give it a moment to establish connection
+            # Wait briefly for the bot connector to report its actual connected state.
+            # Worker runs in another thread and may take a short moment to emit status.
             import time
-            time.sleep(0.5)
-            
+            waited = 0.0
+            timeout = 3.0
+            interval = 0.1
+            while waited < timeout:
+                if getattr(bot_connector, 'connected', False):
+                    break
+                time.sleep(interval)
+                waited += interval
+
             print(f"[ChatManager] Bot connector status: connected={getattr(bot_connector, 'connected', 'N/A')}")
             return True
         except Exception as e:
