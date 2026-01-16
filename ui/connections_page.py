@@ -656,7 +656,7 @@ class PlatformConnectionWidget(QWidget):
         buttons_layout.addWidget(save_btn)
         
         layout.addLayout(buttons_layout)
-        
+
         return group
 
     def _setup_twitch_suggestions(self, platform_name, category_input, category_layout):
@@ -747,7 +747,7 @@ class PlatformConnectionWidget(QWidget):
                 client_id = getattr(connector, 'client_id', None) if connector else None
                 oauth_token = getattr(connector, 'oauth_token', None) if connector else None
                 if not client_id or not oauth_token:
-                    twitch_config = self.config.config.get('platforms', {}).get('twitch', {})
+                    twitch_config = self.config.get_platform_config('twitch') if self.config else {}
                     client_id = client_id or twitch_config.get('client_id', '')
                     oauth_token = oauth_token or twitch_config.get('oauth_token', '')
                 if not client_id or not oauth_token:
@@ -1022,7 +1022,7 @@ class PlatformConnectionWidget(QWidget):
         print(f"[Twitch] Attempting to refresh info...")
         
         # Try to get credentials from config if connector doesn't have them
-        twitch_config = self.config.config.get('platforms', {}).get('twitch', {})
+        twitch_config = self.config.get_platform_config('twitch') if self.config else {}
         
         client_id = getattr(connector, 'client_id', None) if connector else None
         if not client_id:
@@ -1217,7 +1217,7 @@ class PlatformConnectionWidget(QWidget):
         print(f"[Kick] Attempting to refresh info...")
         
         # Try to get credentials from config
-        kick_config = self.config.config.get('platforms', {}).get('kick', {})
+        kick_config = self.config.get_platform_config('kick') if self.config else {}
         
         # Use channel_slug if available, otherwise try username
         channel_identifier = None
@@ -1316,7 +1316,7 @@ class PlatformConnectionWidget(QWidget):
         print(f"[Trovo] Attempting to refresh info...")
         
         # Try loading username and access token from config
-        trovo_config = self.config.config.get('platforms', {}).get('trovo', {})
+        trovo_config = self.config.get_platform_config('trovo') if self.config else {}
         username = trovo_config.get('username', '')
         access_token = trovo_config.get('access_token', '')
         
@@ -1489,12 +1489,8 @@ class PlatformConnectionWidget(QWidget):
         
         # Save to local config
         platform_key = platform_name.lower()
-        if 'stream_info' not in self.config.config['platforms'].get(platform_key, {}):
-            if platform_key not in self.config.config['platforms']:
-                self.config.config['platforms'][platform_key] = {}
-            self.config.config['platforms'][platform_key]['stream_info'] = {}
-        
-        stream_info = self.config.config['platforms'][platform_key]['stream_info']
+        # Build stream_info locally and persist atomically via ConfigManager
+        stream_info = {}
         
         # Save title
         if 'title' in widgets:
@@ -1524,11 +1520,13 @@ class PlatformConnectionWidget(QWidget):
                                 tags.append(label.text())
             stream_info['tags'] = tags
         
-        # CRITICAL: Reload config before saving to avoid overwriting other platforms' data
-        self.config.config = self.config.load()
-        self.config.save()
-        print(f"[ConnectionsPage] Saved {platform_name} stream info to local config")
-        print(f"[ConnectionsPage] Saved data: {stream_info}")
+        # Persist stream_info atomically using ConfigManager helper to avoid races
+        try:
+            merged = self.config.merge_platform_stream_info(platform_key, stream_info)
+            print(f"[ConnectionsPage] Saved {platform_name} stream info to local config")
+            print(f"[ConnectionsPage] Saved data: {merged}")
+        except Exception as e:
+            print(f"[ConnectionsPage] Failed to save stream_info atomically: {e}")
         
         # Try to update platform API (title, category, tags only - notification is local)
         update_success = self.update_platform_api(platform_name, stream_info)
@@ -1676,7 +1674,7 @@ class PlatformConnectionWidget(QWidget):
             print(f"[Trovo] Cannot update API: missing credentials")
             return False
         
-        trovo_config = self.config.config.get('platforms', {}).get('trovo', {})
+        trovo_config = self.config.get_platform_config('trovo') if self.config else {}
         username = trovo_config.get('username', '')
         
         if not username:
@@ -1771,7 +1769,7 @@ class PlatformConnectionWidget(QWidget):
         elif hasattr(connector, 'username') and connector.username:
             channel_identifier = connector.username
         else:
-            kick_config = self.config.config.get('platforms', {}).get('kick', {})
+            kick_config = self.config.get_platform_config('kick') if self.config else {}
             channel_identifier = kick_config.get('username', '')
         
         if not channel_identifier:
@@ -2000,24 +1998,23 @@ class PlatformConnectionWidget(QWidget):
             # Optionally clear credentials from config
             from core.config import ConfigManager
             config = ConfigManager()
-            platform_config = config.get_platform_config(self.platform_id)
+            # Use atomic set operations to avoid races when clearing credentials
             if account_type == "streamer":
-                platform_config["streamer_logged_in"] = False
-                platform_config["streamer_token"] = ""
-                platform_config["streamer_refresh_token"] = ""
-                platform_config["streamer_user_id"] = ""
+                config.set_platform_config(self.platform_id, "streamer_logged_in", False)
+                config.set_platform_config(self.platform_id, "streamer_token", "")
+                config.set_platform_config(self.platform_id, "streamer_refresh_token", "")
+                config.set_platform_config(self.platform_id, "streamer_user_id", "")
                 self.streamer_display_name.setText("")
                 self.streamer_login_btn.setText("Login")
                 self.status_label.setText("Streamer account logged out.")
             else:
-                platform_config["bot_logged_in"] = False
-                platform_config["bot_token"] = ""
-                platform_config["bot_refresh_token"] = ""
-                platform_config["bot_user_id"] = ""
+                config.set_platform_config(self.platform_id, "bot_logged_in", False)
+                config.set_platform_config(self.platform_id, "bot_token", "")
+                config.set_platform_config(self.platform_id, "bot_refresh_token", "")
+                config.set_platform_config(self.platform_id, "bot_user_id", "")
                 self.bot_display_name.setText("")
                 self.bot_login_btn.setText("Login")
                 self.status_label.setText("Bot account logged out.")
-            config.save()   
 
     def extractUsernameFromProfilePage(self, browser_dialog, account_type):
         """Extract username from the profile settings page"""
@@ -2455,38 +2452,30 @@ class PlatformConnectionWidget(QWidget):
         cookies = user_info.get('cookies', {})  # Get cookies if provided (Kick)
         # Save to config - IMPORTANT: Use a single config instance and reload to avoid race conditions
         config = ConfigManager()
-        config.config = config.load()  # Reload from disk to get latest state
-        # Make sure we're modifying the actual config, not a copy
-        if "platforms" not in config.config:
-            config.config["platforms"] = {}
-        if self.platform_id not in config.config["platforms"]:
-            config.config["platforms"][self.platform_id] = {}
-        platform_config = config.config["platforms"][self.platform_id]
-        # Set all values directly on the dict
-        platform_config[f"{config_prefix}username"] = username
-        platform_config[f"{config_prefix}display_name"] = display_name
-        platform_config[f"{config_prefix}token"] = token
-        platform_config[f"{config_prefix}refresh_token"] = refresh_token
-        platform_config[f"{config_prefix}token_timestamp"] = int(time.time())
-        platform_config[f"{config_prefix}logged_in"] = True
+        # Persist fields atomically via ConfigManager helpers to avoid races.
+        config.set_platform_config(self.platform_id, f"{config_prefix}username", username)
+        config.set_platform_config(self.platform_id, f"{config_prefix}display_name", display_name)
+        config.set_platform_config(self.platform_id, f"{config_prefix}token", token)
+        config.set_platform_config(self.platform_id, f"{config_prefix}refresh_token", refresh_token)
+        config.set_platform_config(self.platform_id, f"{config_prefix}token_timestamp", int(time.time()))
+        config.set_platform_config(self.platform_id, f"{config_prefix}logged_in", True)
         # Save user_id for platforms that need it (like Trovo for sending messages)
         if user_id:
-            platform_config[f"{config_prefix}user_id"] = user_id
+            config.set_platform_config(self.platform_id, f"{config_prefix}user_id", user_id)
             print(f"[ConnectionsPage] DEBUG: Set {config_prefix}user_id = {user_id} in platform_config dict")
-            print(f"[ConnectionsPage] DEBUG: platform_config keys before save: {list(platform_config.keys())}")
-            print(f"[ConnectionsPage] DEBUG: config.config['platforms']['{self.platform_id}'] keys: {list(config.config['platforms'][self.platform_id].keys())}")
+            pc = config.get_platform_config(self.platform_id)
+            print(f"[ConnectionsPage] DEBUG: platform_config keys before save: {list(pc.keys())}")
         # Save cookies for platforms that need them (like Kick for v2 API)
         if cookies:
-            platform_config[f"{config_prefix}cookies"] = json.dumps(cookies)
+            config.set_platform_config(self.platform_id, f"{config_prefix}cookies", json.dumps(cookies))
             print(f"[ConnectionsPage] DEBUG: Stored {len(cookies) if hasattr(cookies, '__len__') else 'unknown'} cookies for {config_prefix}")
-        config.save()  # Save once with all changes
 
         print(f"[ConnectionsPage] Saved {account_type} login to config: {config_prefix}logged_in = True")
         print(f"[ConnectionsPage] Config saved: {config_prefix}username = {username}")
         print(f"[ConnectionsPage] Config saved: {config_prefix}display_name = {display_name}")
         print(f"[ConnectionsPage] Config saved: {config_prefix}user_id = {user_id}")
         print(f"[ConnectionsPage] Config saved: {config_prefix}token exists = {bool(token)}")
-        print(f"[ConnectionsPage] Config file path: {config.config_file}")
+        print(f"[ConnectionsPage] Config file path: {self.config.config_file}")
 
         # Wait a moment for file system to flush
         import time as time_module
@@ -2506,12 +2495,9 @@ class PlatformConnectionWidget(QWidget):
         if not saved_value or not saved_username:
             print(f"[ConnectionsPage] WARNING: Config verification failed! logged_in={saved_value}, username={saved_username}")
             print(f"[ConnectionsPage] Attempting to save again...")
-            # Try saving again with a fresh reload
-            config.config = config.load()
-            platform_config = config.config.get("platforms", {}).get(self.platform_id, {})
-            platform_config[f"{config_prefix}logged_in"] = True
-            platform_config[f"{config_prefix}username"] = username
-            config.save()
+            # Try saving again using atomic set calls
+            config.set_platform_config(self.platform_id, f"{config_prefix}logged_in", True)
+            config.set_platform_config(self.platform_id, f"{config_prefix}username", username)
             time_module.sleep(0.1)
             print(f"[ConnectionsPage] Second save attempt completed")
         # Update UI
@@ -2702,12 +2688,10 @@ class PlatformConnectionWidget(QWidget):
                 new_access_token = token_data.get('access_token')
                 new_refresh_token = token_data.get('refresh_token', refresh_token)  # Use old if not provided
                 if new_access_token:
-                    # Save updated tokens
-                    config.config = config.load()
+                    # Save updated tokens using atomic helper (each call saves under lock)
                     config.set_platform_config(self.platform_id, f"{config_prefix}token", new_access_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}refresh_token", new_refresh_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}token_timestamp", int(time.time()))
-                    config.save()
                     print(f"[OAuth] Token refreshed successfully for {self.platform_id} {account_type}")
                     return new_access_token
                 else:
@@ -2729,11 +2713,10 @@ class PlatformConnectionWidget(QWidget):
                 new_access_token = token_data.get('access_token')
                 new_refresh_token = token_data.get('refresh_token', refresh_token)  # Use old if not provided
                 if new_access_token:
-                    config.config = config.load()
+                    # Save updated tokens using atomic helper
                     config.set_platform_config(self.platform_id, f"{config_prefix}token", new_access_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}refresh_token", new_refresh_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}token_timestamp", int(time.time()))
-                    config.save()
                     print(f"[OAuth] Token refreshed successfully for {self.platform_id} {account_type}")
                     return new_access_token
                 else:
@@ -2768,11 +2751,10 @@ class PlatformConnectionWidget(QWidget):
                 new_access_token = token_data.get('access_token')
                 new_refresh_token = token_data.get('refresh_token', refresh_token)  # Use old if not provided
                 if new_access_token:
-                    config.config = config.load()
+                    # Save updated tokens using atomic helper
                     config.set_platform_config(self.platform_id, f"{config_prefix}token", new_access_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}refresh_token", new_refresh_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}token_timestamp", int(time.time()))
-                    config.save()
                     print(f"[OAuth] Token refreshed successfully for {self.platform_id} {account_type}")
                     return new_access_token
                 else:
@@ -2904,8 +2886,8 @@ class PlatformConnectionWidget(QWidget):
             if hasattr(self, 'config') and self.config:
                 # Save under platform config key 'disabled'
                 try:
+                    # set_platform_config is already atomic and saves; no extra save() needed
                     self.config.set_platform_config(self.platform_id, 'disabled', is_disabled)
-                    self.config.save()
                 except Exception:
                     pass
         except Exception:
