@@ -6,7 +6,7 @@ from logging import config
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QLabel, QLineEdit, QPushButton, QCheckBox, QGroupBox,
-    QTextEdit, QFrame, QDialog, QProgressBar, QListWidget
+    QTextEdit, QFrame, QDialog, QProgressBar, QListWidget, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QUrl
 from PyQt6.QtGui import QFont
@@ -516,6 +516,12 @@ class PlatformConnectionWidget(QWidget):
             tags_container_layout = QHBoxLayout(tags_container)
             tags_container_layout.setContentsMargins(0, 0, 0, 0)
             tags_container_layout.setSpacing(5)
+            # Constrain the combined width of the tags area + Add Tag button
+            # to approximately 900px so the widget doesn't grow indefinitely.
+            try:
+                tags_container.setMaximumWidth(900)
+            except Exception:
+                pass
             
             # Tag display area (will contain tag chips)
             tags_display = QFrame()
@@ -528,10 +534,21 @@ class PlatformConnectionWidget(QWidget):
                     padding: 8px;
                 }
             """)
-            tags_display_layout = QHBoxLayout(tags_display)
-            tags_display_layout.setContentsMargins(5, 5, 5, 5)
-            tags_display_layout.setSpacing(5)
-            tags_display_layout.addStretch()
+            # Use a wrapping flow layout so tag chips will wrap to new lines
+            from ui.ui_elements import FlowLayout
+            tags_display_layout = FlowLayout(tags_display, margin=5, spacing=5)
+            # Ensure the FlowLayout is installed on the tags_display widget so
+            # calls to `tags_display.layout()` return the FlowLayout instance.
+            try:
+                tags_display.setLayout(tags_display_layout)
+            except Exception:
+                pass
+            # Make sure the tags display can expand horizontally and allow
+            # vertical growth as chips wrap across lines.
+            try:
+                tags_display.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+            except Exception:
+                pass
             tags_container_layout.addWidget(tags_display, 1)
             self.platform_widgets[platform_name]['tags_display'] = tags_display
             
@@ -936,14 +953,28 @@ class PlatformConnectionWidget(QWidget):
                 remove_btn.clicked.connect(lambda: self.remove_tag(platform_name, tag_text, tag_chip))
                 chip_layout.addWidget(remove_btn)
                 
-                # Insert before stretch (guard insertWidget existence)
+                # Add the tag chip to the layout and refresh geometry so the
+                # FlowLayout recalculates positions immediately.
+                # Parent and show the chip so FlowLayout can manage it immediately
                 try:
-                    if hasattr(layout, 'insertWidget'):
-                        layout.insertWidget(layout.count() - 1, tag_chip)
-                    else:
-                        layout.addWidget(tag_chip)
+                    tag_chip.setParent(tags_display)
+                    tag_chip.setVisible(True)
                 except Exception:
-                    layout.addWidget(tag_chip)
+                    pass
+                layout.addWidget(tag_chip)
+                try:
+                    layout.invalidate()
+                except Exception:
+                    try:
+                        layout.update()
+                    except Exception:
+                        pass
+                try:
+                    tags_display.updateGeometry()
+                    tags_display.repaint()
+                    tags_display.adjustSize()
+                except Exception:
+                    pass
                 
                 print(f"[ConnectionsPage] Added tag '{tag_text}' for {platform_name}")
     
@@ -1072,15 +1103,56 @@ class PlatformConnectionWidget(QWidget):
                         if tags_display:
                             # Clear existing tags
                             layout = tags_display.layout()
-                            while layout.count() > 1:  # Keep the stretch
-                                item = layout.takeAt(0)
-                                if item.widget():
-                                    item.widget().deleteLater()
+                            if layout is not None:
+                                while layout.count() > 0:
+                                    item = layout.takeAt(0)
+                                    if item and item.widget():
+                                        item.widget().deleteLater()
                             
                             # Add new tags
                             for tag_name in info['tags']:
                                 self.add_tag_chip('twitch', tag_name, tags_display)
+                            try:
+                                tags_display.setVisible(True)
+                                tags_display.show()
+                            except Exception:
+                                pass
                             print(f"[Twitch] Loaded {len(info['tags'])} tags")
+                            # Diagnostic: report layout count and child widget visibilities
+                            try:
+                                l = tags_display.layout()
+                                count = l.count() if l is not None else -1
+                                td_size = tags_display.size()
+                                td_hint = tags_display.sizeHint()
+                                print(f"[ConnectionsPage][DIAG] tags_populated: layout_count={count} tags_display_size={td_size.width()}x{td_size.height()} hint={td_hint.width()}x{td_hint.height()} visible={tags_display.isVisible()}")
+                                # enumerate children
+                                if l is not None:
+                                    for i in range(l.count()):
+                                        item = l.itemAt(i)
+                                        w = item.widget() if item is not None else None
+                                        if w is not None:
+                                            text = ''
+                                            try:
+                                                sub = w.layout().itemAt(0).widget()
+                                                text = sub.text() if hasattr(sub, 'text') else ''
+                                            except Exception:
+                                                pass
+                                            print(f"[ConnectionsPage][DIAG] child[{i}]: class={w.__class__.__name__} visible={w.isVisible()} text={text}")
+                                # Parent chain visibility
+                                try:
+                                    chain = []
+                                    p = tags_display
+                                    while p is not None:
+                                        try:
+                                            chain.append((p.__class__.__name__, p.isVisible()))
+                                        except Exception:
+                                            chain.append((p.__class__.__name__, 'N/A'))
+                                        p = getattr(p, 'parent', lambda: None)() if not hasattr(p, 'parentWidget') else p.parentWidget()
+                                    print(f"[ConnectionsPage][DIAG] parent_chain: {chain}")
+                                except Exception as e:
+                                    print(f"[ConnectionsPage][DIAG] parent_chain diagnostic failed: {e}")
+                            except Exception as e:
+                                print(f"[ConnectionsPage][DIAG] tags_populated diagnostic failed: {e}")
                         else:
                             print(f"[Twitch] tags_display widget not found")
                     else:
@@ -1210,10 +1282,11 @@ class PlatformConnectionWidget(QWidget):
                             if tags_display:
                                 # Clear existing tags
                                 layout = tags_display.layout()
-                                while layout.count() > 1:  # Keep the stretch
-                                    item = layout.takeAt(0)
-                                    if item.widget():
-                                        item.widget().deleteLater()
+                                if layout is not None:
+                                    while layout.count() > 0:
+                                        item = layout.takeAt(0)
+                                        if item and item.widget():
+                                            item.widget().deleteLater()
                                 
                                 # Add new tags (Kick returns tags as a list of strings)
                                 for tag_name in stream_info['tags']:
@@ -1377,14 +1450,32 @@ class PlatformConnectionWidget(QWidget):
         remove_btn.clicked.connect(lambda: self.remove_tag(platform_name, tag_text, tag_chip))
         chip_layout.addWidget(remove_btn)
         
-        # Insert before stretch (guard insertWidget existence)
+        # Parent the chip to the tags_display widget so it is properly
+        # managed by the FlowLayout, then add to layout and refresh.
         try:
-            if hasattr(layout, 'insertWidget'):
-                layout.insertWidget(layout.count() - 1, tag_chip)
-            else:
-                layout.addWidget(tag_chip)
+            tag_chip.setParent(tags_display)
+            tag_chip.setVisible(True)
         except Exception:
-            layout.addWidget(tag_chip)
+            pass
+        layout.addWidget(tag_chip)
+        layout.invalidate()
+        try:
+            tags_display.updateGeometry()
+            tags_display.repaint()
+            tags_display.adjustSize()
+        except Exception:
+            pass
+
+        # Diagnostic logs: confirm widget added and layout sizes
+        try:
+            lc = layout.count() if layout is not None else -1
+            td_size = tags_display.size()
+            td_hint = tags_display.sizeHint()
+            visible = tag_chip.isVisible()
+            parent = tag_chip.parent().__class__.__name__ if tag_chip.parent() is not None else 'None'
+            print(f"[ConnectionsPage][DIAG] add_tag_chip: platform={platform_name!r} tag={tag_text!r} layout_count={lc} parent={parent} visible={visible} tags_display_size={td_size.width()}x{td_size.height()} hint={td_hint.width()}x{td_hint.height()}")
+        except Exception as e:
+            print(f"[ConnectionsPage][DIAG] add_tag_chip: diagnostic failed: {e}")
 
     def save_platform_info(self, platform_name):
         """Save stream info locally and update platform API"""
