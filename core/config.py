@@ -88,6 +88,8 @@ class ConfigManager:
                     "oauth_token": ""
                 },
                 "trovo": {
+                    "client_id": "",
+                    "client_secret": "",
                     "username": "",
                     "connected": False,
                     "disabled": False,
@@ -99,7 +101,9 @@ class ConfigManager:
                     "connected": False,
                     "disabled": False,
                     "access_token": "<INSERT_KICK_ACCESS_TOKEN_IF_KNOWN>",
-                    "refresh_token": "<INSERT_KICK_REFRESH_TOKEN_IF_KNOWN>"
+                    "refresh_token": "<INSERT_KICK_REFRESH_TOKEN_IF_KNOWN>",
+                    "client_id": "",
+                    "client_secret": ""
                 },
                 "dlive": {
                     "username": "",

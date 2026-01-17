@@ -71,6 +71,18 @@ class KickConnector(BasePlatformConnector):
             else:
                 self.access_token = None
                 print(f"[Kick] No OAuth token found in config")
+            # Load client credentials from config if present
+            try:
+                cid = kick_config.get('client_id', '')
+                csec = kick_config.get('client_secret', '')
+                if cid:
+                    self.client_id = cid
+                if csec:
+                    self.client_secret = csec
+                if cid or csec:
+                    print(f"[Kick] Loaded client credentials from config: client_id={'set' if cid else 'not set'}")
+            except Exception:
+                pass
     
     def set_cookies(self, cookies: dict):
         """Set session cookies for v2 API authentication"""

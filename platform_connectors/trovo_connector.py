@@ -135,6 +135,16 @@ class TrovoConnector(BasePlatformConnector):
             refresh = trovo_config.get('refresh_token', '')
             if refresh:
                 self.refresh_token = refresh
+            # Load client credentials from config if present
+            try:
+                cid = trovo_config.get('client_id', '')
+                csecret = trovo_config.get('client_secret', '')
+                if cid:
+                    self.CLIENT_ID = cid
+                if csecret:
+                    self.CLIENT_SECRET = csecret
+            except Exception:
+                pass
 
     def set_token(self, token: str, refresh_token: str = None, is_bot: bool = False):
         """Set OAuth access token for Trovo chat"""

@@ -2605,17 +2605,28 @@ class PlatformConnectionWidget(QWidget):
         from core.config import ConfigManager
         try:
             if self.platform_id == 'trovo':
-                TROVO_CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
-                TROVO_CLIENT_SECRET = "a6a9471aed462e984c85feb04e39882e"
                 TROVO_TOKEN_URL = "https://open-api.trovo.live/openplatform/exchangetoken"
                 TROVO_REDIRECT_URI = getattr(self, '_trovo_redirect_uri', "https://mistilled-declan-unendable.ngrok-free.dev/callback")
+                # Prefer client_id/secret stored in config, fallback to built-in constants
+                cfg = ConfigManager()
+                trovo_cfg = cfg.get_platform_config('trovo') if cfg else {}
+                client_id = trovo_cfg.get('client_id', "b239c1cc698e04e93a164df321d142b3")
+                client_secret = trovo_cfg.get('client_secret', "a6a9471aed462e984c85feb04e39882e")
+                # Persist client creds back to config if not present
+                try:
+                    if client_id:
+                        cfg.set_platform_config('trovo', 'client_id', client_id)
+                    if client_secret:
+                        cfg.set_platform_config('trovo', 'client_secret', client_secret)
+                except Exception:
+                    pass
                 headers = {
                     "Accept": "application/json",
-                    "client-id": TROVO_CLIENT_ID,
+                    "client-id": client_id,
                     "Content-Type": "application/json"
                 }
                 data = {
-                    "client_secret": TROVO_CLIENT_SECRET,
+                    "client_secret": client_secret,
                     "grant_type": "authorization_code",
                     "code": code,
                     "redirect_uri": TROVO_REDIRECT_URI
@@ -2628,21 +2639,26 @@ class PlatformConnectionWidget(QWidget):
                 if access_token:
                     user_info = self.fetchUserInfo(access_token)
                     self.onOAuthSuccess(account_type, user_info, access_token, refresh_token)
-                    # if hasattr(self, '_cleanup_trovo_ngrok'):
-                    #     self._cleanup_trovo_ngrok()
                 else:
                     self.onOAuthFailed(account_type, "No access token in response")
-                    # if hasattr(self, '_cleanup_trovo_ngrok'):
-                    #     self._cleanup_trovo_ngrok()
             elif self.platform_id == 'youtube':
-                YOUTUBE_CLIENT_ID = "44621719812-l23h29dbhqjfm6ln6buoojenmiocv1cp.apps.googleusercontent.com"
-                YOUTUBE_CLIENT_SECRET = "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"
                 YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
                 YOUTUBE_REDIRECT_URI = "http://localhost:8880/callback"
+                cfg = ConfigManager()
+                ycfg = cfg.get_platform_config('youtube') if cfg else {}
+                client_id = ycfg.get('client_id', "44621719812-l23h29dbhqjfm6ln6buoojenmiocv1cp.apps.googleusercontent.com")
+                client_secret = ycfg.get('client_secret', "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")
+                try:
+                    if client_id:
+                        cfg.set_platform_config('youtube', 'client_id', client_id)
+                    if client_secret:
+                        cfg.set_platform_config('youtube', 'client_secret', client_secret)
+                except Exception:
+                    pass
                 data = {
                     "code": code,
-                    "client_id": YOUTUBE_CLIENT_ID,
-                    "client_secret": YOUTUBE_CLIENT_SECRET,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
                     "redirect_uri": YOUTUBE_REDIRECT_URI,
                     "grant_type": "authorization_code"
                 }
@@ -2684,13 +2700,22 @@ class PlatformConnectionWidget(QWidget):
                 else:
                     self.onOAuthFailed(account_type, "No access token in response")
             elif self.platform_id == 'kick':
-                KICK_CLIENT_ID = "01KDPP3YN4SB6ZMSV6R6HM12C7"
-                KICK_CLIENT_SECRET = "cf46287e05ebf1c68bc7a5fda41cb42da6015cd08c06ca788e6cbd3657a36e81"
                 KICK_TOKEN_URL = "https://id.kick.com/oauth/token"
                 KICK_REDIRECT_URI = "http://localhost:8890/callback"
+                cfg = ConfigManager()
+                kcfg = cfg.get_platform_config('kick') if cfg else {}
+                client_id = kcfg.get('client_id', "01KDPP3YN4SB6ZMSV6R6HM12C7")
+                client_secret = kcfg.get('client_secret', "cf46287e05ebf1c68bc7a5fda41cb42da6015cd08c06ca788e6cbd3657a36e81")
+                try:
+                    if client_id:
+                        cfg.set_platform_config('kick', 'client_id', client_id)
+                    if client_secret:
+                        cfg.set_platform_config('kick', 'client_secret', client_secret)
+                except Exception:
+                    pass
                 data = {
-                    "client_id": KICK_CLIENT_ID,
-                    "client_secret": KICK_CLIENT_SECRET,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
                     "code": code,
                     "grant_type": "authorization_code",
                     "redirect_uri": KICK_REDIRECT_URI

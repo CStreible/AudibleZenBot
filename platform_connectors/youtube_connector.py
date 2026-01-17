@@ -47,6 +47,16 @@ class YouTubeConnector(BasePlatformConnector):
             if refresh:
                 self.refresh_token = refresh
                 print(f"[YouTubeConnector] Loaded refresh token from config")
+            # Load client credentials from config if present
+            try:
+                cid = youtube_config.get('client_id', '')
+                csec = youtube_config.get('client_secret', '')
+                if cid:
+                    self.client_id = cid
+                if csec:
+                    self.client_secret = csec
+            except Exception:
+                pass
     
     def set_api_key(self, api_key: str):
         """Set YouTube Data API key"""

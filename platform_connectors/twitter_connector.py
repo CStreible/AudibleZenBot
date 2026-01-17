@@ -50,6 +50,16 @@ class TwitterConnector(BasePlatformConnector):
             print(f"[TwitterConnector] Access secret from config: {self.access_token_secret[:20] if self.access_token_secret else 'None'}...")
             if self.access_token and self.access_token_secret:
                 print(f"[TwitterConnector] Loaded OAuth 1.0a credentials")
+            # Load client credentials from config if present
+            try:
+                cid = twitter_config.get('client_id', '')
+                csec = twitter_config.get('client_secret', '')
+                if cid:
+                    self.client_id = cid
+                if csec:
+                    self.client_secret = csec
+            except Exception:
+                pass
     
     def set_token(self, token: str):
         """Set OAuth token"""
