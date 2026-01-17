@@ -332,70 +332,39 @@ class KickConnector(BasePlatformConnector):
             return False
     
     def start_webhook_server(self):
-        """Start local HTTP server to receive webhook events"""
-        class WebhookHandler(BaseHTTPRequestHandler):
-            def __init__(self, *args, connector=None, **kwargs):
-                self.connector = connector
-                super().__init__(*args, **kwargs)
-            
-            def do_POST(self):
+        """Register Kick webhook handler with shared callback server and start it."""
+        try:
+            from core import callback_server
+
+            def _handler(req):
                 try:
-                    print(f"[Webhook] Received POST request from {self.client_address[0]}")
-                    content_length = int(self.headers.get('Content-Length', 0))
-                    body = self.rfile.read(content_length)
-                    
-                    # Verify it's a Kick webhook
-                    event_type = self.headers.get('Kick-Event-Type')
-                    event_version = self.headers.get('Kick-Event-Version')
-                    
-                    print(f"[Webhook] Event-Type: {event_type}, Version: {event_version}")
-                    print(f"[Webhook] Body length: {len(body)} bytes")
-                    
+                    # Read headers and JSON body
+                    event_type = req.headers.get('Kick-Event-Type')
+                    # Flask request.get_json will return parsed JSON
+                    data = req.get_json(silent=True) or {}
                     if event_type == 'chat.message.sent':
-                        data = json.loads(body)
                         print(f"[Webhook] Chat message from {data.get('sender', {}).get('username', 'Unknown')}")
-                        self.connector.handle_chat_message(data)
-                    elif event_type == 'chat.message.deleted' or event_type == 'chat.message.removed':
-                        data = json.loads(body)
+                        self.handle_chat_message(data)
+                    elif event_type in ('chat.message.deleted', 'chat.message.removed'):
                         print(f"[Webhook] Message deletion event")
-                        self.connector.handle_message_deletion(data)
+                        self.handle_message_deletion(data)
                     else:
                         print(f"[Webhook] Unhandled event type: {event_type}")
-                    
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(b'{"status": "ok"}')
+                    return ('', 200)
                 except Exception as e:
-                    print(f"[Webhook] Error: {e}")
                     import traceback
                     traceback.print_exc()
-                    self.send_response(500)
-                    self.end_headers()
-            
-            def do_GET(self):
-                """Handle GET requests for testing"""
-                print(f"[Webhook] Received GET request from {self.client_address[0]}")
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html')
-                self.end_headers()
-                self.wfile.write(b'<h1>AudibleZenBot Webhook Server</h1><p>Status: Running</p>')
-            
-            def log_message(self, format, *args):
-                # Custom logging
-                print(f"[Webhook] {format % args}")
-        
-        def handler(*args, **kwargs):
-            WebhookHandler(*args, connector=self, **kwargs)
-        
-        try:
-            self.webhook_server = HTTPServer(('0.0.0.0', self.webhook_port), handler)
-            print(f"✓ Kick: Webhook server started on port {self.webhook_port}")
+                    return ("", 500)
+
+            route_path = '/kick/webhook'
+            callback_server.register_route(route_path, _handler, methods=['POST', 'GET'])
+            callback_server.start_server(self.webhook_port)
+            self.webhook_server = True
+            print(f"✓ Kick: Registered webhook route {route_path} on shared callback server (port {self.webhook_port})")
             print(f"⚠ IMPORTANT: Configure webhook URL in Kick Developer settings:")
-            print(f"   If using ngrok: Run 'ngrok http {self.webhook_port}' and use the HTTPS URL")
-            self.webhook_server.serve_forever()
+            print(f"   If using ngrok: Run 'ngrok http {self.webhook_port}' and use the HTTPS URL + {route_path}")
         except Exception as e:
-            print(f"✗ Kick: Failed to start webhook server: {e}")
+            print(f"✗ Kick: Failed to start shared webhook server: {e}")
     
     def handle_chat_message(self, data):
         """Handle incoming chat message from webhook with deduplication"""
@@ -623,13 +592,23 @@ class KickConnector(BasePlatformConnector):
             self.error_occurred.emit(f"Failed to get Kick channel info for '{channel}'")
             return
         
-        # Step 4: Start webhook server
+        # Step 4: Start webhook server (shared callback server)
         self.webhook_thread = Thread(target=self.start_webhook_server, daemon=True)
         self.webhook_thread.start()
-        
+
         # Give the webhook server a moment to start
         import time
         time.sleep(0.5)
+
+        # Ensure webhook_url includes the connector path so providers POST to the correct route
+        try:
+            if self.webhook_url and not self.webhook_url.endswith('/kick/webhook'):
+                # Avoid appending placeholder host
+                if not self.webhook_url.startswith('http://your-ngrok'):
+                    self.webhook_url = self.webhook_url.rstrip('/') + '/kick/webhook'
+                    print(f"[Kick] Using webhook endpoint: {self.webhook_url}")
+        except Exception:
+            pass
         
         # Step 5: Subscribe to events
         self.channel_name = channel
@@ -672,9 +651,13 @@ class KickConnector(BasePlatformConnector):
             except Exception as e:
                 print(f"Error unsubscribing: {e}")
         
-        # Stop webhook server
+        # Stop webhook server (shared callback server)
         if self.webhook_server:
-            self.webhook_server.shutdown()
+            try:
+                from core import callback_server
+                callback_server.unregister_route('/kick/webhook')
+            except Exception:
+                pass
             self.webhook_server = None
         
         self.connection_status.emit(False)
