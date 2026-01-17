@@ -3023,6 +3023,8 @@ class PlatformConnectionWidget(QWidget):
                     self.status_label.setText("Platform disabled and accounts logged out.")
                 except Exception:
                     pass
+        except Exception:
+            pass
     
     def setConnectionState(self, connected):
         """Stub for legacy compatibility - now handled by account-specific methods"""
