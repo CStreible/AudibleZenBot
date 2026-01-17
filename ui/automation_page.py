@@ -668,53 +668,38 @@ QTabBar::tab:hover {
         # Send as streamer and Allow offline (column, between name and interval)
         send_allow_vbox = QVBoxLayout()
         send_allow_vbox.setSpacing(2)
-        send_as_streamer_checkbox = QCheckBox("Send as Streamer")
-        send_as_streamer_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #cccccc;
-                font-weight: bold;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 8px;
-                height: 8px;
-                background-color: #555555;
-                border: 2px solid #ffffff;
-                border-radius: 5px;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #ffffff;
-                border: 2px solid #ffffff;
-            }
-        """)
-        send_as_streamer_checkbox.setChecked(self.timer_groups[group_name].get('send_as_streamer', False))
-        send_as_streamer_checkbox.stateChanged.connect(lambda state: self.update_send_as_streamer(group_name, state == Qt.CheckState.Checked.value))
-        send_as_streamer_checkbox.setToolTip("Send messages using streamer account instead of bot account")
-        send_allow_vbox.addWidget(send_as_streamer_checkbox)
 
-        allow_offline_checkbox = QCheckBox("Allow Offline")
-        allow_offline_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #cccccc;
-                font-weight: bold;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 8px;
-                height: 8px;
-                background-color: #555555;
-                border: 2px solid #ffffff;
-                border-radius: 5px;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #ffffff;
-                border: 2px solid #ffffff;
-            }
-        """)
-        allow_offline_checkbox.setChecked(self.timer_groups[group_name].get('allow_offline', False))
-        allow_offline_checkbox.stateChanged.connect(lambda state: self.update_allow_offline(group_name, state == Qt.CheckState.Checked.value))
-        allow_offline_checkbox.setToolTip("Allow this group to send messages even when no streams are active")
-        send_allow_vbox.addWidget(allow_offline_checkbox)
+        # Send as Streamer: use ToggleSwitch with matching size to variables tab
+        send_row = QWidget()
+        send_row_layout = QHBoxLayout(send_row)
+        send_row_layout.setContentsMargins(0, 0, 0, 0)
+        send_row_layout.setSpacing(8)
+        send_as_streamer_toggle = ToggleSwitch(width=30, height=15)
+        send_as_streamer_toggle.setChecked(self.timer_groups[group_name].get('send_as_streamer', False))
+        send_as_streamer_toggle.stateChanged.connect(lambda state: self.update_send_as_streamer(group_name, state == Qt.CheckState.Checked.value))
+        send_as_streamer_toggle.setToolTip("Send messages using streamer account instead of bot account")
+        send_row_layout.addWidget(send_as_streamer_toggle)
+        send_as_label = QLabel("Send as Streamer")
+        send_as_label.setStyleSheet('color: #cccccc; font-weight: bold;')
+        send_row_layout.addWidget(send_as_label)
+        send_row_layout.addStretch()
+        send_allow_vbox.addWidget(send_row)
+
+        # Allow Offline: ToggleSwitch
+        offline_row = QWidget()
+        offline_row_layout = QHBoxLayout(offline_row)
+        offline_row_layout.setContentsMargins(0, 0, 0, 0)
+        offline_row_layout.setSpacing(8)
+        allow_offline_toggle = ToggleSwitch(width=30, height=15)
+        allow_offline_toggle.setChecked(self.timer_groups[group_name].get('allow_offline', False))
+        allow_offline_toggle.stateChanged.connect(lambda state: self.update_allow_offline(group_name, state == Qt.CheckState.Checked.value))
+        allow_offline_toggle.setToolTip("Allow this group to send messages even when no streams are active")
+        offline_row_layout.addWidget(allow_offline_toggle)
+        allow_label = QLabel("Allow Offline")
+        allow_label.setStyleSheet('color: #cccccc; font-weight: bold;')
+        offline_row_layout.addWidget(allow_label)
+        offline_row_layout.addStretch()
+        send_allow_vbox.addWidget(offline_row)
         left_vbox.addLayout(send_allow_vbox)
 
         # Controls row (interval, test send)
@@ -873,41 +858,38 @@ QTabBar::tab:hover {
     def create_platform_checkbox(self, platform, group_name):
         """Create a checkbox with platform icon"""
         from PyQt6.QtCore import QSize
-        
-        checkbox = QCheckBox(f"  {platform.title()}")
-        checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #cccccc;
-                font-weight: normal;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 8px;
-                height: 8px;
-                background-color: #555555;
-                border: 2px solid #ffffff;
-                border-radius: 5px;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #ffffff;
-                border: 2px solid #ffffff;
-            }
-        """)
-        checkbox.setChecked(self.timer_groups[group_name]['platforms'].get(platform, False))
-        checkbox.stateChanged.connect(lambda state, p=platform, g=group_name: self.update_platform_toggle(g, p, state == Qt.CheckState.Checked.value))
-        
-        # Try to load platform icon
+        # Build a small row with ToggleSwitch and label/icon so the ToggleSwitch
+        # size matches other toggles used in the UI (30x15).
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        toggle = ToggleSwitch(width=30, height=15)
+        toggle.setChecked(self.timer_groups[group_name]['platforms'].get(platform, False))
+        toggle.stateChanged.connect(lambda state, p=platform, g=group_name: self.update_platform_toggle(g, p, state == Qt.CheckState.Checked.value))
+        row_layout.addWidget(toggle)
+
+        # Icon/label
+        label = QLabel(f"  {platform.title()}")
+        label.setStyleSheet('color: #cccccc; font-weight: normal;')
+        # Try to load platform icon and prepend to label via pixmap label
         icon_path = self.get_platform_icon_path(platform)
         if icon_path and os.path.exists(icon_path):
             pixmap = QPixmap(icon_path)
             if not pixmap.isNull():
-                # Scale icon to checkbox size (16x16)
                 scaled_pixmap = pixmap.scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                icon = QIcon(scaled_pixmap)
-                checkbox.setIcon(icon)
-                checkbox.setIconSize(QSize(16, 16))
-        
-        return checkbox
+                icon_label = QLabel()
+                icon_label.setPixmap(scaled_pixmap)
+                row_layout.addWidget(icon_label)
+
+        row_layout.addWidget(label)
+        row_layout.addStretch()
+
+        # Expose the toggle on the returned widget for any callers that expect
+        # a direct widget reference to the control (e.g., for introspection).
+        row._toggle = toggle
+        return row
     
     def get_platform_icon_path(self, platform):
         """Get the file path for platform icon"""
