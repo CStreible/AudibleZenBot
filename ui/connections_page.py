@@ -2133,12 +2133,19 @@ class PlatformConnectionWidget(QWidget):
                 def log_message(self, format, *args):
                     pass
 
-            server = HTTPServer(('localhost', 8888), CallbackHandler)
+            # Use port 8890 for Kick (developers page uses that), otherwise default to 8888
+            port = 8888
+            try:
+                if self.platform_id == 'kick':
+                    port = 8890
+            except Exception:
+                port = 8888
+            server = HTTPServer(('localhost', port), CallbackHandler)
             server_thread = threading.Thread(target=lambda: server.handle_request())
             server_thread.daemon = True
             server_thread.start()
 
-            print("[OAuth] Started local OAuth callback server on port 8888")
+            print(f"[OAuth] Started local OAuth callback server on port {port}")
 
             if self.platform_id == 'twitch':
                 # Twitch OAuth credentials and flow
@@ -2185,19 +2192,32 @@ class PlatformConnectionWidget(QWidget):
                 ]
                 scope_string = " ".join(scopes)
                 state = secrets.token_urlsafe(16)
-                if not hasattr(self, 'code_challenge'):
-                    self.code_challenge = ''  # TODO: Implement PKCE if needed
-                code_challenge = self.code_challenge
+                # Implement PKCE: generate code_verifier and code_challenge if not present
+                try:
+                    import hashlib, base64
+                    if not hasattr(self, 'kick_code_verifier') or not getattr(self, 'kick_code_verifier'):
+                        verifier = secrets.token_urlsafe(64)
+                        # create S256 challenge
+                        digest = hashlib.sha256(verifier.encode('utf-8')).digest()
+                        challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode('utf-8')
+                        self.kick_code_verifier = verifier
+                        self.kick_code_challenge = challenge
+                    code_challenge = getattr(self, 'kick_code_challenge', '')
+                except Exception:
+                    code_challenge = ''
+
                 params = {
                     "response_type": "code",
                     "client_id": client_id,
                     "redirect_uri": redirect_uri,
                     "scope": scope_string,
-                    "code_challenge": code_challenge,
-                    "code_challenge_method": "S256",
                     "state": state,
                     "prompt": "consent"
                 }
+                # Only include PKCE fields if we have a challenge
+                if code_challenge:
+                    params["code_challenge"] = code_challenge
+                    params["code_challenge_method"] = "S256"
                 oauth_url = f"https://id.kick.com/oauth/authorize?{urlencode(params)}"
                 print(f"[Kick] Starting OAuth with scopes: {scope_string}")
                 print(f"[Kick] Redirect URI: {redirect_uri}")
@@ -2212,10 +2232,12 @@ class PlatformConnectionWidget(QWidget):
                 if 'code' in auth_code_container:
                     auth_code = auth_code_container['code']
                     print(f"[OAuth] Authorization code received: {auth_code[:20]}...")
-                    # Trigger token exchange and UI update for Twitch
-                    if self.platform_id == 'twitch':
-                        print(f"[DEBUG] Calling exchangeCodeForToken for Twitch {account_type} login")
+                    # Trigger token exchange and UI update for the current platform
+                    try:
+                        print(f"[DEBUG] Calling exchangeCodeForToken for {self.platform_id} {account_type} login")
                         self.exchangeCodeForToken(account_type, auth_code)
+                    except Exception as e:
+                        print(f"[OAuth] exchangeCodeForToken error: {e}")
         else:
                 # Disconnect the account from the platform
             #if hasattr(self, 'parent') and hasattr(self.parent(), 'chat_manager'):
@@ -2661,6 +2683,80 @@ class PlatformConnectionWidget(QWidget):
                     self.onOAuthSuccess(account_type, user_info, access_token, refresh_token)
                 else:
                     self.onOAuthFailed(account_type, "No access token in response")
+            elif self.platform_id == 'kick':
+                KICK_CLIENT_ID = "01KDPP3YN4SB6ZMSV6R6HM12C7"
+                KICK_CLIENT_SECRET = "cf46287e05ebf1c68bc7a5fda41cb42da6015cd08c06ca788e6cbd3657a36e81"
+                KICK_TOKEN_URL = "https://id.kick.com/oauth/token"
+                KICK_REDIRECT_URI = "http://localhost:8890/callback"
+                data = {
+                    "client_id": KICK_CLIENT_ID,
+                    "client_secret": KICK_CLIENT_SECRET,
+                    "code": code,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": KICK_REDIRECT_URI
+                }
+                # If we generated a PKCE verifier during authorization, include it here
+                try:
+                    if hasattr(self, 'kick_code_verifier') and getattr(self, 'kick_code_verifier'):
+                        data['code_verifier'] = getattr(self, 'kick_code_verifier')
+                except Exception:
+                    pass
+
+                try:
+                    response = requests.post(KICK_TOKEN_URL, data=data, timeout=15)
+                    # Improved diagnostics: log status and body for debugging
+                    try:
+                        status = response.status_code
+                        print(f"[Kick] Token endpoint response status: {status}")
+                        # response.text may be empty; show a truncated preview when large
+                        body = response.text or ''
+                        preview = body[:1000]
+                        print(f"[Kick] Token endpoint response body (first 1000 chars): {preview}")
+                        try:
+                            # Surface succinct info in the UI status box for user visibility
+                            self.append_status_message(f"[Kick] token POST status: {status}")
+                            if preview:
+                                # show only a short preview in the UI
+                                short = preview.replace('\n', ' ')[:400]
+                                self.append_status_message(f"[Kick] token POST body: {short}")
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                    response.raise_for_status()
+                    token_data = response.json()
+                    access_token = token_data.get('access_token')
+                    refresh_token = token_data.get('refresh_token', '')
+                    if access_token:
+                        user_info = self.fetchUserInfo(access_token)
+                        # For Kick, fetchUserInfo will call /v1/user with Bearer token
+                        self.onOAuthSuccess(account_type, user_info, access_token, refresh_token)
+                    else:
+                        self.onOAuthFailed(account_type, "No access token in response")
+                except requests.exceptions.RequestException as e:
+                    # network / HTTP errors
+                    msg = f"Kick token exchange HTTP error: {e}"
+                    print(f"[Kick] {msg}")
+                    try:
+                        self.append_status_message(f"[Kick] token POST error: {e}")
+                    except Exception:
+                        pass
+                    self.onOAuthFailed(account_type, msg)
+                except ValueError as e:
+                    # JSON decode error
+                    msg = f"Kick token parse error: {e}"
+                    print(f"[Kick] {msg}")
+                    try:
+                        self.append_status_message(f"[Kick] token parse error: {e}")
+                    except Exception:
+                        pass
+                    self.onOAuthFailed(account_type, msg)
+                except Exception as e:
+                    try:
+                        self.append_status_message(f"[Kick] token exchange error: {e}")
+                    except Exception:
+                        pass
+                    self.onOAuthFailed(account_type, f"Kick token exchange error: {e}")
             else:
                 self.onOAuthFailed(account_type, f"Token exchange not implemented for {self.platform_id}")
         except Exception as e:
@@ -2845,19 +2941,40 @@ class PlatformConnectionWidget(QWidget):
                 else:
                     return {'username': 'Unknown', 'display_name': 'Unknown', 'user_id': ''}
             elif self.platform_id == 'kick':
-                url = "https://api.kick.com/v1/user"
-                headers = {
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/json"
-                }
-                response = requests.get(url, headers=headers)
-                response.raise_for_status()
-                user = response.json()
-                return {
-                    'username': user.get('username', 'Unknown'),
-                    'display_name': user.get('display_name', user.get('username', 'Unknown')),
-                    'user_id': str(user.get('id', ''))
-                }
+                # Prefer the public channels endpoint which returns channel slug and broadcaster ID
+                try:
+                    url = "https://api.kick.com/public/v1/channels"
+                    headers = {
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/json"
+                    }
+                    response = requests.get(url, headers=headers, timeout=10)
+                    if response.status_code == 200:
+                        data = response.json()
+                        if isinstance(data, dict) and data.get('data'):
+                            first = data['data'][0]
+                            slug = first.get('slug') or first.get('channel_slug') or ''
+                            broadcaster_id = first.get('broadcaster_user_id') or first.get('broadcaster_id') or first.get('user_id')
+                            display = first.get('title') or slug or 'Unknown'
+                            return {
+                                'username': slug or 'Unknown',
+                                'display_name': display,
+                                'user_id': str(broadcaster_id or '')
+                            }
+                    # Fallback: older /v1/user endpoint
+                    url2 = "https://api.kick.com/v1/user"
+                    headers2 = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+                    resp2 = requests.get(url2, headers=headers2, timeout=10)
+                    resp2.raise_for_status()
+                    user = resp2.json()
+                    return {
+                        'username': user.get('username', 'Unknown'),
+                        'display_name': user.get('display_name', user.get('username', 'Unknown')),
+                        'user_id': str(user.get('id', ''))
+                    }
+                except Exception as e:
+                    print(f"[OAuth] Error fetching Kick user info: {e}")
+                    return {'username': 'Unknown', 'display_name': 'Unknown', 'user_id': ''}
             elif self.platform_id == 'dlive':
                 # DLive uses GraphQL - for now return minimal info
                 return {
