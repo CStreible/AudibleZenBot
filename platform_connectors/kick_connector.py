@@ -26,8 +26,8 @@ class KickConnector(BasePlatformConnector):
     """Connector for Kick chat using official OAuth2 + Webhooks API"""
     
     # Kick OAuth credentials from https://kick.com/settings/developer
-    DEFAULT_CLIENT_ID = "01KDPP3YN4SB6ZMSV6R6HM12C7"
-    DEFAULT_CLIENT_SECRET = "cf46287e05ebf1c68bc7a5fda41cb42da6015cd08c06ca788e6cbd3657a36e81"
+    DEFAULT_CLIENT_ID = ""
+    DEFAULT_CLIENT_SECRET = ""
     
     # Kick API endpoints
     OAUTH_BASE = "https://id.kick.com"

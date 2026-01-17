@@ -31,10 +31,10 @@ DLive uses OAuth 2.0 for authentication. Follow these steps:
 4. Save Access Token:
    - Add the access_token to your config.json:
    
-   "dlive": {
-     "username": "your_dlive_username",
-     "access_token": "your_access_token_here"
-   }
+    "dlive": {
+       "username": "your_dlive_username",
+       "access_token": "REPLACE_WITH_YOUR_TOKEN"
+    }
 
 Note: DLive GraphQL API endpoint is: wss://graphigo.prd.dlive.tv/
 Protocol: graphql-ws (GraphQL over WebSocket)

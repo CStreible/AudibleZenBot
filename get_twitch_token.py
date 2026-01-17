@@ -10,7 +10,13 @@ import sys
 import secrets
 
 # Twitch OAuth configuration
-CLIENT_ID = "h84tx3mvvpk9jyt8rv8p8utfzupz82"
+try:
+    from core.config import ConfigManager
+    cfg = ConfigManager()
+    _t = cfg.get_platform_config('twitch') or {}
+    CLIENT_ID = _t.get('client_id', '')
+except Exception:
+    CLIENT_ID = ''
 REDIRECT_URI = "http://localhost:3000"
 SCOPES = [
     "chat:read",

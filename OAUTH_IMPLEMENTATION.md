@@ -99,8 +99,8 @@ Each platform has its own OAuth configuration:
 
 ### Trovo
 ```python
-CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
-CLIENT_SECRET = "a6a9471aed462e984c85feb04e39882e"
+CLIENT_ID = "REPLACE_WITH_TROVO_CLIENT_ID"
+CLIENT_SECRET = "REPLACE_WITH_TROVO_CLIENT_SECRET"
 AUTH_URL = "https://open.trovo.live/page/login.html"
 TOKEN_URL = "https://open-api.trovo.live/openplatform/exchangetoken"
 REDIRECT_URI = "https://mistilled-declan-unendable.ngrok-free.dev/callback"
@@ -109,8 +109,8 @@ SCOPES = "chat_connect+chat_send_self+manage_messages+channel_details_self+chann
 
 ### YouTube
 ```python
-CLIENT_ID = "44621719812-jgo7k9f800vmvqpnsij31b1tgqpnm0c8.apps.googleusercontent.com"
-CLIENT_SECRET = "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"
+CLIENT_ID = "REPLACE_WITH_YOUTUBE_CLIENT_ID"
+CLIENT_SECRET = "REPLACE_WITH_YOUTUBE_CLIENT_SECRET"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REDIRECT_URI = "http://localhost:8080"

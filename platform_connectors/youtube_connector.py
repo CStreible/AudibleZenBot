@@ -13,8 +13,8 @@ class YouTubeConnector(BasePlatformConnector):
     """Connector for YouTube Live Chat"""
     
     # Default YouTube OAuth credentials
-    DEFAULT_CLIENT_ID = "44621719812-l23h29dbhqjfm6ln6buoojenmiocv1cp.apps.googleusercontent.com"
-    DEFAULT_CLIENT_SECRET = "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"
+    DEFAULT_CLIENT_ID = ""
+    DEFAULT_CLIENT_SECRET = ""
     DEFAULT_PROJECT_ID = "audiblezenbot"
     DEFAULT_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
     DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token"

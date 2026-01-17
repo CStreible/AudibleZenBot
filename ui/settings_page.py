@@ -73,6 +73,10 @@ class SettingsPage(QWidget):
         ngrok_group = self.create_ngrok_section()
         scroll_layout.addWidget(ngrok_group)
         
+        # === Platform Client Credentials Section ===
+        creds_group = self.create_credentials_section()
+        scroll_layout.addWidget(creds_group)
+        
         # === Tunnel Status Section ===
         status_group = self.create_status_section()
         scroll_layout.addWidget(status_group)
@@ -448,6 +452,94 @@ class SettingsPage(QWidget):
         
         group.setLayout(layout)
         return group
+
+    def create_credentials_section(self):
+        """Create a small credentials editor for platform client_id/client_secret"""
+        group = QGroupBox("🔐 Platform Client Credentials")
+        group.setStyleSheet("""
+            QGroupBox {
+                font-size: 14px;
+                font-weight: bold;
+                color: #ffffff;
+                border: 2px solid #3d3d3d;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+
+        layout = QVBoxLayout()
+        layout.setSpacing(10)
+
+        desc = QLabel("Edit platform `client_id` and `client_secret`. These are stored in your local config file.")
+        desc.setStyleSheet("color: #cccccc; font-size: 12px; padding: 5px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Platforms to expose
+        platforms = ['twitch', 'trovo', 'kick', 'youtube', 'twitter']
+        self.cred_rows = {}
+        for p in platforms:
+            row = QHBoxLayout()
+            label = QLabel(p.title())
+            label.setStyleSheet("color: #ffffff; min-width: 80px;")
+            id_input = QLineEdit()
+            id_input.setPlaceholderText("client_id")
+            secret_input = QLineEdit()
+            secret_input.setPlaceholderText("client_secret")
+            secret_input.setEchoMode(QLineEdit.EchoMode.Password)
+            save_btn = QPushButton("Save")
+            save_btn.setProperty('platform', p)
+            save_btn.clicked.connect(self._save_platform_credentials)
+
+            # Populate from config
+            try:
+                cfg = self.config.get_platform_config(p) if self.config else {}
+                id_val = cfg.get('client_id', '')
+                sec_val = cfg.get('client_secret', '')
+                if id_val:
+                    id_input.setText(id_val)
+                if sec_val:
+                    secret_input.setText(sec_val)
+            except Exception:
+                pass
+
+            row.addWidget(label)
+            row.addWidget(id_input)
+            row.addWidget(secret_input)
+            row.addWidget(save_btn)
+            layout.addLayout(row)
+            self.cred_rows[p] = (id_input, secret_input)
+
+        group.setLayout(layout)
+        return group
+
+    def _save_platform_credentials(self):
+        sender = self.sender()
+        platform = sender.property('platform')
+        if not platform:
+            return
+        id_input, secret_input = self.cred_rows.get(platform, (None, None))
+        if not id_input or not secret_input:
+            return
+        client_id = id_input.text().strip()
+        client_secret = secret_input.text().strip()
+        if not self.config:
+            QMessageBox.warning(self, "Error", "Config manager not available to save credentials.")
+            return
+        try:
+            if client_id:
+                self.config.set_platform_config(platform, 'client_id', client_id)
+            if client_secret:
+                self.config.set_platform_config(platform, 'client_secret', client_secret)
+            QMessageBox.information(self, "Saved", f"Saved credentials for {platform}.")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to save credentials: {e}")
     
     def create_color_editor_section(self):
         """Create username color editor section"""

@@ -2,8 +2,8 @@ import requests
 import webbrowser
 from urllib.parse import urlencode
 
-TROVO_CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
-TROVO_CLIENT_SECRET = "a6a9471aed462e984c85feb04e39882e"
+TROVO_CLIENT_ID = ""
+TROVO_CLIENT_SECRET = ""
 TROVO_REDIRECT_URI = "http://localhost:8080/callback"
 TROVO_AUTH_URL = "https://open-api.trovo.live/openplatform/authorize"
 TROVO_TOKEN_URL = "https://open-api.trovo.live/openplatform/token"
@@ -18,9 +18,19 @@ SCOPES = [
 ]
 
 def get_authorization_url():
+    # Prefer configured client id if available
+    client_id = TROVO_CLIENT_ID
+    if not client_id:
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager()
+            trovo_cfg = cfg.get_platform_config('trovo') or {}
+            client_id = trovo_cfg.get('client_id', '')
+        except Exception:
+            client_id = ''
     params = {
         "response_type": "code",
-        "client_id": TROVO_CLIENT_ID,
+        "client_id": client_id,
         "redirect_uri": TROVO_REDIRECT_URI,
         "scope": " ".join(SCOPES),
         "state": "trovo_state_123"

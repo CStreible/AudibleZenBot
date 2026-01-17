@@ -274,7 +274,7 @@ You can manually edit the config file:
   "platforms": {
     "twitch": {
       "username": "your_channel",
-      "oauth_token": "your_token_here"
+      "oauth_token": "REPLACE_WITH_YOUR_TOKEN"
     }
   }
 }

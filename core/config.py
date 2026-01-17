@@ -7,6 +7,11 @@ import os
 import threading
 from typing import Dict, Any
 from pathlib import Path
+from core import secret_store
+from copy import deepcopy
+
+# Keys considered sensitive and should be encrypted on disk
+SENSITIVE_KEYS = ['bot_token', 'streamer_token', 'access_token', 'refresh_token', 'client_secret', 'access_token_secret', 'api_key', 'streamer_cookies', 'oauth_token']
 
 
 class ConfigManager:
@@ -38,7 +43,22 @@ class ConfigManager:
             if self.config_file.exists():
                 try:
                     with open(self.config_file, 'r', encoding='utf-8') as f:
-                        return json.load(f)
+                        loaded = json.load(f)
+                        # Decrypt any sensitive fields stored as ENC:... in platforms
+                        try:
+                            platforms = loaded.get('platforms', {}) if isinstance(loaded, dict) else {}
+                            for pname, pdata in (platforms or {}).items():
+                                if not isinstance(pdata, dict):
+                                    continue
+                                for sk in SENSITIVE_KEYS:
+                                    if sk in pdata and isinstance(pdata[sk], str) and pdata[sk].startswith('ENC:'):
+                                        try:
+                                            pdata[sk] = secret_store.unprotect_string(pdata[sk])
+                                        except Exception:
+                                            pdata[sk] = ''
+                        except Exception:
+                            pass
+                        return loaded
                 except Exception as e:
                     print(f"Error loading config: {e}")
                     return self.get_default_config()
@@ -58,8 +78,27 @@ class ConfigManager:
                         print(f"[ConfigManager] DEBUG save(): Has streamer_user_id = {has_user_id}")
                         if has_user_id:
                             print(f"[ConfigManager] DEBUG save(): streamer_user_id value = {self.config['platforms']['trovo']['streamer_user_id']}")
+                # Make a deep copy and encrypt sensitive fields before writing
+                write_copy = deepcopy(self.config)
+                try:
+                    platforms = write_copy.get('platforms', {}) if isinstance(write_copy, dict) else {}
+                    for pname, pdata in (platforms or {}).items():
+                        if not isinstance(pdata, dict):
+                            continue
+                        for sk in SENSITIVE_KEYS:
+                            if sk in pdata and isinstance(pdata[sk], str) and pdata[sk]:
+                                val = pdata[sk]
+                                # If already encrypted (starts with ENC:), leave as-is
+                                if not val.startswith('ENC:'):
+                                    try:
+                                        pdata[sk] = secret_store.protect_string(val)
+                                    except Exception:
+                                        pass
+                except Exception:
+                    pass
+
                 with open(self.config_file, 'w', encoding='utf-8') as f:
-                    json.dump(self.config, f, indent=4)
+                    json.dump(write_copy, f, indent=4)
                     f.flush()  # Ensure data is written to disk
                     os.fsync(f.fileno())  # Force OS to write to disk
             except Exception as e:
@@ -78,8 +117,8 @@ class ConfigManager:
                     "username": "",
                     "connected": False,
                     "disabled": False,
-                    "oauth_token": "vwjvk83rarr5x8sw4agwgc3ciq09br",
-                    "refresh_token": "olha5lgahozz0eqhe8me2c1sbkhn9qli9o4wxezitgj96212ul"
+                    "oauth_token": "",
+                    "refresh_token": ""
                 },
                 "youtube": {
                     "channel_id": "",
@@ -93,15 +132,15 @@ class ConfigManager:
                     "username": "",
                     "connected": False,
                     "disabled": False,
-                    "access_token": "892ea7e2c9ad3e719a6e977ab5d69275",
-                    "refresh_token": "1a12c7060eecf605b47f1b7da86e6087"
+                    "access_token": "",
+                    "refresh_token": ""
                 },
                 "kick": {
                     "username": "",
                     "connected": False,
                     "disabled": False,
-                    "access_token": "<INSERT_KICK_ACCESS_TOKEN_IF_KNOWN>",
-                    "refresh_token": "<INSERT_KICK_REFRESH_TOKEN_IF_KNOWN>",
+                    "access_token": "",
+                    "refresh_token": "",
                     "client_id": "",
                     "client_secret": ""
                 },
@@ -114,9 +153,9 @@ class ConfigManager:
                     "username": "",
                     "connected": False,
                     "disabled": False,
-                    "oauth_token": "AAAAAAAAAAAAAAAAAAAAAASl6gEAAAAAU78VyhsdsRMEEuZccGjLgdZWtd8%3DcmmWESSLcyJ7I6ri4S0kvf3f4vox6h90puDHkPF0p865WgnJgl",
-                    "access_token": "1601310606291771392-iq1PD7w2iRPZhJboHSrSGqbwpDUWvQ",
-                    "access_token_secret": "E82NKHmYJLOB0phfB0ph5hJ3nA0zB35HdReCVFiuw3IiT"
+                    "oauth_token": "",
+                    "access_token": "",
+                    "access_token_secret": ""
                 }
             },
             "chat": {
@@ -184,7 +223,20 @@ class ConfigManager:
     def get_platform_config(self, platform: str) -> Dict[str, Any]:
         """Get configuration for a specific platform"""
         with self._lock:
-          return self.config.get("platforms", {}).get(platform, {})
+            raw = self.config.get("platforms", {}).get(platform, {})
+            # Return a decrypted copy for sensitive fields
+            if not raw:
+                return {}
+            result = dict(raw)
+            # Decrypt known sensitive keys if present
+            sensitive = ['bot_token', 'streamer_token', 'access_token', 'refresh_token', 'client_secret', 'access_token_secret', 'api_key', 'streamer_cookies']
+            for k in sensitive:
+                if k in result and isinstance(result[k], str) and result[k].startswith('ENC:'):
+                    try:
+                        result[k] = secret_store.unprotect_string(result[k])
+                    except Exception:
+                        result[k] = ''
+            return result
     
     def set_platform_config(self, platform: str, key: str, value: Any):
         """Set configuration for a specific platform"""
@@ -195,7 +247,15 @@ class ConfigManager:
                 self.config["platforms"] = {}
             if platform not in self.config["platforms"]:
                 self.config["platforms"][platform] = {}
-            self.config["platforms"][platform][key] = value
+            # Encrypt sensitive keys before persisting
+            sensitive = ['bot_token', 'streamer_token', 'access_token', 'refresh_token', 'client_secret', 'access_token_secret', 'api_key', 'streamer_cookies']
+            store_value = value
+            try:
+                if key in sensitive and isinstance(value, str) and value:
+                    store_value = secret_store.protect_string(value)
+            except Exception:
+                store_value = value
+            self.config["platforms"][platform][key] = store_value
             self.save()
     
     def reset(self):

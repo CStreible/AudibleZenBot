@@ -176,7 +176,7 @@ For testing, you can manually control tunnels in Settings:
 Ngrok uses `~/.ngrok2/ngrok.yml` for advanced configuration. Example:
 
 ```yaml
-authtoken: your_token_here
+authtoken: REPLACE_WITH_NGROK_AUTHTOKEN
 region: us
 tunnels:
   kick:

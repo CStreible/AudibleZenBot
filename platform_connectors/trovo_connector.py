@@ -108,10 +108,10 @@ class TrovoConnector(BasePlatformConnector):
                 self.worker = None
                 return
 
-    # Hard-coded fallback Trovo access token
-    DEFAULT_ACCESS_TOKEN = "892ea7e2c9ad3e719a6e977ab5d69275"
-    CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
-    CLIENT_SECRET = "a6a9471aed462e984c85feb04e39882e"
+    # Hard-coded fallback Trovo access token removed for security; prefer config values
+    DEFAULT_ACCESS_TOKEN = ""
+    CLIENT_ID = ""
+    CLIENT_SECRET = ""
 
     def __init__(self, config=None):
         super().__init__()

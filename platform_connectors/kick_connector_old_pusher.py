@@ -18,20 +18,36 @@ class KickConnector(BasePlatformConnector):
     """Connector for Kick chat using official OAuth2 + Webhooks API"""
     
     # Kick OAuth credentials from https://kick.com/settings/developer
-    DEFAULT_CLIENT_ID = "01KDPP3YN4SB6ZMSV6R6HM12C7"
-    DEFAULT_CLIENT_SECRET = "da4f8c91298805bb2b851432634a10f5275f6e381b05aef189899bf265df1297"
+    DEFAULT_CLIENT_ID = ""
+    DEFAULT_CLIENT_SECRET = ""
     DEFAULT_REDIRECT_URI = "http://localhost:8888/callback"
     
     # Kick API endpoints
     OAUTH_BASE = "https://id.kick.com"
     API_BASE = "https://api.kick.com/public/v1"
     
-    def __init__(self):
+    def __init__(self, config=None):
         super().__init__()
         self.worker_thread = None
         self.worker = None
+        self.config = config
         self.client_id = self.DEFAULT_CLIENT_ID
         self.client_secret = self.DEFAULT_CLIENT_SECRET
+        # Load client credentials from provided config if available
+        try:
+            if self.config:
+                kc = self.config.get_platform_config('kick') or {}
+                cid = kc.get('client_id', '')
+                csec = kc.get('client_secret', '')
+                if cid:
+                    self.client_id = cid
+                if csec:
+                    self.client_secret = csec
+                if cid or csec:
+                    print(f"[KickOldPusher] Loaded client creds from config: client_id={'set' if cid else 'not set'}")
+        except Exception:
+            pass
+
         self.oauth_token = None
         self.refresh_token = None
     
@@ -47,10 +63,24 @@ class KickConnector(BasePlatformConnector):
         """Refresh the access token using refresh token"""
         if not self.refresh_token:
             return False
-        
+
+        # If client creds missing, try to load from config if available
+        if (not self.client_id or not self.client_secret) and getattr(self, 'config', None):
+            try:
+                kc = self.config.get_platform_config('kick') or {}
+                if not self.client_id:
+                    self.client_id = kc.get('client_id', '')
+                if not self.client_secret:
+                    self.client_secret = kc.get('client_secret', '')
+                if self.client_id or self.client_secret:
+                    print("[KickOldPusher] Fallback: loaded client creds from config for refresh")
+            except Exception:
+                pass
+
         try:
+            token_url = 'https://id.kick.com/oauth/token'
             response = requests.post(
-                'https://kick.com/oauth/token',
+                token_url,
                 data={
                     'client_id': self.client_id,
                     'client_secret': self.client_secret,

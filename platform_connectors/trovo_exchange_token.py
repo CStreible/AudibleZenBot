@@ -1,7 +1,7 @@
 import requests
 
-TROVO_CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
-TROVO_CLIENT_SECRET = "a6a9471aed462e984c85feb04e39882e"
+TROVO_CLIENT_ID = ""
+TROVO_CLIENT_SECRET = ""
 TROVO_REDIRECT_URI = "https://mistilled-declan-unendable.ngrok-free.dev/callback"
 TROVO_TOKEN_URL = "https://open-api.trovo.live/openplatform/exchangetoken"
 
@@ -11,6 +11,17 @@ def exchange_code_for_token(auth_code):
         "client-id": TROVO_CLIENT_ID,
         "Content-Type": "application/json"
     }
+    # If client id not set at module-level, try reading from config
+    if not TROVO_CLIENT_ID:
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager()
+            trovo_cfg = cfg.get_platform_config('trovo') or {}
+            cid = trovo_cfg.get('client_id', '')
+            if cid:
+                headers['client-id'] = cid
+        except Exception:
+            pass
     data = {
         "client_secret": TROVO_CLIENT_SECRET,
         "grant_type": "authorization_code",

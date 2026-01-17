@@ -8,10 +8,19 @@ from urllib.parse import urlencode, parse_qs, urlparse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# YouTube OAuth credentials from youtube_connector.py
-YOUTUBE_CLIENT_ID = "44621719812-l23h29dbhqjfm6ln6buoojenmiocv1cp.apps.googleusercontent.com"
-YOUTUBE_CLIENT_SECRET = "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"
+# YouTube OAuth credentials: prefer values from config if present
 YOUTUBE_REDIRECT_URI = "http://localhost:8080"
+try:
+    import sys, os
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    from core.config import ConfigManager
+    cfg = ConfigManager()
+    _yc = cfg.get_platform_config('youtube') or {}
+    YOUTUBE_CLIENT_ID = _yc.get('client_id', '')
+    YOUTUBE_CLIENT_SECRET = _yc.get('client_secret', '')
+except Exception:
+    YOUTUBE_CLIENT_ID = ''
+    YOUTUBE_CLIENT_SECRET = ''
 YOUTUBE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
@@ -72,6 +81,8 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
 
 def get_authorization_url():
     """Generate YouTube OAuth authorization URL"""
+    if not YOUTUBE_CLIENT_ID:
+        raise RuntimeError("YouTube client_id is not set in config (platforms.youtube.client_id)")
     params = {
         "response_type": "code",
         "client_id": YOUTUBE_CLIENT_ID,
@@ -151,21 +162,18 @@ if __name__ == "__main__":
         
         # Save to config.json
         try:
-            import sys, os
-            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-            from core.config import ConfigManager
-            
-            config = ConfigManager()
-            config.set_platform_config('youtube', 'oauth_token', token_data.get('access_token', ''))
-            config.set_platform_config('youtube', 'refresh_token', token_data.get('refresh_token', ''))
-            print("\n✓ YouTube oauth_token and refresh_token saved to config.json!")
-        except Exception as e:
-            print(f"\n✗ Error saving tokens to config: {e}")
-            print("\nYou can manually add them to config.json:")
-            print(f'  "youtube": {{')
-            print(f'    "oauth_token": "{token_data.get("access_token", "")}",')
-            print(f'    "refresh_token": "{token_data.get("refresh_token", "")}"')
-            print(f'  }}')
+                # Save tokens to config (ConfigManager will encrypt sensitive values)
+                config = ConfigManager()
+                config.set_platform_config('youtube', 'oauth_token', token_data.get('access_token', ''))
+                config.set_platform_config('youtube', 'refresh_token', token_data.get('refresh_token', ''))
+                print("\n✓ YouTube oauth_token and refresh_token saved to config.json!")
+            except Exception as e:
+                print(f"\n✗ Error saving tokens to config: {e}")
+                print("\nYou can manually add them to config.json:")
+                print(f'  "youtube": {{')
+                print(f'    "oauth_token": "REPLACE_WITH_YOUR_TOKEN",')
+                print(f'    "refresh_token": "REPLACE_WITH_YOUR_REFRESH_TOKEN"')
+                print(f'  }}')
         
         print("\n" + "=" * 60)
         print("NEXT STEPS:")

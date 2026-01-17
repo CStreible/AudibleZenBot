@@ -92,9 +92,9 @@ mutation SendStreamChatMessage($input: SendStreamchatMessageInput!) {
 ### Config Structure
 ```json
 {
-  "dlive": {
+    "dlive": {
     "username": "streamer_username",
-    "access_token": "your_dlive_access_token"
+    "access_token": "REPLACE_WITH_YOUR_TOKEN"
   }
 }
 ```
@@ -120,7 +120,7 @@ See `platform_connectors/dlive_oauth_guide.py` for detailed instructions:
 from platform_connectors.dlive_connector import DLiveConnector
 
 connector = DLiveConnector(config)
-connector.set_token("your_access_token")
+connector.set_token("REPLACE_WITH_YOUR_TOKEN")
 connector.connect("streamer_username")
 
 # Send message

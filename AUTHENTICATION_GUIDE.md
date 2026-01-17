@@ -118,7 +118,7 @@ See the detailed **[API Setup Guide](API_SETUP_GUIDE.md)** for:
 IRC_SERVER = 'wss://irc-ws.chat.twitch.tv:443'
 
 # Authentication
-PASS oauth:your_token_here
+PASS oauth:REPLACE_WITH_YOUR_TOKEN
 NICK botname
 JOIN #channelname
 
@@ -197,13 +197,13 @@ Example structure:
   "platforms": {
     "twitch": {
       "username": "your_channel",
-      "oauth_token": "your_token_here",
+      "oauth_token": "REPLACE_WITH_YOUR_TOKEN",
       "connected": false,
       "muted": false
     },
     "youtube": {
       "channel_id": "UC1234567890",
-      "oauth_token": "your_api_key",
+      "oauth_token": "REPLACE_WITH_YOUR_API_KEY",
       "connected": false,
       "muted": false
     }

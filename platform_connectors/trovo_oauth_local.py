@@ -2,8 +2,8 @@ import requests
 import webbrowser
 from urllib.parse import urlencode
 
-TROVO_CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
-TROVO_CLIENT_SECRET = "a6a9471aed462e984c85feb04e39882e"
+TROVO_CLIENT_ID = ""
+TROVO_CLIENT_SECRET = ""
 TROVO_REDIRECT_URI = "https://mistilled-declan-unendable.ngrok-free.dev/callback"
 TROVO_AUTH_URL = "https://open.trovo.live/page/login.html"
 TROVO_TOKEN_URL = "https://open-api.trovo.live/openplatform/exchangetoken"
@@ -18,9 +18,19 @@ SCOPES = [
 ]
 
 def get_authorization_url():
+    # Prefer configured client id if available
+    client_id = TROVO_CLIENT_ID
+    if not client_id:
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager()
+            trovo_cfg = cfg.get_platform_config('trovo') or {}
+            client_id = trovo_cfg.get('client_id', '')
+        except Exception:
+            client_id = ''
     params = {
         "response_type": "code",
-        "client_id": TROVO_CLIENT_ID,
+        "client_id": client_id,
         "redirect_uri": TROVO_REDIRECT_URI,
         "scope": "chat_connect+chat_send_self+manage_messages+channel_details_self+channel_update_self+user_details_self",
         "state": "trovo_state_123"
@@ -29,9 +39,19 @@ def get_authorization_url():
     return url
 
 def exchange_code_for_token(auth_code):
+    # Build headers, prefer configured client id if set
+    client_id = TROVO_CLIENT_ID
+    if not client_id:
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager()
+            trovo_cfg = cfg.get_platform_config('trovo') or {}
+            client_id = trovo_cfg.get('client_id', '')
+        except Exception:
+            client_id = ''
     headers = {
         "Accept": "application/json",
-        "client-id": TROVO_CLIENT_ID,
+        "client-id": client_id,
         "Content-Type": "application/json"
     }
     data = {

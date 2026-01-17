@@ -1952,7 +1952,17 @@ class PlatformConnectionWidget(QWidget):
         except Exception:
             pass
 
-        TROVO_CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
+        # Prefer Trovo client_id from config
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager()
+            trovo_cfg = cfg.get_platform_config('trovo') or {}
+            # Fall back to known public client id if not configured to avoid empty client_id in URL
+            TROVO_CLIENT_ID = trovo_cfg.get('client_id', 'b239c1cc698e04e93a164df321d142b3')
+            if not trovo_cfg.get('client_id'):
+                print("[Trovo] No client_id in config; using fallback public client_id for authorization URL")
+        except Exception:
+            TROVO_CLIENT_ID = 'b239c1cc698e04e93a164df321d142b3'
         # Use configured redirect if available (ngrok), otherwise default to localhost callback
         TROVO_REDIRECT_URI = getattr(self, '_trovo_redirect_uri', "https://mistilled-declan-unendable.ngrok-free.dev/callback")
         # If redirect URI points to localhost, start a local callback server to capture code
@@ -2149,7 +2159,14 @@ class PlatformConnectionWidget(QWidget):
 
             if self.platform_id == 'twitch':
                 # Twitch OAuth credentials and flow
-                client_id = "h84tx3mvvpk9jyt8rv8p8utfzupz82"  # Replace with your Twitch client ID
+                # Prefer Twitch client_id from config
+                try:
+                    from core.config import ConfigManager
+                    cfg = ConfigManager()
+                    twitch_cfg = cfg.get_platform_config('twitch') or {}
+                    client_id = twitch_cfg.get('client_id', '')
+                except Exception:
+                    client_id = ''
                 redirect_uri = "http://localhost:8888/callback"
                 scopes = [
                     "user:read:email",
@@ -2180,8 +2197,16 @@ class PlatformConnectionWidget(QWidget):
                 print("[Twitch] Waiting for OAuth callback...")
             elif self.platform_id == 'kick':
                 # ...existing Kick OAuth logic...
-                client_id = "01KDPP3YN4SB6ZMSV6R6HM12C7"
-                client_secret = "cf46287e05ebf1c68bc7a5fda41cb42da6015cd08c06ca788e6cbd3657a36e81"
+                # Prefer client credentials from config
+                try:
+                    from core.config import ConfigManager
+                    cfg = ConfigManager()
+                    kc = cfg.get_platform_config('kick') or {}
+                    client_id = kc.get('client_id', '')
+                    client_secret = kc.get('client_secret', '')
+                except Exception:
+                    client_id = ''
+                    client_secret = ''
                 redirect_uri = "http://localhost:8890/callback"
                 scopes = [
                     "user:read",
@@ -2221,9 +2246,47 @@ class PlatformConnectionWidget(QWidget):
                 oauth_url = f"https://id.kick.com/oauth/authorize?{urlencode(params)}"
                 print(f"[Kick] Starting OAuth with scopes: {scope_string}")
                 print(f"[Kick] Redirect URI: {redirect_uri}")
+
+                # Validate OAuth URL before opening browser
+                validation_ok = True
+                validation_msg = ""
+                try:
+                    # Ensure client_id present
+                    if not client_id:
+                        validation_ok = False
+                        validation_msg = "Missing Kick client_id. Please configure it in Settings or config.json."
+                    # Ensure path appears correct
+                    elif '/oauth/authorize' not in oauth_url:
+                        validation_ok = False
+                        validation_msg = "Constructed Kick OAuth URL appears malformed."
+                    else:
+                        # Check reachability with a short HEAD request
+                        try:
+                            import requests
+                            resp = requests.head(oauth_url, timeout=5, allow_redirects=True)
+                            if resp.status_code >= 400:
+                                validation_ok = False
+                                validation_msg = f"Kick OAuth endpoint returned status {resp.status_code}."
+                        except Exception as e:
+                            validation_ok = False
+                            validation_msg = f"Could not reach Kick OAuth endpoint: {e}"
+                except Exception as e:
+                    validation_ok = False
+                    validation_msg = f"Error validating OAuth URL: {e}"
+
                 import webbrowser
-                webbrowser.open(oauth_url)
-                print("[Kick] Waiting for OAuth callback...")
+                if not validation_ok:
+                    try:
+                        from PyQt6.QtWidgets import QMessageBox
+                        QMessageBox.warning(self, "Kick OAuth Error", f"{validation_msg}\n\nOAuth URL:\n{oauth_url}")
+                    except Exception:
+                        print(f"[Kick] OAuth validation failed: {validation_msg}")
+                        print(f"[Kick] OAuth URL: {oauth_url}")
+                    return
+                else:
+                    print(f"[Kick] OAuth URL validated, opening browser: {oauth_url}")
+                    webbrowser.open(oauth_url)
+                    print("[Kick] Waiting for OAuth callback...")
             # Add other platforms as needed
 
             # Wait for callback (with timeout)
@@ -2678,8 +2741,18 @@ class PlatformConnectionWidget(QWidget):
                 client_id = twitch_config.get('client_id', 'h84tx3mvvpk9jyt8rv8p8utfzupz82') if twitch_config else 'h84tx3mvvpk9jyt8rv8p8utfzupz82'
                 client_secret = twitch_config.get('client_secret', '') if twitch_config else ''
                 if not client_secret:
-                    self.onOAuthFailed(account_type, "Twitch client_secret not configured in config.json. Add it under twitch > client_secret")
-                    return
+                    # Prompt user to enter client credentials via settings UI
+                    try:
+                        self.append_status_message("[OAuth] Twitch client_secret missing - prompting for credentials in Settings")
+                    except Exception:
+                        pass
+                    self.promptForClientCredentials('twitch')
+                    # reload from config
+                    twitch_config = ConfigManager().get_platform_config('twitch')
+                    client_secret = twitch_config.get('client_secret', '')
+                    if not client_secret:
+                        self.onOAuthFailed(account_type, "Twitch client_secret not configured in config.json. Add it under twitch > client_secret")
+                        return
                 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
                 TWITCH_REDIRECT_URI = "http://localhost:8888/callback"
                 data = {
@@ -2894,13 +2967,61 @@ class PlatformConnectionWidget(QWidget):
             self.bot_login_btn.setEnabled(True)
         if hasattr(self, 'info_text'):
             self.append_status_message(f"[{account_type.title()}] ✗ Authentication failed: {error}")
+
+    def promptForClientCredentials(self, platform):
+        """Prompt the user to enter client_id/client_secret via a small dialog and save to config."""
+        from PyQt6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox, QLineEdit
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Enter {platform.title()} Client Credentials")
+        layout = QFormLayout(dlg)
+        id_input = QLineEdit()
+        secret_input = QLineEdit()
+        secret_input.setEchoMode(QLineEdit.EchoMode.Password)
+        # Pre-fill from config if present
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager()
+            pconf = cfg.get_platform_config(platform)
+            if pconf:
+                id_input.setText(pconf.get('client_id', '') or '')
+                secret_input.setText(pconf.get('client_secret', '') or '')
+        except Exception:
+            pass
+        layout.addRow('Client ID:', id_input)
+        layout.addRow('Client Secret:', secret_input)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        if dlg.exec():
+            cid = id_input.text().strip()
+            csec = secret_input.text().strip()
+            try:
+                cfg.set_platform_config(platform, 'client_id', cid)
+                cfg.set_platform_config(platform, 'client_secret', csec)
+                try:
+                    self.append_status_message(f"Saved {platform} client credentials to config")
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    self.append_status_message(f"Failed saving credentials: {e}")
+                except Exception:
+                    pass
     
     def fetchUserInfo(self, token):
         """Fetch user information from platform API"""
         import requests
         try:
             if self.platform_id == 'trovo':
-                TROVO_CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
+                # Prefer Trovo client_id from config
+                try:
+                    from core.config import ConfigManager
+                    _cfg = ConfigManager()
+                    _trovo_cfg = _cfg.get_platform_config('trovo') or {}
+                    TROVO_CLIENT_ID = _trovo_cfg.get('client_id', '')
+                except Exception:
+                    TROVO_CLIENT_ID = ''
                 url = "https://open-api.trovo.live/openplatform/getuserinfo"
                 headers = {
                     "Accept": "application/json",
@@ -3037,8 +3158,8 @@ class PlatformConnectionWidget(QWidget):
 
         try:
             if self.platform_id == 'trovo':
-                TROVO_CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
-                TROVO_CLIENT_SECRET = "a6a9471aed462e984c85feb04e39882e"
+                TROVO_CLIENT_ID = platform_config.get('client_id', '')
+                TROVO_CLIENT_SECRET = platform_config.get('client_secret', '')
                 TROVO_TOKEN_URL = "https://open-api.trovo.live/openplatform/refreshtoken"
                 headers = {
                     "Accept": "application/json",
@@ -3066,8 +3187,8 @@ class PlatformConnectionWidget(QWidget):
                     print(f"[OAuth] No access token in refresh response")
                     return None
             elif self.platform_id == 'youtube':
-                YOUTUBE_CLIENT_ID = "44621719812-l23h29dbhqjfm6ln6buoojenmiocv1cp.apps.googleusercontent.com"
-                YOUTUBE_CLIENT_SECRET = "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"
+                YOUTUBE_CLIENT_ID = platform_config.get('client_id', '')
+                YOUTUBE_CLIENT_SECRET = platform_config.get('client_secret', '')
                 YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
                 data = {
                     "client_id": YOUTUBE_CLIENT_ID,

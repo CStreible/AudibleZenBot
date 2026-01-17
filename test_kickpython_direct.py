@@ -5,9 +5,16 @@ import asyncio
 from kickpython import KickAPI
 
 async def test_send():
-    # Your OAuth credentials
-    client_id = "01KDPP3YN4SB6ZMSV6R6HM12C7"
-    client_secret = "cf46287e05ebf1c68bc7a5fda41cb42da6015cd08c06ca788e6cbd3657a36e81"
+    # Your OAuth credentials - prefer values from config
+    try:
+        from core.config import ConfigManager
+        cfg = ConfigManager()
+        kcfg = cfg.get_platform_config('kick') or {}
+        client_id = kcfg.get('client_id', '')
+        client_secret = kcfg.get('client_secret', '')
+    except Exception:
+        client_id = ''
+        client_secret = ''
     redirect_uri = "http://localhost:8890/callback"
     
     # Your access token (from your most recent authentication)

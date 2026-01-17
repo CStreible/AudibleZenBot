@@ -13,10 +13,10 @@ class TwitterConnector(BasePlatformConnector):
     """Connector for Twitter/X tweet streams and mentions"""
     
     # OAuth credentials from oauth_handler
-    DEFAULT_CLIENT_ID = "YnpWQ2s2Q1VuX1RVWG4wTlNvZTg6MTpjaQ"
-    DEFAULT_CLIENT_SECRET = "52_s2M2njaNEGOymH0Bym9h7Ry6xPjOY9J4YuHPztrZrPROMZ8"
-    DEFAULT_API_KEY = "ZEqQ0iXfbNHDnubYxeyhX8fL4"
-    DEFAULT_API_SECRET = "MTerotKmlDR2ClhmtJvKcMNlLPYZU6WMN2LBymITVnUrs2z7C3"
+    DEFAULT_CLIENT_ID = ""
+    DEFAULT_CLIENT_SECRET = ""
+    DEFAULT_API_KEY = ""
+    DEFAULT_API_SECRET = ""
     
     def __init__(self, config=None):
         super().__init__()

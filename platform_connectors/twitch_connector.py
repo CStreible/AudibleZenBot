@@ -38,8 +38,8 @@ class TwitchConnector(BasePlatformConnector):
         return obj
     
     # Default Twitch credentials
-    DEFAULT_CLIENT_ID = "h84tx3mvvpk9jyt8rv8p8utfzupz82"
-    DEFAULT_CLIENT_SECRET = "5sovebmqm745eq6be0vptv47tvvl74"
+    DEFAULT_CLIENT_ID = ""
+    DEFAULT_CLIENT_SECRET = ""
     DEFAULT_ACCESS_TOKEN = "vwjvk83rarr5x8sw4agwgc3ciq09br"
     DEFAULT_REFRESH_TOKEN = "olha5lgahozz0eqhe8me2c1sbkhn9qli9o4wxezitgj96212ul"
     
@@ -89,6 +89,16 @@ class TwitchConnector(BasePlatformConnector):
             username = platform_cfg.get('username', '')
             if username:
                 self.username = username
+            # Load client credentials from config if present
+            try:
+                cid = platform_cfg.get('client_id', '')
+                csec = platform_cfg.get('client_secret', '')
+                if cid:
+                    self.client_id = cid
+                if csec:
+                    self.client_secret = csec
+            except Exception:
+                pass
         # Recent local echoes to suppress duplicate incoming IRC echo
         self._recent_local_echoes = []  # list of (message_lower, timestamp)
         # Recent message_id tracking to dedupe messages across workers
@@ -360,6 +370,17 @@ class TwitchConnector(BasePlatformConnector):
             return None
 
         # Defensive: ensure client creds present
+        # Try to populate client creds from config if missing
+        if (not self.client_id or not self.client_secret) and self.config:
+            try:
+                pcfg = self.config.get_platform_config('twitch') or {}
+                if not self.client_id:
+                    self.client_id = pcfg.get('client_id', '')
+                if not self.client_secret:
+                    self.client_secret = pcfg.get('client_secret', '')
+            except Exception:
+                pass
+
         if not self.client_id or not self.client_secret:
             print("[TwitchConnector] Missing client_id or client_secret; cannot refresh token")
             return False
@@ -1743,7 +1764,13 @@ class TwitchEventSubWorker(QThread):
                     try:
                         import webbrowser
                         # Construct an OAuth URL to help the user re-authorize with required scopes
-                        twitch_client_id = "h84tx3mvvpk9jyt8rv8p8utfzupz82"
+                        try:
+                            from core.config import ConfigManager
+                            _cfg = ConfigManager()
+                            _tcfg = _cfg.get_platform_config('twitch') or {}
+                            twitch_client_id = _tcfg.get('client_id', '')
+                        except Exception:
+                            twitch_client_id = ''
                         redirect_uri = "http://localhost:8888/callback"
                         scopes_needed = [
                             'user:read:email',
