@@ -7,6 +7,7 @@ import time
 import os
 from typing import Dict, Optional
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
+from PyQt6.QtCore import pyqtSlot
 
 from core.config import ConfigManager
 from platform_connectors.twitch_connector import TwitchConnector
@@ -81,47 +82,59 @@ class ChatManager(QObject):
         
         # Setup connectors
         for platform_id, connector in self.connectors.items():
-            # Check if connector supports metadata (new connectors)
+            # Connect connector signals to ChatManager slots so Qt can queue across threads
             if hasattr(connector, 'message_received_with_metadata'):
-                # Wrap connection with a small tracer to guarantee TRACE output
-                def _wrap_metadata(pid, u, m, md, _self=self, _pid=platform_id, _connector=connector):
-                    try:
-                        preview = m[:120] if m else ''
-                    except Exception:
-                        preview = ''
-                    try:
-                        print(f"[ChatManager][TRACE] signal->onMessageReceivedWithMetadata: platform={_pid} username={u} preview={preview} connector_id={id(_connector)} chat_manager_id={id(_self)}")
-                    except Exception:
-                        print(f"[ChatManager][TRACE] signal->onMessageReceivedWithMetadata: platform={_pid} username={u} preview={preview}")
-                    _self.onMessageReceivedWithMetadata(_pid, u, m, md)
-
-                connector.message_received_with_metadata.connect(_wrap_metadata)
+                connector.message_received_with_metadata.connect(self._onConnectorMessageWithMetadata)
                 try:
-                    print(f"[ChatManager] Connected message_received_with_metadata for {platform_id} (wrapped) connector_id={id(connector)} chat_manager_id={id(self)}")
+                    print(f"[ChatManager] Connected message_received_with_metadata for {platform_id} -> ChatManager._onConnectorMessageWithMetadata")
                 except Exception:
-                    print(f"[ChatManager] Connected message_received_with_metadata for {platform_id} (wrapped)")
-            else:
-                # Fallback for old connectors without metadata
-                def _wrap_legacy(u, m, pid=platform_id, _self=self, _connector=connector):
-                    try:
-                        preview = m[:120] if m else ''
-                    except Exception:
-                        preview = ''
-                    try:
-                        print(f"[ChatManager][TRACE] signal->onMessageReceived: platform={pid} username={u} preview={preview} connector_id={id(_connector)} chat_manager_id={id(_self)}")
-                    except Exception:
-                        print(f"[ChatManager][TRACE] signal->onMessageReceived: platform={pid} username={u} preview={preview}")
-                    _self.onMessageReceived(pid, u, m)
-
-                connector.message_received.connect(_wrap_legacy)
+                    print(f"[ChatManager] Connected message_received_with_metadata for {platform_id} -> ChatManager._onConnectorMessageWithMetadata")
+            # Always connect legacy message_received as well if present
+            if hasattr(connector, 'message_received'):
+                connector.message_received.connect(self._onConnectorMessageLegacy)
                 try:
-                    print(f"[ChatManager] Connected legacy message_received for {platform_id} connector_id={id(connector)} chat_manager_id={id(self)}")
+                    print(f"[ChatManager] Connected legacy message_received for {platform_id} -> ChatManager._onConnectorMessageLegacy")
                 except Exception:
-                    print(f"[ChatManager] Connected legacy message_received for {platform_id}")
+                    print(f"[ChatManager] Connected legacy message_received for {platform_id} -> ChatManager._onConnectorMessageLegacy")
             # Connect deletion signal if supported
             if hasattr(connector, 'message_deleted'):
                 connector.message_deleted.connect(self.onMessageDeleted)
                 print(f"[ChatManager] Connected message_deleted for {platform_id}")
+
+    @pyqtSlot(str, str, str, dict)
+    def _onConnectorMessageWithMetadata(self, platform, username, message, metadata):
+        """Slot invoked when a connector emits message_received_with_metadata.
+
+        Using a Qt slot ensures the call is executed in the ChatManager's thread
+        (queued connection) rather than directly on the connector's worker thread.
+        """
+        try:
+            preview = message[:120] if message else ''
+        except Exception:
+            preview = ''
+        try:
+            print(f"[ChatManager][TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username} preview={preview}")
+        except Exception:
+            print(f"[ChatManager][TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username}")
+        self.onMessageReceivedWithMetadata(platform, username, message, metadata)
+
+    @pyqtSlot(str, str, str, dict)
+    def _onConnectorMessageLegacy(self, platform, username, message, metadata):
+        """Slot for legacy connectors that emit `message_received(platform, username, message, metadata)`.
+
+        Some older connectors may only emit `message_received`; this slot bridges
+        those emissions to the ChatManager legacy handler.
+        """
+        try:
+            preview = message[:120] if message else ''
+        except Exception:
+            preview = ''
+        try:
+            print(f"[ChatManager][TRACE] _onConnectorMessageLegacy: platform={platform} username={username} preview={preview}")
+        except Exception:
+            print(f"[ChatManager][TRACE] _onConnectorMessageLegacy: platform={platform} username={username}")
+        # Call the legacy handler which will emit message_received after checks
+        self.onMessageReceived(platform, username, message)
 
         # Immediately disconnect any platform that is disabled but was previously running
         for disabled_pid in self.disabled_platforms:
@@ -270,6 +283,21 @@ class ChatManager(QObject):
                 return False
             
             print(f"[ChatManager] Bot connector created for {platform_id}")
+
+            # Connect bot connector signals to ChatManager so webhook-driven bot instances
+            # also route incoming messages into the central message pipeline.
+            try:
+                if hasattr(bot_connector, 'message_received_with_metadata'):
+                    bot_connector.message_received_with_metadata.connect(self._onConnectorMessageWithMetadata)
+                    print(f"[ChatManager] Connected bot message_received_with_metadata for {platform_id} -> ChatManager._onConnectorMessageWithMetadata")
+                if hasattr(bot_connector, 'message_received'):
+                    bot_connector.message_received.connect(self._onConnectorMessageLegacy)
+                    print(f"[ChatManager] Connected bot legacy message_received for {platform_id} -> ChatManager._onConnectorMessageLegacy")
+                if hasattr(bot_connector, 'message_deleted'):
+                    bot_connector.message_deleted.connect(self.onMessageDeleted)
+                    print(f"[ChatManager] Connected bot message_deleted for {platform_id} -> ChatManager.onMessageDeleted")
+            except Exception as e:
+                print(f"[ChatManager] Warning: failed to connect bot signals for {platform_id}: {e}")
             
             # Debug: show token prefix to verify it's different from streamer
             token_prefix = token[:20] if token else "None"
@@ -726,3 +754,52 @@ class ChatManager(QObject):
                 print(f"[ChatManager] Error banning user on {platform_id}: {e}")
         else:
             print(f"[ChatManager] User banning not supported for {platform_id}")
+
+    def dump_connector_states(self) -> dict:
+        """Return a diagnostic snapshot of connector and bot states.
+
+        Useful for CLI/diagnostic scripts to inspect which connectors are
+        connected and relevant runtime details (webhook URLs, last message time).
+        """
+        snapshot = {
+            'connectors': {},
+            'bot_connectors': {},
+            'ngrok_tunnels': {}
+        }
+
+        try:
+            for pid, conn in self.connectors.items():
+                try:
+                    info = {
+                        'connected': bool(getattr(conn, 'connected', False)),
+                        'has_worker': hasattr(conn, 'worker') and conn.worker is not None,
+                        'username': getattr(conn, 'username', None),
+                    }
+                    # Kick-specific fields
+                    if pid == 'kick':
+                        info['webhook_url'] = getattr(conn, 'webhook_url', None)
+                        info['webhook_port'] = getattr(conn, 'webhook_port', None)
+                        info['last_message_time'] = getattr(conn, 'last_message_time', None)
+                        info['subscription_active'] = getattr(conn, 'subscription_active', False)
+                    snapshot['connectors'][pid] = info
+                except Exception:
+                    snapshot['connectors'][pid] = {'error': 'failed to inspect connector'}
+
+            for pid, bot in self.bot_connectors.items():
+                try:
+                    snapshot['bot_connectors'][pid] = {
+                        'connected': bool(getattr(bot, 'connected', False)),
+                        'username': getattr(bot, 'username', None)
+                    }
+                except Exception:
+                    snapshot['bot_connectors'][pid] = {'error': 'failed to inspect bot connector'}
+
+            if self.ngrok_manager:
+                try:
+                    snapshot['ngrok_tunnels'] = self.ngrok_manager.get_all_tunnels()
+                except Exception:
+                    snapshot['ngrok_tunnels'] = {'error': 'failed to get ngrok tunnels'}
+        except Exception as e:
+            snapshot['error'] = str(e)
+
+        return snapshot
