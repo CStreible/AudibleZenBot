@@ -22,9 +22,27 @@ class ToggleSwitch(QCheckBox):
     """
 
     def mousePressEvent(self, event):
+        # Accept the press so we get the release event; do not toggle here
+        # to avoid double-toggle when the base class also changes state.
         if self.isEnabled():
-            self.setChecked(not self.isChecked())
-        super().mousePressEvent(event)
+            event.accept()
+        else:
+            event.ignore()
+
+    def mouseReleaseEvent(self, event):
+        # Toggle on release to make clicking anywhere on the widget reliable
+        # and avoid invoking the base class mouse handling which can cause
+        # duplicate state changes depending on click position.
+        if self.isEnabled():
+            try:
+                self.toggle()
+            except Exception:
+                try:
+                    self.setChecked(not self.isChecked())
+                except Exception:
+                    pass
+        # Do not call super() to prevent the QCheckBox default handler from
+        # toggling a second time.
 
     def __init__(self, parent=None, width=34, height=17, bg_color_on="#4a90e2", bg_color_off="#555", knob_color="#fff", border_color="#888"):
         super().__init__(parent)
