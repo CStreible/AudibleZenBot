@@ -905,8 +905,10 @@ QTabBar::tab:hover {
             'youtube': os.path.join(base_dir, 'resources', 'badges', 'youtube', 'youtube_logo.svg'),
             'dlive': os.path.join(base_dir, 'resources', 'badges', 'dlive', 'dlive_logo.png'),
             'twitch': os.path.join(base_dir, 'resources', 'icons', 'twitch.png'),
-            'trovo': os.path.join(base_dir, 'resources', 'icons', 'trovo.png'),
-            'twitter': os.path.join(base_dir, 'resources', 'icons', 'twitter.png'),
+            # Prefer the official Trovo logo SVG from badges (higher-fidelity)
+            'trovo': os.path.join(base_dir, 'resources', 'icons', 'trovo.ico'),
+            # Use the Twitter/X icon from resources/icons
+            'twitter': os.path.join(base_dir, 'resources', 'icons', 'twitter.ico'),
         }
         
         return icon_map.get(platform)

@@ -19,6 +19,7 @@ def get_platform_icon_html(platform: str, size: int = 18) -> str:
         'kick': os.path.join(base_dir, 'resources', 'badges', 'kick', 'kick_logo.jpg'),  # JPG file
         'youtube': os.path.join(base_dir, 'resources', 'badges', 'youtube', 'youtube_logo.svg'),
         'dlive': os.path.join(base_dir, 'resources', 'badges', 'dlive', 'dlive_logo.png'),  # PNG file
+        'trovo': os.path.join(base_dir, 'resources', 'icons', 'trovo.ico'),
     }
     
     # Try to load local image first
@@ -36,6 +37,8 @@ def get_platform_icon_html(platform: str, size: int = 18) -> str:
                 mime_type = 'image/svg+xml'
             elif image_path.endswith('.jpg') or image_path.endswith('.jpeg'):
                 mime_type = 'image/jpeg'
+            elif image_path.endswith('.ico'):
+                mime_type = 'image/x-icon'
             else:
                 mime_type = 'image/png'  # default
             
