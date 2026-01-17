@@ -2977,6 +2977,52 @@ class PlatformConnectionWidget(QWidget):
             self.disable_changed.emit(self.platform_id, is_disabled)
         except Exception:
             pass
+
+        # If the platform was disabled by the user, force logout of both
+        # streamer and bot accounts for this platform to ensure no lingering
+        # authenticated state remains.
+        try:
+            if is_disabled:
+                # Invalidate connectors via ChatManager which will disconnect
+                # streamer and bot connectors if present.
+                try:
+                    if hasattr(self, 'chat_manager') and self.chat_manager:
+                        self.chat_manager.disconnectPlatform(self.platform_id)
+                        self.append_status_message(f"[Platform] Disconnected platform connectors for: {self.platform_name}")
+                except Exception:
+                    pass
+
+                # Also clear stored credentials in config for both streamer and bot
+                try:
+                    cfg = ConfigManager()
+                    # Clear streamer credentials
+                    try:
+                        cfg.set_platform_config(self.platform_id, 'streamer_logged_in', False)
+                        cfg.set_platform_config(self.platform_id, 'streamer_token', '')
+                        cfg.set_platform_config(self.platform_id, 'streamer_refresh_token', '')
+                        cfg.set_platform_config(self.platform_id, 'streamer_user_id', '')
+                    except Exception:
+                        pass
+                    # Clear bot credentials
+                    try:
+                        cfg.set_platform_config(self.platform_id, 'bot_logged_in', False)
+                        cfg.set_platform_config(self.platform_id, 'bot_token', '')
+                        cfg.set_platform_config(self.platform_id, 'bot_refresh_token', '')
+                        cfg.set_platform_config(self.platform_id, 'bot_user_id', '')
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+                # Update UI to reflect logged-out state
+                try:
+                    self.streamer_display_name.setText("")
+                    self.bot_display_name.setText("")
+                    self.streamer_login_btn.setText("Login")
+                    self.bot_login_btn.setText("Login")
+                    self.status_label.setText("Platform disabled and accounts logged out.")
+                except Exception:
+                    pass
     
     def setConnectionState(self, connected):
         """Stub for legacy compatibility - now handled by account-specific methods"""
