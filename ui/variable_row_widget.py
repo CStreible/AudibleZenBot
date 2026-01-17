@@ -157,38 +157,6 @@ class VariableRowWidget(QWidget):
         if checked:
             self.value_edit.setText(self.default_edit.text())
 
-        # Third row: Value
-        value_row = QHBoxLayout()
-        value_row.setContentsMargins(0, 0, 0, 0)
-        value_row.setSpacing(10)
-        value_label = QLabel('Value:')
-        value_label.setStyleSheet('color: #aaa; font-size: 13px; min-width: 60px;')
-        value_row.addWidget(value_label, 0)
-        self.value_edit = QLineEdit(value)
-        self.value_edit.setStyleSheet('color: #fff; font-size: 13px; background: #232323; border: 1px solid #444; border-radius: 4px; padding: 4px 8px;')
-        value_row.addWidget(self.value_edit, 1)
-
-        # Fourth row: Default
-        default_row = QHBoxLayout()
-        default_row.setContentsMargins(0, 0, 0, 0)
-        default_row.setSpacing(10)
-        default_label = QLabel('Default:')
-        default_label.setStyleSheet('color: #aaa; font-size: 13px; min-width: 60px;')
-        default_row.addWidget(default_label, 0)
-        self.default_edit = QLineEdit(default)
-        self.default_edit.setStyleSheet('color: #fff; font-size: 13px; background: #232323; border: 1px solid #444; border-radius: 4px; padding: 4px 8px;')
-        default_row.addWidget(self.default_edit, 1)
-
-        # Stack all rows vertically
-        outer_vbox = QVBoxLayout(self)
-        outer_vbox.setContentsMargins(0, 0, 0, 0)
-        outer_vbox.setSpacing(6)
-        outer_vbox.addLayout(top_row)
-        outer_vbox.addLayout(type_row)
-        outer_vbox.addLayout(value_row)
-        outer_vbox.addLayout(default_row)
-        self.setLayout(outer_vbox)
-
     def get_data(self):
         return {
             'name': self.name_edit.text().strip(),
