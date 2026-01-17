@@ -59,6 +59,12 @@ class ChatManager(QObject):
         self.bot_connectors: Dict[str, object] = {}
         # Recent incoming message cache to suppress duplicates (platform, user, msg_lower, ts)
         self._recent_incoming = []
+        # Recent message_id cache to suppress duplicate delivery when platforms provide IDs
+        self._recent_message_ids = {}
+        # Recent canonical message cache (normalized platform:username:message)
+        # Used to match local echoes to incoming messages that differ only by
+        # username formatting (underscores/spaces) or minor whitespace.
+        self._recent_canonical = {}
 
         # Ensure diagnostic emitted log exists so we can verify emissions immediately
         try:
@@ -394,6 +400,14 @@ class ChatManager(QObject):
         Returns:
             bool: True if message was sent successfully
         """
+        # Diagnostic: dump current connector maps
+        try:
+            bot_states = {k: getattr(v, 'connected', False) for k, v in self.bot_connectors.items()}
+            streamer_states = {k: getattr(v, 'connected', False) for k, v in self.connectors.items()}
+            print(f"[ChatManager][SEND-TRACE] bot_connectors={bot_states} connectors={streamer_states}")
+        except Exception:
+            pass
+
         # Try bot connector first
         bot_connector = self.bot_connectors.get(platform_id)
         if bot_connector:
@@ -416,6 +430,15 @@ class ChatManager(QObject):
 
                 if hasattr(bot_connector, 'send_message') and can_send:
                     result = bot_connector.send_message(message)
+                    # Persistent send log for debugging
+                    try:
+                        log_dir = os.path.join(os.getcwd(), 'logs')
+                        os.makedirs(log_dir, exist_ok=True)
+                        with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                            sf.write(f"{time.time():.3f} platform={platform_id} used=bot connected={getattr(bot_connector, 'connected', False)} preview={repr(message)[:200]}\n")
+                    except Exception:
+                        pass
+
                     if result:
                         print(f"[ChatManager] [OK] Sent message as bot on {platform_id}")
                         # Echo the message to chat log (except for Twitch - IRC echoes automatically)
@@ -429,7 +452,13 @@ class ChatManager(QObject):
                                 'badges': [],
                                 'emotes': ''
                             }
-                            self.message_received.emit(platform_id, bot_username, message, metadata)
+                            # Use onMessageReceivedWithMetadata so de-duplication runs and prevents
+                            # duplicate display when the connector later emits the same incoming message.
+                            try:
+                                self.onMessageReceivedWithMetadata(platform_id, bot_username, message, metadata)
+                            except Exception:
+                                # Fallback to direct emit if something unexpected fails
+                                self.message_received.emit(platform_id, bot_username, message, metadata)
                         return True
                     else:
                         print(f"[ChatManager] [ERROR] Bot send failed for {platform_id}")
@@ -471,6 +500,15 @@ class ChatManager(QObject):
         if connector and hasattr(connector, 'send_message'):
             print(f"[ChatManager] Streamer connector found for {platform_id}, connected={getattr(connector, 'connected', False)}")
             try:
+                # Persistent send log for fallback/streamer path
+                try:
+                    log_dir = os.path.join(os.getcwd(), 'logs')
+                    os.makedirs(log_dir, exist_ok=True)
+                    with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                        sf.write(f"{time.time():.3f} platform={platform_id} used=streamer connected={getattr(connector, 'connected', False)} preview={repr(message)[:200]}\n")
+                except Exception:
+                    pass
+
                 if getattr(connector, 'connected', False):
                     result = connector.send_message(message)
                     if result:
@@ -486,7 +524,11 @@ class ChatManager(QObject):
                                 'badges': [],
                                 'emotes': ''
                             }
-                            self.message_received.emit(platform_id, streamer_username, message, metadata)
+                            # Call onMessageReceivedWithMetadata to run de-duplication before emitting
+                            try:
+                                self.onMessageReceivedWithMetadata(platform_id, streamer_username, message, metadata)
+                            except Exception:
+                                self.message_received.emit(platform_id, streamer_username, message, metadata)
                         return True
                     else:
                         print(f"[ChatManager] [ERROR] Streamer send also failed for {platform_id}")
@@ -553,6 +595,60 @@ class ChatManager(QObject):
         try:
             now = time.time()
             msg_key = (platform_id, username, (message or '').strip().lower())
+            # If platform provided a message_id, use it to suppress duplicates first
+            msg_id = None
+            try:
+                msg_id = metadata.get('message_id') if isinstance(metadata, dict) else None
+            except Exception:
+                msg_id = None
+            if msg_id:
+                prev = self._recent_message_ids.get(msg_id)
+                if prev and (now - prev) < 2.0:
+                    print(f"[ChatManager][TRACE] Suppressing duplicate by message_id: {msg_id}")
+                    return
+                # record this id
+                try:
+                    self._recent_message_ids[msg_id] = now
+                    # prune oldest entries if map grows too large
+                    if len(self._recent_message_ids) > 2000:
+                        # remove oldest 25%
+                        items = sorted(self._recent_message_ids.items(), key=lambda kv: kv[1])
+                        for k, _ in items[: max(1, len(items)//4)]:
+                            try:
+                                del self._recent_message_ids[k]
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            # Canonical normalization: collapse username formatting and whitespace
+            try:
+                uname_norm = ''.join([c for c in (username or '').lower() if c.isalnum()])
+            except Exception:
+                uname_norm = (username or '').lower()
+            try:
+                msg_norm = (message or '').strip().lower()
+            except Exception:
+                msg_norm = (message or '').lower() if message else ''
+            canonical = f"{platform_id}:{uname_norm}:{msg_norm}"
+            # If we've recently seen the canonical signature, suppress duplicate
+            prev_can = self._recent_canonical.get(canonical)
+            if prev_can and (now - prev_can) < 2.0:
+                print(f"[ChatManager][TRACE] Suppressing duplicate by canonical key: {canonical}")
+                return
+            # Record canonical occurrence for short window
+            try:
+                self._recent_canonical[canonical] = now
+                # prune oldest canonicals if map grows too large
+                if len(self._recent_canonical) > 2000:
+                    items = sorted(self._recent_canonical.items(), key=lambda kv: kv[1])
+                    for k, _ in items[: max(1, len(items)//4)]:
+                        try:
+                            del self._recent_canonical[k]
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             # prune old entries
             self._recent_incoming = [t for t in self._recent_incoming if now - t[3] < 0.8]
             # check for duplicate

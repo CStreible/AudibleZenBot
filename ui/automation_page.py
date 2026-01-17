@@ -511,7 +511,7 @@ QTabBar::tab:hover {
         
         return widget
     
-    def add_timer_group(self, group_name=None, display_name=None, interval=300, messages=None, platforms=None, send_as_streamer=False):
+    def add_timer_group(self, group_name=None, display_name=None, interval=300, messages=None, platforms=None, send_as_streamer=False, allow_offline=False):
         """Add a new timer message group"""
         # Validate group_name if provided
         if group_name is not None and not isinstance(group_name, str):
@@ -565,7 +565,7 @@ QTabBar::tab:hover {
                 'twitter': False
             },
             'active': False,
-            'allow_offline': False,
+            'allow_offline': allow_offline,
             'send_as_streamer': send_as_streamer
         }
         
@@ -1018,25 +1018,38 @@ QTabBar::tab:hover {
                     fresh_config = ConfigManager()
                     platform_config = fresh_config.get_platform_config(platform)
                     
-                    # Determine which account to use: bot (if available), otherwise streamer
+                    # Determine which account to use: prefer an active bot connector,
+                    # otherwise fall back to configured bot creds, then streamer.
                     if send_as_streamer:
-                        # Force use of streamer account
                         username = platform_config.get('streamer_username')
                         token = platform_config.get('streamer_token')
                         account_type = 'streamer'
                     else:
-                        # Prefer bot account, fallback to streamer
-                        bot_username = platform_config.get('bot_username')
-                        bot_token = platform_config.get('bot_token')
-                        
-                        if bot_username and bot_token:
-                            username = bot_username
-                            token = bot_token
-                            account_type = 'bot'
-                        else:
-                            username = platform_config.get('streamer_username')
-                            token = platform_config.get('streamer_token')
-                            account_type = 'streamer'
+                        account_type = 'streamer'
+                        username = platform_config.get('streamer_username')
+                        token = platform_config.get('streamer_token')
+                        # Prefer live bot connector if available
+                        try:
+                            if self.chat_manager:
+                                bot_conns = getattr(self.chat_manager, 'bot_connectors', {}) or {}
+                                bot_conn = bot_conns.get(platform)
+                                if bot_conn and getattr(bot_conn, 'connected', False):
+                                    pc = fresh_config.get_platform_config(platform)
+                                    username = pc.get('bot_username') or pc.get('username')
+                                    token = pc.get('bot_token')
+                                    account_type = 'bot'
+                                    print(f"[TimerMessages] Using live bot connector for {platform}: {username}")
+                        except Exception:
+                            pass
+
+                        # If no live bot, try configured bot creds
+                        if account_type != 'bot':
+                            bot_username = platform_config.get('bot_username')
+                            bot_token = platform_config.get('bot_token')
+                            if bot_username and bot_token:
+                                username = bot_username
+                                token = bot_token
+                                account_type = 'bot'
                     
                     if not username or not token:
                         continue
@@ -1058,6 +1071,8 @@ QTabBar::tab:hover {
                 f"Could not send message to any platform.\n\n"
                 f"Make sure platforms are enabled and credentials are configured."
             )
+        
+        # (duplicate loop removed)
     
     def update_send_as_streamer(self, group_name, enabled):
         """Update send_as_streamer setting for a timer group"""
@@ -1084,54 +1099,60 @@ QTabBar::tab:hover {
         # Determine whether to use streamer or bot account
         send_as_streamer = group.get('send_as_streamer', False)
         
-        # Send to enabled platforms
+        # Send to enabled platforms (prefer live bot connector, then config bot creds, then streamer)
         platforms_sent = []
         for platform, enabled in group['platforms'].items():
             if enabled and self.chat_manager:
                 try:
-                    # Reload config to get fresh bot credentials
                     from core.config import ConfigManager
                     fresh_config = ConfigManager()
                     platform_config = fresh_config.get_platform_config(platform)
-                    
-                    # Determine which account to use: bot (if available), otherwise streamer
+
                     if send_as_streamer:
-                        # Force use of streamer account
                         username = platform_config.get('streamer_username')
                         token = platform_config.get('streamer_token')
                         account_type = 'streamer'
-                        print(f"[TimerMessages] Test: {platform} - Using STREAMER account (send_as_streamer=True)")
                     else:
-                        # Prefer bot account, fallback to streamer
-                        bot_username = platform_config.get('bot_username')
-                        bot_token = platform_config.get('bot_token')
-                        print(f"[TimerMessages] Test: {platform} - Checking bot credentials: username='{bot_username}', has_token={bool(bot_token)}")
-                        
-                        if bot_username and bot_token:
-                            username = bot_username
-                            token = bot_token
-                            account_type = 'bot'
-                            print(f"[TimerMessages] Test: {platform} - Using BOT account: {bot_username}")
-                        else:
-                            username = platform_config.get('streamer_username')
-                            token = platform_config.get('streamer_token')
-                            account_type = 'streamer'
-                            print(f"[TimerMessages] Test: {platform} - Bot not available, falling back to STREAMER account")
-                    
+                        account_type = 'streamer'
+                        username = platform_config.get('streamer_username')
+                        token = platform_config.get('streamer_token')
+                        # Prefer live bot connector
+                        try:
+                            bot_conns = getattr(self.chat_manager, 'bot_connectors', {}) or {}
+                            bot_conn = bot_conns.get(platform)
+                            if bot_conn and getattr(bot_conn, 'connected', False):
+                                pc = fresh_config.get_platform_config(platform)
+                                username = pc.get('bot_username') or pc.get('username')
+                                token = pc.get('bot_token')
+                                account_type = 'bot'
+                                print(f"[TimerMessages] Test: {platform} - Using live BOT connector: {username}")
+                        except Exception:
+                            pass
+
+                        if account_type != 'bot':
+                            bot_username = platform_config.get('bot_username')
+                            bot_token = platform_config.get('bot_token')
+                            print(f"[TimerMessages] Test: {platform} - Checking bot credentials: username='{bot_username}', has_token={bool(bot_token)}")
+                            if bot_username and bot_token:
+                                username = bot_username
+                                token = bot_token
+                                account_type = 'bot'
+                                print(f"[TimerMessages] Test: {platform} - Using BOT account: {bot_username}")
+                            else:
+                                print(f"[TimerMessages] Test: {platform} - Bot not available, falling back to STREAMER account")
+
                     if not username or not token:
                         print(f"[TimerMessages] Test: No credentials for {platform} ({account_type} account)")
                         continue
-                    
-                    # Send message via direct API call (don't touch the active connection)
+
                     success = self.send_message_as_account(platform, message, username, token, account_type)
                     if success:
                         platforms_sent.append(f"{platform}({account_type})")
-                        
                 except Exception as e:
                     print(f"[TimerMessages] Test: Error sending to {platform}: {e}")
                     import traceback
                     traceback.print_exc()
-        
+
         print(f"[TimerMessages] TEST SEND from '{group_name}' to {platforms_sent}: {message}")
         QMessageBox.information(self, "Test Message Sent", 
                                f"Message sent to: {', '.join(platforms_sent)}\n\nMessage: {message}")
@@ -1332,40 +1353,46 @@ QTabBar::tab:hover {
         for platform, enabled in group['platforms'].items():
             if enabled and self.chat_manager:
                 try:
-                    # Reload config to get fresh bot credentials
                     from core.config import ConfigManager
                     fresh_config = ConfigManager()
                     platform_config = fresh_config.get_platform_config(platform)
-                    
-                    # Determine which account to use: bot (if available), otherwise streamer
+
                     if send_as_streamer:
-                        # Force use of streamer account
                         username = platform_config.get('streamer_username')
                         token = platform_config.get('streamer_token')
                         account_type = 'streamer'
                     else:
-                        # Prefer bot account, fallback to streamer
-                        bot_username = platform_config.get('bot_username')
-                        bot_token = platform_config.get('bot_token')
-                        
-                        if bot_username and bot_token:
-                            username = bot_username
-                            token = bot_token
-                            account_type = 'bot'
-                        else:
-                            username = platform_config.get('streamer_username')
-                            token = platform_config.get('streamer_token')
-                            account_type = 'streamer'
-                    
+                        account_type = 'streamer'
+                        username = platform_config.get('streamer_username')
+                        token = platform_config.get('streamer_token')
+                        # Prefer a live bot connector
+                        try:
+                            bot_conns = getattr(self.chat_manager, 'bot_connectors', {}) or {}
+                            bot_conn = bot_conns.get(platform)
+                            if bot_conn and getattr(bot_conn, 'connected', False):
+                                pc = fresh_config.get_platform_config(platform)
+                                username = pc.get('bot_username') or pc.get('username')
+                                token = pc.get('bot_token')
+                                account_type = 'bot'
+                                print(f"[TimerMessages] Using live bot connector for {platform}: {username}")
+                        except Exception:
+                            pass
+
+                        if account_type != 'bot':
+                            bot_username = platform_config.get('bot_username')
+                            bot_token = platform_config.get('bot_token')
+                            if bot_username and bot_token:
+                                username = bot_username
+                                token = bot_token
+                                account_type = 'bot'
+
                     if not username or not token:
                         print(f"[TimerMessages] No credentials for {platform} ({account_type} account)")
                         continue
-                    
-                    # Send message via direct API call (don't touch the active connection)
+
                     success = self.send_message_as_account(platform, message, username, token, account_type)
                     if success:
                         platforms_sent.append(f"{platform}({account_type})")
-                        
                 except Exception as e:
                     print(f"[TimerMessages] Error sending to {platform}: {e}")
                     import traceback
@@ -1376,7 +1403,16 @@ QTabBar::tab:hover {
     def send_message_as_account(self, platform, message, username, token, account_type):
         """Send a message to a platform using specific account credentials"""
         import requests
-        
+        import time
+        # Persistent log of attempted send from UI layer to aid debugging (pre-attempt)
+        try:
+            log_dir = os.path.join(os.getcwd(), 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+            with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                sf.write(f"{time.time():.3f} platform={platform} attempted={account_type} username={username} preview={repr(message)[:200]}\n")
+        except Exception:
+            pass
+
         try:
             # For Twitch, use the appropriate persistent connection
             if platform == 'twitch':
@@ -1464,7 +1500,10 @@ QTabBar::tab:hover {
                             'badges': [],
                             'emotes': ''
                         }
-                        self.chat_manager.message_received.emit('youtube', username, message, metadata)
+                        try:
+                            self.chat_manager.onMessageReceivedWithMetadata('youtube', username, message, metadata)
+                        except Exception:
+                            self.chat_manager.message_received.emit('youtube', username, message, metadata)
                         return True
                     else:
                         print(f"[TimerMessages] ✗ YouTube: Streamer connector not available")
@@ -1496,7 +1535,10 @@ QTabBar::tab:hover {
                             'badges': [],
                             'emotes': ''
                         }
-                        self.chat_manager.message_received.emit('trovo', username, message, metadata)
+                        try:
+                            self.chat_manager.onMessageReceivedWithMetadata('trovo', username, message, metadata)
+                        except Exception:
+                            self.chat_manager.message_received.emit('trovo', username, message, metadata)
                         return True
                     else:
                         print(f"[TimerMessages] ✗ Trovo: Streamer connector not available")
@@ -1607,7 +1649,8 @@ QTabBar::tab:hover {
                 interval=group_data.get('interval', 300),
                 messages=group_data.get('messages', []),
                 platforms=group_data.get('platforms', {}),
-                send_as_streamer=group_data.get('send_as_streamer', False)
+                send_as_streamer=group_data.get('send_as_streamer', False),
+                allow_offline=group_data.get('allow_offline', False)
             )
             
             # Restore saved settings: active, allow_offline, send_as_streamer

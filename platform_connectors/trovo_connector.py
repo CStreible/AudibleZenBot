@@ -11,40 +11,102 @@ import requests
 import random
 import string
 import time
+import os
 from PyQt6.QtCore import QThread, pyqtSignal
+import threading
 
 
 class TrovoConnector(BasePlatformConnector):
     """Connector for Trovo chat"""
     def connect(self, channel_name):
+        """Connect to Trovo chat with thread-safe worker creation."""
         print(f"[TrovoConnector] connect() called for channel: {channel_name}")
-        if not self.access_token:
-            print("[TrovoConnector] No access token set. Cannot connect.")
-            return
-        
-        # Skip refresh if we just set a fresh token via OAuth
-        if self._skip_next_refresh:
-            print(f"[TrovoConnector] Skipping refresh, using fresh OAuth token")
-            self._skip_next_refresh = False
-        elif self.refresh_token and self.config:
-            # Try to refresh token if we have a refresh token, but skip if token was just saved recently
-            import time
-            trovo_config = self.config.get_platform_config('trovo')
-            token_timestamp = trovo_config.get('streamer_token_timestamp', 0)
-            age_seconds = time.time() - token_timestamp if token_timestamp else 999999
-            
-            if age_seconds > 10:  # Only refresh if token is older than 10 seconds
-                print(f"[TrovoConnector] Token is {age_seconds:.0f}s old, attempting refresh...")
-                self.refresh_access_token()
+        with self._worker_lock:
+            if not self.access_token:
+                print("[TrovoConnector] No access token set. Cannot connect.")
+                return
+
+            # Skip refresh if we just set a fresh token via OAuth
+            if self._skip_next_refresh:
+                print(f"[TrovoConnector] Skipping refresh, using fresh OAuth token")
+                self._skip_next_refresh = False
+            elif self.refresh_token and self.config:
+                # Try to refresh token if we have a refresh token, but skip if token was just saved recently
+                trovo_config = self.config.get_platform_config('trovo')
+                token_timestamp = trovo_config.get('streamer_token_timestamp', 0)
+                age_seconds = time.time() - token_timestamp if token_timestamp else 999999
+
+                if age_seconds > 10:  # Only refresh if token is older than 10 seconds
+                    print(f"[TrovoConnector] Token is {age_seconds:.0f}s old, attempting refresh...")
+                    self.refresh_access_token()
+                else:
+                    print(f"[TrovoConnector] Token is fresh ({age_seconds:.0f}s old), skipping refresh")
+
+            # If already connected and worker running for same channel, skip
+            try:
+                already_connected = getattr(self, 'connected', False)
+                same_channel = getattr(self, 'channel', None) == channel_name
+                worker_running = bool(getattr(self, 'worker', None) and getattr(self.worker, 'running', False))
+                if already_connected and same_channel and worker_running:
+                    try:
+                        print(f"[TrovoConnector][TRACE] connect: already connected for {channel_name} worker_id={id(self.worker)}")
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+
+            # Remember the channel
+            self.channel = channel_name
+
+            print(f"[TrovoConnector] Starting TrovoWorker for channel: {channel_name}")
+            # Pass config into worker so it can persist discovered channel/user IDs
+            self.worker = TrovoWorker(self.access_token, channel_name, config=self.config)
+            # Wire incoming messages. For bot connectors, if ChatManager attached
+            # a streamer_connector, forward incoming messages to the streamer's
+            # onMessageReceivedWithMetadata to avoid duplicate UI emissions.
+            try:
+                streamer_conn = getattr(self, 'streamer_connector', None)
+            except Exception:
+                streamer_conn = None
+
+            if self.is_bot_account and streamer_conn and hasattr(streamer_conn, 'onMessageReceivedWithMetadata'):
+                try:
+                    # Forward bot worker messages directly to streamer handler
+                    def _forward_to_streamer(u, m, md, _sc=streamer_conn):
+                        try:
+                            _sc.onMessageReceivedWithMetadata('trovo', u, m, md)
+                        except Exception:
+                            pass
+                    self.worker.message_signal.connect(_forward_to_streamer)
+                    print(f"[TrovoConnector][TRACE] Bot worker messages forwarded to streamer connector id={id(streamer_conn)}")
+                except Exception:
+                    # Fallback to local handler if forwarding fails
+                    try:
+                        self.worker.message_signal.connect(self.onMessageReceived)
+                    except Exception:
+                        pass
             else:
-                print(f"[TrovoConnector] Token is fresh ({age_seconds:.0f}s old), skipping refresh")
-        
-        print(f"[TrovoConnector] Starting TrovoWorker for channel: {channel_name}")
-        self.worker = TrovoWorker(self.access_token, channel_name)
-        self.worker.message_signal.connect(self.onMessageReceived)
-        self.worker.status_signal.connect(self.onStatusChanged)
-        self.worker.deletion_signal.connect(self.onMessageDeleted)
-        self.worker.start()
+                # Normal wiring: the connector handles its own incoming messages
+                try:
+                    self.worker.message_signal.connect(self.onMessageReceived)
+                except Exception:
+                    pass
+
+            try:
+                self.worker.status_signal.connect(self.onStatusChanged)
+            except Exception:
+                pass
+            try:
+                self.worker.deletion_signal.connect(self.onMessageDeleted)
+            except Exception:
+                pass
+            try:
+                self.worker.start()
+            except Exception as e:
+                print(f"[TrovoConnector] Error starting TrovoWorker: {e}")
+                self.worker = None
+                return
 
     # Hard-coded fallback Trovo access token
     DEFAULT_ACCESS_TOKEN = "892ea7e2c9ad3e719a6e977ab5d69275"
@@ -55,6 +117,8 @@ class TrovoConnector(BasePlatformConnector):
         super().__init__()
         self.worker_thread = None
         self.worker = None
+        # Lock to prevent concurrent worker creation/teardown
+        self._worker_lock = threading.Lock()
         self.config = config
         self.access_token = self.DEFAULT_ACCESS_TOKEN
         self.refresh_token = None
@@ -195,6 +259,30 @@ class TrovoConnector(BasePlatformConnector):
         print(f"[TrovoConnector] Message deleted by platform: {message_id}")
         self.message_deleted.emit('trovo', message_id)
 
+    def disconnect(self):
+        """Disconnect from Trovo and stop worker thread safely"""
+        with getattr(self, '_worker_lock', threading.Lock()):
+            try:
+                print(f"[TrovoConnector][TRACE] disconnect called: worker={getattr(self, 'worker', None)} connected={getattr(self, 'connected', False)}")
+            except Exception:
+                pass
+            if getattr(self, 'worker', None):
+                try:
+                    self.worker.stop()
+                except Exception as e:
+                    print(f"[TrovoConnector] Error stopping worker: {e}")
+                try:
+                    # Wait up to 5 seconds for the thread to finish
+                    self.worker.wait(5000)
+                except Exception:
+                    pass
+            self.connected = False
+            try:
+                self.connection_status.emit(False)
+            except Exception:
+                pass
+            self.worker = None
+
     def ban_user(self, username: str, user_id: str = None):
         """Ban a user from Trovo chat"""
         if not user_id or not self.access_token:
@@ -258,14 +346,23 @@ class TrovoConnector(BasePlatformConnector):
             return False
         
         try:
+            # Diagnostic: persistent send log entry (pre-send)
+            try:
+                log_dir = os.path.join(os.getcwd(), 'logs')
+                os.makedirs(log_dir, exist_ok=True)
+                with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                    sf.write(f"{time.time():.3f} platform=trovo used={'bot' if self.is_bot_account else 'streamer'} token_prefix={self.access_token[:12] if self.access_token else 'None'} preview={repr(message)[:200]}\n")
+            except Exception:
+                pass
+
             # Debug: Show which token is being used
             token_prefix = self.access_token[:12] if self.access_token else "None"
             print(f"[Trovo] send_message: Using token (first 12 chars): {token_prefix}...")
-            
+
             # Get config (don't reload to preserve in-memory token)
             trovo_config = self.config.get_platform_config('trovo')
             print(f"[Trovo] send_message: Config keys: {list(trovo_config.keys())}")
-            
+
             # Try multiple possible field names for channel_id
             channel_id = (
                 trovo_config.get('streamer_channel_id') or 
@@ -274,30 +371,39 @@ class TrovoConnector(BasePlatformConnector):
                 trovo_config.get('user_id')
             )
             print(f"[Trovo] send_message: channel_id from config = {channel_id}")
-            
+
             if not channel_id:
                 print(f"[Trovo] Cannot send message: No channel_id found in config. Available keys: {list(trovo_config.keys())}")
                 return False
-            
+
             headers = {
                 'Accept': 'application/json',
                 'Client-ID': self.CLIENT_ID,
                 'Authorization': f'OAuth {self.access_token}',
                 'Content-Type': 'application/json'
             }
-            
+
             data = {
                 'content': message,
                 'channel_id': str(channel_id)
             }
-            
+
             response = requests.post(
                 'https://open-api.trovo.live/openplatform/chat/send',
                 headers=headers,
                 json=data,
                 timeout=10
             )
-            
+
+            # Persist the HTTP response for offline diagnosis
+            try:
+                log_dir = os.path.join(os.getcwd(), 'logs')
+                os.makedirs(log_dir, exist_ok=True)
+                with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                    sf.write(f"{time.time():.3f} platform=trovo event=send_response status={response.status_code} used={'bot' if self.is_bot_account else 'streamer'} channel_id={channel_id} resp_preview={repr(response.text)[:200]}\n")
+            except Exception:
+                pass
+
             if response.status_code == 200:
                 print(f"[Trovo] Message sent successfully: {message[:50]}...")
                 return True
@@ -316,21 +422,49 @@ class TrovoConnector(BasePlatformConnector):
                     )
                     if response.status_code == 200:
                         print(f"[Trovo] Message sent successfully after token refresh: {message[:50]}...")
+                        try:
+                            log_dir = os.path.join(os.getcwd(), 'logs')
+                            os.makedirs(log_dir, exist_ok=True)
+                            with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                                sf.write(f"{time.time():.3f} platform=trovo event=send_response status={response.status_code} used={'bot' if self.is_bot_account else 'streamer'} channel_id={channel_id} resp_preview={repr(response.text)[:200]}\n")
+                        except Exception:
+                            pass
                         return True
                     else:
                         print(f"[Trovo] Failed after token refresh: {response.status_code} - {response.text}")
+                        try:
+                            log_dir = os.path.join(os.getcwd(), 'logs')
+                            os.makedirs(log_dir, exist_ok=True)
+                            with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                                sf.write(f"{time.time():.3f} platform=trovo event=send_response status={response.status_code} used={'bot' if self.is_bot_account else 'streamer'} channel_id={channel_id} resp_preview={repr(response.text)[:200]}\n")
+                        except Exception:
+                            pass
                         return False
                 else:
                     print(f"[Trovo] Failed to refresh token")
                     return False
             else:
                 print(f"[Trovo] Failed to send message: {response.status_code} - {response.text}")
+                try:
+                    log_dir = os.path.join(os.getcwd(), 'logs')
+                    os.makedirs(log_dir, exist_ok=True)
+                    with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                        sf.write(f"{time.time():.3f} platform=trovo event=send_response status={response.status_code} used={'bot' if self.is_bot_account else 'streamer'} channel_id={channel_id} resp_preview={repr(response.text)[:200]}\n")
+                except Exception:
+                    pass
                 return False
-                
+
         except Exception as e:
             print(f"[Trovo] Error sending message: {e}")
             import traceback
             traceback.print_exc()
+            try:
+                log_dir = os.path.join(os.getcwd(), 'logs')
+                os.makedirs(log_dir, exist_ok=True)
+                with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                    sf.write(f"{time.time():.3f} platform=trovo event=send_exception err={repr(str(e))} used={'bot' if self.is_bot_account else 'streamer'}\n")
+            except Exception:
+                pass
             return False
 
 
@@ -345,10 +479,12 @@ class TrovoWorker(QThread):
     TROVO_CHAT_WS_URL = "wss://open-chat.trovo.live/chat"
     TROVO_CHAT_TOKEN_URL = "https://open-api.trovo.live/openplatform/chat/token"
 
-    def __init__(self, access_token: str, channel: str = None):
+    def __init__(self, access_token: str, channel: str = None, config=None):
         super().__init__()
         self.access_token = access_token
         self.channel = channel
+        self.channel_name = channel
+        self.config = config
         self.running = False
         self.loop = None
         self.ws = None
@@ -405,6 +541,64 @@ class TrovoWorker(QThread):
                 if resp.status_code == 200:
                     data = resp.json()
                     return data.get("token")
+                # If access token expired, attempt a refresh (one retry)
+                if resp.status_code == 401:
+                    print(f"[TrovoWorker] Chat token request unauthorized (401). Trying refresh if available.")
+                    try:
+                        # Try to obtain refresh token from config
+                        refresh_token = None
+                        if self.config:
+                            trovo_cfg = self.config.get_platform_config('trovo')
+                            refresh_token = trovo_cfg.get('refresh_token')
+                        # If we have a refresh token, request a new access token
+                        if refresh_token:
+                            refresh_headers = {
+                                'Accept': 'application/json',
+                                'Client-ID': TrovoConnector.CLIENT_ID,
+                                'Content-Type': 'application/json'
+                            }
+                            refresh_data = {
+                                'client_secret': TrovoConnector.CLIENT_SECRET,
+                                'grant_type': 'refresh_token',
+                                'refresh_token': refresh_token
+                            }
+                            r = requests.post(
+                                'https://open-api.trovo.live/openplatform/refreshtoken',
+                                headers=refresh_headers,
+                                json=refresh_data,
+                                timeout=10
+                            )
+                            print(f"[TrovoWorker] Refresh response: {getattr(r, 'status_code', 'err')} {getattr(r, 'text', '')}")
+                            if r.status_code == 200:
+                                token_data = r.json()
+                                new_access = token_data.get('access_token')
+                                new_refresh = token_data.get('refresh_token')
+                                if new_access:
+                                    self.access_token = new_access
+                                if new_refresh:
+                                    # persist rotated refresh token
+                                    self.refresh_token = new_refresh
+                                if self.config:
+                                    # update config atomically
+                                    self.config.set_platform_config('trovo', 'access_token', self.access_token)
+                                    if getattr(self, 'refresh_token', None):
+                                        self.config.set_platform_config('trovo', 'refresh_token', self.refresh_token)
+                                    print("[TrovoWorker] Saved refreshed tokens via ConfigManager")
+                                # Retry chat token request once with new access token
+                                headers['Authorization'] = f"OAuth {self.access_token}"
+                                retry = requests.get(self.TROVO_CHAT_TOKEN_URL, headers=headers, timeout=10)
+                                print(f"[TrovoWorker] Retry response: {retry.status_code} {getattr(retry, 'text', '')}")
+                                if retry.status_code == 200:
+                                    data = retry.json()
+                                    return data.get('token')
+                                else:
+                                    print(f"[TrovoWorker] Retry failed: {retry.status_code} {getattr(retry, 'text', '')}")
+                                    return None
+                        print(f"[TrovoWorker] No refresh token available or refresh failed: {resp.text}")
+                        return None
+                    except Exception as e:
+                        print(f"[TrovoWorker] Exception during refresh attempt: {e}")
+                        return None
                 else:
                     print(f"[TrovoWorker] Failed to get chat token: {resp.status_code} {resp.text}")
                     return None

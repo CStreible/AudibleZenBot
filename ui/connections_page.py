@@ -287,7 +287,12 @@ class PlatformConnectionWidget(QWidget):
         streamer_col.addWidget(self.streamer_display_name)
 
         self.streamer_login_btn.setStyleSheet(
-            "background: #4A90E2; color: white; border-radius: 6px; font-size: 11pt; padding: 8px; width: 100%;"
+            "QPushButton {"
+            " background: #4A90E2; color: white; border-radius: 6px; font-size: 11pt; padding: 8px; width: 100%;"
+            "}"
+            "QPushButton:hover {"
+            " background: #6bb0ff;"
+            "}"
         )
         self.streamer_login_btn.setMinimumHeight(32)
         streamer_col.addWidget(self.streamer_login_btn)
@@ -307,7 +312,12 @@ class PlatformConnectionWidget(QWidget):
         bot_col.addWidget(self.bot_display_name)
 
         self.bot_login_btn.setStyleSheet(
-            "background: #7ED321; color: white; border-radius: 6px; font-size: 11pt; padding: 8px; width: 100%;"
+            "QPushButton {"
+            " background: #7ED321; color: white; border-radius: 6px; font-size: 11pt; padding: 8px; width: 100%;"
+            "}"
+            "QPushButton:hover {"
+            " background: #9fe84a;"
+            "}"
         )
         self.bot_login_btn.setMinimumHeight(32)
         bot_col.addWidget(self.bot_login_btn)
@@ -361,6 +371,20 @@ class PlatformConnectionWidget(QWidget):
         else:
             self.streamer_login_btn.clicked.connect(lambda: self.onAccountAction("streamer"))
             self.bot_login_btn.clicked.connect(lambda: self.onAccountAction("bot"))
+
+    def set_trovo_callback_url(self, url: str):
+        """Set the public Trovo callback URL (from ngrok) and display it in the widget."""
+        try:
+            self.trovo_ngrok_tunnel = url
+            if url:
+                # Show informational message in the widget's info area
+                self.info_text.append(f"[Ngrok] Trovo callback URL: {url}")
+                self.status_label.setText("Trovo callback URL available (copy from log)")
+            else:
+                self.info_text.append("[Ngrok] Trovo callback URL cleared")
+                self.status_label.setText("")
+        except Exception as e:
+            print(f"[PlatformConnectionWidget] Error setting trovo callback URL: {e}")
 
         # Main-thread executor for scheduling UI updates from worker threads
         try:
@@ -1889,21 +1913,75 @@ class PlatformConnectionWidget(QWidget):
             def log_message(self, format, *args):
                 pass
 
-        server = HTTPServer(('localhost', 8887), CallbackHandler)
-        server_thread = threading.Thread(target=lambda: server.handle_request())
-        server_thread.daemon = True
-        server_thread.start()
-
-        print("[Trovo] Started local OAuth callback server on port 8887")
+        # If button currently shows 'Logout', treat this as a logout action
+        try:
+            if account_type == 'streamer':
+                btn = self.streamer_login_btn
+            else:
+                btn = self.bot_login_btn
+            if btn and btn.text() != 'Login':
+                # Perform logout/disconnect for Trovo account
+                print(f"[Trovo] Logout requested for {account_type}, disconnecting...")
+                if self.chat_manager:
+                    self.chat_manager.disconnectPlatform('trovo')
+                from core.config import ConfigManager
+                config = ConfigManager()
+                if account_type == 'streamer':
+                    config.set_platform_config('trovo', 'streamer_logged_in', False)
+                    config.set_platform_config('trovo', 'streamer_token', '')
+                    config.set_platform_config('trovo', 'streamer_refresh_token', '')
+                    config.set_platform_config('trovo', 'streamer_user_id', '')
+                    try:
+                        self.streamer_display_name.setText("")
+                        self.streamer_login_btn.setText('Login')
+                        self.status_label.setText('Streamer account logged out.')
+                    except Exception:
+                        pass
+                else:
+                    config.set_platform_config('trovo', 'bot_logged_in', False)
+                    config.set_platform_config('trovo', 'bot_token', '')
+                    config.set_platform_config('trovo', 'bot_refresh_token', '')
+                    config.set_platform_config('trovo', 'bot_user_id', '')
+                    try:
+                        self.bot_display_name.setText("")
+                        self.bot_login_btn.setText('Login')
+                        self.status_label.setText('Bot account logged out.')
+                    except Exception:
+                        pass
+                return
+        except Exception:
+            pass
 
         TROVO_CLIENT_ID = "b239c1cc698e04e93a164df321d142b3"
-        TROVO_REDIRECT_URI = "http://localhost:8887/callback"
+        # Use configured redirect if available (ngrok), otherwise default to localhost callback
+        TROVO_REDIRECT_URI = getattr(self, '_trovo_redirect_uri', "https://mistilled-declan-unendable.ngrok-free.dev/callback")
+        # If redirect URI points to localhost, start a local callback server to capture code
+        local_callback_server = None
+        parsed_redirect = TROVO_REDIRECT_URI
+        try:
+            from urllib.parse import urlparse
+            pr = urlparse(TROVO_REDIRECT_URI)
+            if pr.hostname in (None, ''):
+                pr = None
+        except Exception:
+            pr = None
+        if pr and pr.hostname and 'localhost' in pr.hostname:
+            # Extract port, default to 8887 if not present
+            port = pr.port or 8887
+            server = HTTPServer(('localhost', port), CallbackHandler)
+            server_thread = threading.Thread(target=lambda: server.handle_request())
+            server_thread.daemon = True
+            server_thread.start()
+            local_callback_server = server
+            print(f"[Trovo] Started local OAuth callback server on port {port}")
+        # Use Trovo's official OAuth scopes
         scopes = [
-            "user_details_self",
+            "chat_connect",
+            "chat_send_self",
+            "manage_messages",
             "channel_details_self",
-            "send_message",
-            "manage_channel",
-            "manage_messages"
+            "channel_update_self",
+            "user_details_self",
         ]
         scope_string = " ".join(scopes)
         state = secrets.token_urlsafe(16)
@@ -1914,21 +1992,92 @@ class PlatformConnectionWidget(QWidget):
             "scope": scope_string,
             "state": state
         }
-        oauth_url = f"https://open-api.trovo.live/openplatform/oauth2/authorize?{urlencode(params)}"
+        # Use the Trovo public login page for authorization (browser UI),
+        # then exchange the returned code against the API token endpoint.
+        oauth_url = f"https://open.trovo.live/page/login.html?{urlencode(params)}"
         print(f"[Trovo] Starting OAuth with scopes: {scope_string}")
         print(f"[Trovo] Redirect URI: {TROVO_REDIRECT_URI}")
         webbrowser.open(oauth_url)
-        print("[Trovo] Waiting for OAuth callback...")
-
-        # Wait for callback (with timeout)
-        if callback_received.wait(timeout=120):
-            server.server_close()
-            if 'code' in auth_code_container:
-                auth_code = auth_code_container['code']
-                print(f"[Trovo] Authorization code received: {auth_code[:20]}...")
-                self.exchangeCodeForToken(account_type, auth_code)
+        # If we started a local callback server, wait for the code; otherwise, for non-local redirects
+        # start the shared Flask callback server + ngrok automatically and wait for the code.
+        if local_callback_server:
+            print("[Trovo] Waiting for OAuth callback on local server...")
+            if callback_received.wait(timeout=120):
+                try:
+                    local_callback_server.server_close()
+                except Exception:
+                    pass
+                if 'code' in auth_code_container:
+                    auth_code = auth_code_container['code']
+                    print(f"[Trovo] Authorization code received: {auth_code[:20]}...")
+                    self.exchangeCodeForToken(account_type, auth_code)
+            else:
+                print("[Trovo] OAuth callback not received in time on local server.")
         else:
-            print("[Trovo] OAuth callback not received in time.")
+            # Non-local redirect (e.g., ngrok) - attempt automated capture
+            print("[Trovo] Opened authorization URL. Using non-local redirect (ngrok). Attempting automated capture...")
+            try:
+                # Import shared Flask callback server (it exposes last_code_event/last_code_container)
+                import platform_connectors.trovo_callback_server as tcs
+                # Start Flask callback server in this process if not already running
+                if not hasattr(self, '_trovo_callback_thread') or not getattr(self, '_trovo_callback_thread').is_alive():
+                    def _run_callback():
+                        try:
+                            tcs.app.run(host='0.0.0.0', port=8889, debug=False, use_reloader=False)
+                        except Exception as e:
+                            print(f"[Trovo] Callback server error: {e}")
+
+                    import threading
+                    thr = threading.Thread(target=_run_callback, daemon=True)
+                    thr.start()
+                    self._trovo_callback_thread = thr
+                    print("[Trovo] Started shared Flask callback server on port 8889 (daemon thread)")
+
+                # Ensure ngrok tunnel is running and get public URL
+                public_url = None
+                try:
+                    if hasattr(self, 'ngrok_manager') and self.ngrok_manager and self.ngrok_manager.is_available():
+                        # Try to get existing tunnel first
+                        public_url = self.ngrok_manager.get_tunnel_url(8889)
+                        if not public_url:
+                            public_url = self.ngrok_manager.start_tunnel(8889, protocol='http', name='trovo_callback')
+                        if public_url:
+                            print(f"[Trovo] Ngrok public URL for callback: {public_url}")
+                            # Surface URL in UI
+                            try:
+                                if 'trovo' in self.platform_widgets:
+                                    self.platform_widgets['trovo'].set_trovo_callback_url(public_url)
+                            except Exception:
+                                pass
+                except Exception as e:
+                    print(f"[Trovo] Error starting/querying ngrok tunnel: {e}")
+
+                # Wait for the callback server to receive the code via the shared event
+                print("[Trovo] Waiting for authorization code via callback server (120s timeout)...")
+                if tcs.last_code_event.wait(timeout=120):
+                    auth_code = tcs.last_code_container.get('code')
+                    # Clear the event for future attempts
+                    try:
+                        tcs.last_code_event.clear()
+                    except Exception:
+                        pass
+                    if auth_code:
+                        print(f"[Trovo] Authorization code received automatically: {auth_code[:20]}...")
+                        self.exchangeCodeForToken(account_type, auth_code)
+                        return
+                else:
+                    print("[Trovo] Authorization code not received via callback server in time.")
+            except Exception as e:
+                print(f"[Trovo] Automated capture failed: {e}")
+
+            # Fallback: Offer manual paste
+            print("[Trovo] Falling back to manual paste of authorization code.")
+            from PyQt6.QtWidgets import QInputDialog
+            code, ok = QInputDialog.getText(self, "Trovo Authorization", "Paste the authorization code from the callback URL:")
+            if ok and code:
+                self.exchangeCodeForToken(account_type, code.strip())
+            else:
+                print("[Trovo] No authorization code provided by user.")
 
     def append_status_message(self, message):
         """Append a date and time stamped message to the info_text log box."""
@@ -2601,18 +2750,17 @@ class PlatformConnectionWidget(QWidget):
             if hasattr(self, 'info_text'):
                 self.append_status_message(f"[{account_type.title()}] ✓ Successfully logged in as {display_name} (@{username})")
                 self.append_status_message(f"[{account_type.title()}] Connecting bot to {getattr(self, 'platform_name', self.platform_id)}...")
-            # Get chat_manager from parent window and connect bot
-            # main_window = self.parent()
-            # for _ in range(3):
-            #     if hasattr(main_window, 'parent'):
-            #         main_window = main_window.parent()
-            # if hasattr(main_window, 'chat_manager'):
-            #     success = main_window.chat_manager.connectBotAccount(self.platform_id, username, token, refresh_token)
-            #     if hasattr(self, 'info_text'):
-            #         if success:
-            #             self.info_text.append(f"[{account_type.title()}] ✓ Bot connected to {getattr(self, 'platform_name', self.platform_id)}")
-            #         else:
-            #             self.info_text.append(f"[{account_type.title()}] ⚠ Failed to connect bot")
+            # Connect bot account immediately using chat_manager if available
+            try:
+                if hasattr(self, 'chat_manager') and self.chat_manager:
+                    success = self.chat_manager.connectBotAccount(self.platform_id, username, token, refresh_token)
+                    if hasattr(self, 'info_text'):
+                        if success:
+                            self.info_text.append(f"[{account_type.title()}] ✓ Bot connected to {getattr(self, 'platform_name', self.platform_id)}")
+                        else:
+                            self.info_text.append(f"[{account_type.title()}] ⚠ Failed to connect bot")
+            except Exception as e:
+                print(f"[ConnectionsPage] Error connecting bot account: {e}")
     
     def onOAuthFailed(self, account_type, error):
         """Handle failed OAuth authentication"""
@@ -3089,6 +3237,16 @@ class ConnectionsPage(QWidget):
         # Update all existing platform widgets
         for widget in self.platform_widgets.values():
             widget.ngrok_manager = value;
+        # If a trovo ngrok tunnel was previously created at startup, surface it
+        try:
+            # Try to read public URL from ngrok manager for port 8889
+            if value and hasattr(value, 'get_tunnel_url'):
+                public = value.get_tunnel_url(8889)
+                if public and 'trovo' in self.platform_widgets:
+                    self.platform_widgets['trovo'].set_trovo_callback_url(public)
+                    self.trovo_ngrok_tunnel = public
+        except Exception:
+            pass
         
     
     def onBotConnectionChanged(self, platform_id, connected, username):

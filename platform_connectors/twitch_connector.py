@@ -110,14 +110,18 @@ class TwitchConnector(BasePlatformConnector):
     
     def set_token(self, token: str):
         """Set OAuth token for authentication"""
-        section = 'twitch_bot' if self.is_bot_account else 'twitch_streamer'
+        section = 'twitch'  # canonical platform section
         token_prefix = token[:20] if token else "None"
         print(f"[TwitchConnector] set_token called with: {token_prefix}...")
         if token:
             self.oauth_token = token
             print(f"[TwitchConnector] Token updated to: {self.oauth_token[:20]}...")
             if self.config:
-                self.config.set_platform_config(section, 'oauth_token', token)
+                # Persist token under the canonical 'twitch' platform keys.
+                if self.is_bot_account:
+                    self.config.set_platform_config('twitch', 'bot_token', token)
+                else:
+                    self.config.set_platform_config('twitch', 'oauth_token', token)
         else:
             # If config is blank, use default
             config_token = self.config.get_platform_config(section).get('oauth_token', '') if self.config else ''
@@ -125,11 +129,13 @@ class TwitchConnector(BasePlatformConnector):
                 self.oauth_token = self.DEFAULT_ACCESS_TOKEN
 
     def set_username(self, username: str):
-        section = 'twitch_bot' if self.is_bot_account else 'twitch_streamer'
         self.username = username
-        # Persist username to config for correct account type
+        # Persist username to config for correct account type (canonical keys)
         if self.config:
-            self.config.set_platform_config(section, 'username', username)
+            if self.is_bot_account:
+                self.config.set_platform_config('twitch', 'bot_username', username)
+            else:
+                self.config.set_platform_config('twitch', 'username', username)
         # Emit a signal to update the UI if available (for bot or streamer)
         if hasattr(self, 'connection_status'):
             # True means connected, triggers UI update in ConnectionsPage
@@ -352,6 +358,64 @@ class TwitchConnector(BasePlatformConnector):
         """
         if not self.refresh_token:
             return None
+
+        # Defensive: ensure client creds present
+        if not self.client_id or not self.client_secret:
+            print("[TwitchConnector] Missing client_id or client_secret; cannot refresh token")
+            return False
+
+        try:
+            response = requests.post(
+                'https://id.twitch.tv/oauth2/token',
+                data={
+                    'client_id': self.client_id,
+                    'client_secret': self.client_secret,
+                    'grant_type': 'refresh_token',
+                    'refresh_token': self.refresh_token
+                },
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                # Update in-memory tokens
+                self.oauth_token = data.get('access_token', self.oauth_token)
+                new_refresh = data.get('refresh_token')
+                if new_refresh:
+                    self.refresh_token = new_refresh
+
+                print("[TwitchConnector] Token refreshed successfully")
+
+                # Persist rotated tokens to config for both bot and streamer keys
+                try:
+                    if self.config:
+                        # Primary canonical keys used elsewhere in the app
+                        if self.is_bot_account:
+                            self.config.set_platform_config('twitch', 'bot_token', self.oauth_token)
+                            self.config.set_platform_config('twitch', 'bot_refresh_token', self.refresh_token)
+                        else:
+                            self.config.set_platform_config('twitch', 'oauth_token', self.oauth_token)
+                            self.config.set_platform_config('twitch', 'streamer_refresh_token', self.refresh_token)
+
+                        # No legacy compatibility writes; persist canonical twitch platform keys only
+                except Exception as e:
+                    print(f"[TwitchConnector] Warning: failed to persist refreshed token: {e}")
+
+                return True
+            elif response.status_code == 400:
+                # Invalid refresh token (common when rotation happened elsewhere)
+                print("⚠️ Token refresh failed: Invalid refresh token")
+                print(f"[DEBUG] Refresh token used: {self.refresh_token}")
+                print(f"Response: {response.text}")
+                return False
+            else:
+                print(f"[TwitchConnector] Token refresh failed: {response.status_code}")
+                print(f"Response: {response.text}")
+                return False
+
+        except Exception as e:
+            print(f"[TwitchConnector] Error refreshing token: {e}")
+            return False
 
     def _on_eventsub_reauth_requested(self, oauth_url: str):
         """Handle EventSub worker request to re-authorize the app.
@@ -1116,12 +1180,17 @@ class TwitchWorker(QThread):
                     if refresh_result:
                         # Save new tokens and username to config if available
                         if hasattr(self.connector, 'config') and self.connector.config:
-                            section = 'twitch_bot' if getattr(self.connector, 'is_bot_account', False) else 'twitch_streamer'
-                            self.connector.config.set_platform_config(section, 'oauth_token', self.connector.oauth_token)
-                            self.connector.config.set_platform_config(section, 'refresh_token', self.connector.refresh_token)
-                            # Also persist username if available
-                            if getattr(self.connector, 'username', None):
-                                self.connector.config.set_platform_config(section, 'username', self.connector.username)
+                            # Persist under canonical twitch platform keys
+                            if getattr(self.connector, 'is_bot_account', False):
+                                self.connector.config.set_platform_config('twitch', 'bot_token', self.connector.oauth_token)
+                                self.connector.config.set_platform_config('twitch', 'bot_refresh_token', self.connector.refresh_token)
+                                if getattr(self.connector, 'username', None):
+                                    self.connector.config.set_platform_config('twitch', 'bot_username', self.connector.username)
+                            else:
+                                self.connector.config.set_platform_config('twitch', 'oauth_token', self.connector.oauth_token)
+                                self.connector.config.set_platform_config('twitch', 'streamer_refresh_token', self.connector.refresh_token)
+                                if getattr(self.connector, 'username', None):
+                                    self.connector.config.set_platform_config('twitch', 'username', self.connector.username)
                             print("[TwitchWorker] Saved refreshed tokens and username to config.")
                         print("[TwitchWorker] Token refreshed. Reconnecting...")
                         # Give a small grace window to flush any recently parsed messages

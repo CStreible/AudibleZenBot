@@ -47,6 +47,7 @@ from core.config import ConfigManager
 from core.ngrok_manager import NgrokManager
 from core.overlay_server import OverlayServer
 from core.logger import get_log_manager
+from urllib.parse import urlparse
 
 
 class SidebarButton(QPushButton):
@@ -120,6 +121,11 @@ class MainWindow(QMainWindow):
         # Initialize logging system
         self.log_manager = get_log_manager(self.config)
         print("[Main] Log manager initialized")
+        # Ensure Trovo callback server and ngrok tunnel are started if needed
+        try:
+            self._start_trovo_support_servers()
+        except Exception as e:
+            print(f"[Main] Failed to start trovo support servers: {e}")
         
         # Setup UI
         self.initUI()
@@ -345,6 +351,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'ngrok_manager') and self.ngrok_manager:
             print("\n🛑 Shutting down ngrok tunnels...")
             self.ngrok_manager.cleanup()
+
+        # Trovo callback server thread is daemon; no explicit stop required.
         
         # Cleanup logging system
         if hasattr(self, 'log_manager') and self.log_manager:
@@ -352,6 +360,73 @@ class MainWindow(QMainWindow):
             self.log_manager.cleanup()
         
         event.accept()
+
+    def _start_trovo_support_servers(self):
+        """Start local Trovo callback Flask server and ngrok tunnel when configured.
+
+        If the configured Trovo redirect URI is non-local (e.g., an ngrok domain), ensure
+        a local callback server is running on port 8889 and start an ngrok tunnel to it
+        so Trovo can redirect the authorization response.
+        """
+        try:
+            trovo_cfg = self.config.get_platform_config('trovo') if self.config else {}
+            # Allow override via attribute if present (connections page may set this)
+            configured_redirect = trovo_cfg.get('redirect_uri') or getattr(self, '_trovo_redirect_uri', None)
+            print(f"[Main][TrovoStartup] Resolved trovo redirect_uri: {configured_redirect!r}")
+            if not configured_redirect:
+                print("[Main][TrovoStartup] No Trovo redirect configured; skipping callback/ngrok startup")
+                # Nothing configured; skip automatic server start
+                return
+
+            parsed = urlparse(configured_redirect)
+            hostname = parsed.hostname or ''
+            if hostname and 'localhost' in hostname:
+                print("[Main][TrovoStartup] Redirect uses localhost; will start local callback only (no ngrok)")
+            else:
+                print("[Main][TrovoStartup] Redirect uses non-local host; will start local callback and attempt ngrok tunnel")
+
+            # If redirect is not localhost, start local Flask callback and ngrok tunnel
+            if hostname and 'localhost' not in hostname:
+                try:
+                    import threading
+                    from platform_connectors import trovo_callback_server
+
+                    def run_callback():
+                        try:
+                            # Bind to all interfaces so ngrok can forward
+                            trovo_callback_server.app.run(host='0.0.0.0', port=8889, debug=False, use_reloader=False)
+                        except Exception as e:
+                            print(f"[Trovo Callback] Server error: {e}")
+
+                    t = threading.Thread(target=run_callback, daemon=True)
+                    t.start()
+                    self.trovo_callback_thread = t
+                    print("[Main] Trovo callback server started on port 8889 (daemon thread)")
+                except Exception as e:
+                    print(f"[Main] Failed to start Trovo callback server: {e}")
+
+                # Start ngrok tunnel if available
+                try:
+                    if hasattr(self, 'ngrok_manager') and self.ngrok_manager and self.ngrok_manager.is_available():
+                        public = self.ngrok_manager.start_tunnel(8889, protocol='http', name='trovo_callback')
+                        if public:
+                            print(f"[Main] Ngrok tunnel for Trovo callback: {public}")
+                            # Surface public URL to Connections UI if available
+                            try:
+                                if hasattr(self, 'connections_page') and self.connections_page:
+                                    if hasattr(self.connections_page, 'set_trovo_callback_url'):
+                                        self.connections_page.set_trovo_callback_url(public)
+                                    elif 'trovo' in getattr(self.connections_page, 'platform_widgets', {}):
+                                        self.connections_page.platform_widgets['trovo'].set_trovo_callback_url(public)
+                            except Exception as e:
+                                print(f"[Main] Failed to update ConnectionsPage with trovo ngrok URL: {e}")
+                        else:
+                            print("[Main] Ngrok manager returned no public URL for port 8889")
+                except Exception as e:
+                    print(f"[Main] Failed to start ngrok tunnel for Trovo callback: {e}")
+
+        except Exception as e:
+            print(f"[Main] Error while setting up Trovo support servers: {e}")
 
 
 def main():
