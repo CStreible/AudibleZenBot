@@ -36,7 +36,8 @@ class VariableRowWidget(QWidget):
         top_row.addWidget(self.name_edit, 1)
 
         from ui.ui_elements import ToggleSwitch
-        self.init_radio = ToggleSwitch(width=40, height=20)
+        # Use a smaller toggle for the variables tab (~50% size)
+        self.init_radio = ToggleSwitch(width=20, height=10)
         self.init_radio.setChecked(initialize)
         top_row.addWidget(self.init_radio, 0, Qt.AlignmentFlag.AlignVCenter)
         init_label = QLabel('Initialize?')
