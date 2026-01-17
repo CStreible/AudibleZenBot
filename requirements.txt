@@ -12,5 +12,6 @@ cloudscraper>=1.2.71
 Flask==3.0.0
 flask-cors==4.0.0
 opencv-python==4.9.0.80
+numpy<2
 WMI==1.5.1
-pywin32==306
+pywin32==311

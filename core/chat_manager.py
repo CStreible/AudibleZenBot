@@ -4,6 +4,7 @@ Chat Manager - Manages connections and messages from all platforms
 
 import asyncio
 import time
+import os
 from typing import Dict, Optional
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 
@@ -58,6 +59,17 @@ class ChatManager(QObject):
         self.bot_connectors: Dict[str, object] = {}
         # Recent incoming message cache to suppress duplicates (platform, user, msg_lower, ts)
         self._recent_incoming = []
+
+        # Ensure diagnostic emitted log exists so we can verify emissions immediately
+        try:
+            log_dir = os.path.join(os.getcwd(), 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+            diag_file = os.path.join(log_dir, 'chatmanager_emitted.log')
+            # Touch the file so external checks can find it even if no messages emitted yet
+            with open(diag_file, 'a', encoding='utf-8', errors='replace'):
+                pass
+        except Exception:
+            pass
         
 
         

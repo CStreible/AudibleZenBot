@@ -65,6 +65,8 @@ class TwitchConnector(BasePlatformConnector):
         self.worker = None
         self.eventsub_worker_thread = None
         self.eventsub_worker = None
+        # Track last worker creation time to avoid rapid duplicate workers
+        self._last_worker_created = 0.0
         self.config = config
         self.is_bot_account = is_bot_account
         self.oauth_token = self.DEFAULT_ACCESS_TOKEN
@@ -89,6 +91,13 @@ class TwitchConnector(BasePlatformConnector):
                 self.username = username
         # Recent local echoes to suppress duplicate incoming IRC echo
         self._recent_local_echoes = []  # list of (message_lower, timestamp)
+        # Recent message_id tracking to dedupe messages across workers
+        # Maps message_id -> timestamp
+        self._recent_message_ids = {}
+        # Time window (seconds) to consider a message_id a duplicate
+        self._recent_message_window = 30.0
+        # Max entries to keep in the recent ids map to avoid unbounded growth
+        self._max_recent_message_ids = 10000
         try:
             print(f"[TwitchConnector][TRACE] __init__: id={id(self)} is_bot={self.is_bot_account} username={self.username}")
         except Exception:
@@ -183,6 +192,67 @@ class TwitchConnector(BasePlatformConnector):
         # Use bot_username if set (for bot accounts), otherwise use username (for streamer)
         nick_for_auth = getattr(self, 'bot_username', username)
         print(f"[TwitchConnector] Connecting: channel={username}, nick={nick_for_auth}, has_bot_username={hasattr(self, 'bot_username')}")
+
+        # Connector-level dedupe: avoid creating multiple workers in quick succession
+        try:
+            now = time.time()
+            if now - getattr(self, '_last_worker_created', 0) < 1.0:
+                print(f"[TwitchConnector][TRACE] Skipping worker creation; last created {now - self._last_worker_created:.3f}s ago")
+                return
+        except Exception:
+            pass
+
+        # If a worker object already exists but is not running, prefer to reuse it
+        # by wiring it up to a fresh QThread and starting it again rather than
+        # allocating a new worker object. This helps preserve any persistent
+        # state on the worker and reduces duplicate worker instances during
+        # reconnect handoffs.
+        try:
+            existing_worker = getattr(self, 'worker', None)
+            if existing_worker and not getattr(existing_worker, 'running', False):
+                try:
+                    print(f"[TwitchConnector][TRACE] Reusing existing worker object id={id(existing_worker)} for connector_id={id(self)}")
+                except Exception:
+                    pass
+                # Ensure connector reference and nick are up-to-date
+                try:
+                    existing_worker.connector = self
+                except Exception:
+                    pass
+
+                # Create a fresh thread and move the existing worker into it
+                self.worker_thread = QThread()
+                existing_worker.moveToThread(self.worker_thread)
+
+                # Wire signals similar to fresh creation
+                if not self.is_bot_account:
+                    existing_worker.message_signal.connect(self.onMessageReceived)
+                    try:
+                        existing_worker.set_metadata_callback(self.onMessageReceivedWithMetadata)
+                    except Exception:
+                        pass
+                    existing_worker.set_deletion_callback(self.onMessageDeleted)
+                else:
+                    print(f"[TwitchConnector] Bot account: skipping incoming message wiring for {nick_for_auth}")
+
+                existing_worker.status_signal.connect(self.onStatusChanged)
+                existing_worker.error_signal.connect(self.onError)
+
+                self.worker_thread.started.connect(existing_worker.run)
+                self.worker_thread.start()
+
+                try:
+                    self._last_worker_created = time.time()
+                    print(f"[TwitchConnector][TRACE] Reused worker started timestamp set to {self._last_worker_created:.3f}")
+                except Exception:
+                    pass
+
+                # Keep self.worker pointing at the reused worker
+                self.worker = existing_worker
+                return
+        except Exception:
+            pass
+
         self.worker = TwitchWorker(
             username,  # Channel to join
             self.oauth_token,
@@ -244,6 +314,11 @@ class TwitchConnector(BasePlatformConnector):
         
         self.worker_thread.started.connect(self.worker.run)
         self.worker_thread.start()
+        try:
+            self._last_worker_created = time.time()
+            print(f"[TwitchConnector][TRACE] Worker started timestamp set to {self._last_worker_created:.3f}")
+        except Exception:
+            pass
         
         # Only start EventSub worker for streamer account
         if not self.is_bot_account:
@@ -595,6 +670,32 @@ class TwitchConnector(BasePlatformConnector):
                     return
             # prune old entries
             self._recent_local_echoes = [(m, t) for (m, t) in self._recent_local_echoes if (now - t) < 10.0]
+            # Connector-level dedupe by message_id to avoid duplicate delivery
+            try:
+                msg_id = None
+                if metadata:
+                    msg_id = metadata.get('message_id') or metadata.get('id')
+                if msg_id:
+                    prev_ts = self._recent_message_ids.get(msg_id)
+                    if prev_ts and (now - prev_ts) < self._recent_message_window:
+                        print(f"[TwitchConnector][TRACE] Suppressing duplicate message_id={msg_id} age={now-prev_ts:.3f}s")
+                        return
+                    # record this id
+                    try:
+                        self._recent_message_ids[msg_id] = now
+                        # prune oldest entries if map grows too large
+                        if len(self._recent_message_ids) > self._max_recent_message_ids:
+                            # remove oldest 10%
+                            items = sorted(self._recent_message_ids.items(), key=lambda kv: kv[1])
+                            for k, _ in items[: max(1, len(items)//10)]:
+                                try:
+                                    del self._recent_message_ids[k]
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         except Exception:
             pass
         print(f"[TwitchConnector] onMessageReceivedWithMetadata: {username}, {message}, {metadata}")
@@ -775,6 +876,8 @@ class TwitchWorker(QThread):
         # Used to allow a short grace period to flush parsed messages before reconnecting
         self._last_parsed_time = None
         self.connection_timeout = 300  # 5 minutes
+        # Guard to avoid printing authentication success multiple times per worker
+        self._auth_printed = False
     
     def run(self):
         """Run the Twitch IRC connection"""
@@ -979,9 +1082,16 @@ class TwitchWorker(QThread):
                 await self.ws.send('PONG :tmi.twitch.tv')
             return
         
-        # Log successful authentication
-        if '001' in raw_message or 'Welcome' in raw_message:
-            print("Twitch authentication successful!")
+        # Log successful authentication (match numeric 001 code only)
+        parts = raw_message.split()
+        if len(parts) > 1 and parts[1] == '001':
+            # Print exactly once per worker instance to avoid duplicate stdout lines
+            if not getattr(self, '_auth_printed', False):
+                try:
+                    print(f"Twitch authentication successful for {self.bot_nick}")
+                except Exception:
+                    print("Twitch authentication successful!")
+                self._auth_printed = True
             return
         
         # Log join confirmation
@@ -1102,6 +1212,15 @@ class TwitchWorker(QThread):
                                 except Exception:
                                     pass
                             else:
+                                # Durable log: record that this worker is invoking the metadata callback
+                                try:
+                                    log_dir = os.path.join(os.getcwd(), 'logs')
+                                    os.makedirs(log_dir, exist_ok=True)
+                                    fname = os.path.join(log_dir, 'connector_incoming.log')
+                                    with open(fname, 'a', encoding='utf-8', errors='replace') as f:
+                                        f.write(f"{time.time():.3f} worker={id(self)} connector_id={id(getattr(self, 'connector', None))} username={username} preview={repr(message)[:200]} metadata_keys={list(metadata.keys())}\n")
+                                except Exception:
+                                    pass
                                 self._metadata_callback(username, message, metadata)
                         except Exception as e:
                             print(f"[TwitchWorker] [ERROR] Error calling metadata callback: {e}")
@@ -1118,6 +1237,15 @@ class TwitchWorker(QThread):
                                 if hasattr(conn, 'onMessageReceivedWithMetadata') and not getattr(conn, 'is_bot_account', False):
                                     print(f"[TwitchWorker][TRACE] Fallback: invoking connector.onMessageReceivedWithMetadata for connector_id={id(conn)}")
                                     try:
+                                        # Durable log for fallback invocation
+                                        try:
+                                            log_dir = os.path.join(os.getcwd(), 'logs')
+                                            os.makedirs(log_dir, exist_ok=True)
+                                            fname = os.path.join(log_dir, 'connector_incoming.log')
+                                            with open(fname, 'a', encoding='utf-8', errors='replace') as f:
+                                                f.write(f"{time.time():.3f} worker={id(self)} fallback_connector_id={id(conn)} username={username} preview={repr(message)[:200]} metadata_keys={list(metadata.keys())}\n")
+                                        except Exception:
+                                            pass
                                         conn.onMessageReceivedWithMetadata(username, message, metadata)
                                     except Exception as e:
                                         print(f"[TwitchWorker] ✗ Error in fallback connector callback: {e}")
@@ -1364,14 +1492,16 @@ class TwitchWorker(QThread):
             # Simple: :username!username@username.tmi.twitch.tv PRIVMSG #channel :message
             # With tags: @badge-info=;badges=;color=#... :username!username@username.tmi.twitch.tv PRIVMSG #channel :message
             
-            # Try with tags first - use more flexible pattern to handle usernames with underscores, hyphens, etc.
-            # More permissive match: capture anything up to '!' as username
-            # and accept any non-space channel name after PRIVMSG
-            match = re.search(r':([^!]+)!.*?PRIVMSG\s+[^\s]+\s+:(.+)', raw_message)
+            # Try with tags first - more permissive:
+            # - capture anything up to '!' as username (allows unicode/symbols)
+            # - accept any non-space channel name after PRIVMSG
+            # - capture the remainder after the first ':' following PRIVMSG as the message
+            match = re.search(r':([^!]+)!.*?PRIVMSG\s+([^\s]+)\s+:(.+)', raw_message)
 
             if match:
                 username = match.group(1)
-                message = match.group(2).strip()
+                # group(2) is the channel, group(3) is the message
+                message = match.group(3).strip()
                 print(f"[Twitch Parser] [OK] Parsed: {username}: {message[:50]}")
                 try:
                     import time, os
@@ -1384,41 +1514,38 @@ class TwitchWorker(QThread):
                     pass
                 return username, message, metadata
             
-            # Try simpler pattern
+            # Try simpler fallback pattern (handle odd tag ordering or missing parts)
             if 'PRIVMSG' in raw_message and ':' in raw_message:
-                parts = raw_message.split('PRIVMSG')
-                if len(parts) >= 2:
-                    # Extract username from first part - more flexible pattern
-                    username_match = re.search(r':([a-zA-Z0-9_]+)!', parts[0])
-                    if username_match:
+                try:
+                    # Capture channel and message after PRIVMSG
+                    m = re.search(r'PRIVMSG\s+([^\s]+)\s+:(.+)', raw_message)
+                    username_match = re.search(r':([^!]+)!', raw_message)
+                    if m and username_match:
                         username = username_match.group(1)
-                        # Extract message from second part (after the second :)
-                        message_parts = parts[1].split(':', 1)
-                        if len(message_parts) >= 2:
-                            message = message_parts[1].strip()
-                            print(f"[Twitch Parser] [OK] Parsed (alt): {username}: {message[:50]}")
-                            try:
-                                import time, os
-                                log_dir = os.path.join(os.getcwd(), 'logs')
-                                os.makedirs(log_dir, exist_ok=True)
-                                fname = os.path.join(log_dir, f"parsed_irc_{self.channel}.log")
-                                with open(fname, 'a', encoding='utf-8', errors='replace') as f:
-                                    f.write(f"{time.time():.3f} PARSED_ALT worker={id(self)} username={username!r} preview={message[:200]!r}\n")
-                            except Exception:
-                                pass
-                            return username, message, metadata
+                        message = m.group(2).strip()
+                        print(f"[Twitch Parser] [OK] Parsed (alt): {username}: {message[:50]}")
+                        try:
+                            import time, os
+                            log_dir = os.path.join(os.getcwd(), 'logs')
+                            os.makedirs(log_dir, exist_ok=True)
+                            fname = os.path.join(log_dir, f"parsed_irc_{self.channel}.log")
+                            with open(fname, 'a', encoding='utf-8', errors='replace') as f:
+                                f.write(f"{time.time():.3f} PARSED_ALT worker={id(self)} username={username!r} preview={message[:200]!r}\n")
+                        except Exception:
+                            pass
+                        return username, message, metadata
+                except Exception:
+                    pass
             
-            # If we get here, parsing failed - dump diagnostics
+            # If we get here, parsing failed - dump diagnostics (always persist parse failures)
             print(f"[Twitch Parser] [FAIL] Failed to parse PRIVMSG")
             print(f"[Twitch Parser] Raw: {raw_message[:200]}")
             try:
-                # If raw logging enabled, append the failing raw line for easier diagnosis
-                if os.environ.get('AZB_RAW_IRC_LOG') == '1':
-                    log_dir = os.path.join(os.getcwd(), 'logs')
-                    os.makedirs(log_dir, exist_ok=True)
-                    fname = os.path.join(log_dir, f"raw_irc_parse_fail_{self.channel}.log")
-                    with open(fname, 'a', encoding='utf-8', errors='replace') as f:
-                        f.write(f"{time.time():.3f} PARSE_FAIL worker={id(self)} {repr(raw_message)}\n")
+                log_dir = os.path.join(os.getcwd(), 'logs')
+                os.makedirs(log_dir, exist_ok=True)
+                fname = os.path.join(log_dir, f"raw_irc_parse_fail_{self.channel}.log")
+                with open(fname, 'a', encoding='utf-8', errors='replace') as f:
+                    f.write(f"{time.time():.3f} PARSE_FAIL worker={id(self)} {repr(raw_message)}\n")
             except Exception:
                 pass
                 

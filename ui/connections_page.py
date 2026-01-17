@@ -3015,6 +3015,8 @@ class ConnectionsPage(QWidget):
         self.chat_manager = chat_manager
         self.config = config
         self.platform_widgets = {}
+        # Track last connect times to debounce duplicate UI requests
+        self._last_connect_times = {}
         self.oauth_handler = OAuthHandler()
         self._ngrok_manager = None  # Use private variable with property
         self.trovo_ngrok_tunnel = None  # Track Trovo tunnel for cleanup
@@ -3203,6 +3205,18 @@ class ConnectionsPage(QWidget):
             print(f"[ConnectionsPage] No streamer username configured for {platform_id}")
             return
         print(f"[ConnectionsPage] Connecting to {platform_id} as streamer: {streamer_username}")
+        # Debounce duplicate connect requests from UI (same platform+username within 1s)
+        try:
+            key = f"{platform_id}:{streamer_username}"
+            now = time.time()
+            last = self._last_connect_times.get(key, 0)
+            if now - last < 1.0:
+                print(f"[ConnectionsPage][TRACE] Ignoring duplicate connect for {key} ({now - last:.3f}s since last)")
+                return
+            self._last_connect_times[key] = now
+        except Exception:
+            pass
+
         # Connect to the platform using chat_manager
         if self.chat_manager:
             self.chat_manager.connectPlatform(platform_id, streamer_username, streamer_token)

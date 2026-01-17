@@ -15,24 +15,37 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Check if virtual environment exists
-if not exist "venv" (
-    echo Creating virtual environment...
-    python -m venv venv
-    if errorlevel 1 (
-        echo ERROR: Failed to create virtual environment
-        pause
-        exit /b 1
-    )
-)
+REM Prefer .venv if present, otherwise fall back to venv (create .venv if none exist)
+set "VENV_DIR="
+if exist ".venv" goto :use_dotvenv
+if exist "venv" goto :use_venv
 
-REM Activate virtual environment
-echo Activating virtual environment...
-call venv\Scripts\activate.bat
+echo Creating virtual environment (.venv)...
+python -m venv .venv
+if errorlevel 1 (
+    echo ERROR: Failed to create virtual environment
+    pause
+    exit /b 1
+)
+set "VENV_DIR=.venv"
+goto :after_venv_choice
+
+:use_dotvenv
+set "VENV_DIR=.venv"
+goto :after_venv_choice
+
+:use_venv
+set "VENV_DIR=venv"
+
+:after_venv_choice
+
+REM Activate chosen virtual environment
+echo Activating virtual environment (%VENV_DIR%)...
+call "%VENV_DIR%\Scripts\activate.bat"
 
 REM Install/update dependencies
-if not exist "venv\Scripts\pip.exe" (
-    echo ERROR: pip not found in virtual environment
+if not exist "%VENV_DIR%\Scripts\pip.exe" (
+    echo ERROR: pip not found in virtual environment (%VENV_DIR%)
     pause
     exit /b 1
 )
