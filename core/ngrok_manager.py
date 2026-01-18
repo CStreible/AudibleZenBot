@@ -11,6 +11,9 @@ import subprocess
 from threading import Thread, Lock
 from typing import Dict, Optional, Any
 from PyQt6.QtCore import QObject, pyqtSignal
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Monkey-patch subprocess.Popen early to hide console windows on Windows
 if sys.platform == 'win32' and hasattr(subprocess, 'CREATE_NO_WINDOW'):
@@ -67,9 +70,9 @@ class NgrokManager(QObject):
                     # Store the config for use when starting tunnels
                     conf.set_default(pyngrok_config)
             
-            print("pyngrok library available")
+            logger.info("pyngrok library available")
         except ImportError:
-            print("pyngrok not installed. Install with: pip install pyngrok")
+            logger.warning("pyngrok not installed. Install with: pip install pyngrok")
             self.pyngrok_available = False
         
         # Load auth token from config
@@ -82,7 +85,7 @@ class NgrokManager(QObject):
     def set_auth_token(self, token: str):
         """Set ngrok auth token"""
         if not self.pyngrok_available:
-            print("[ERROR] Cannot set auth token: pyngrok not available")
+            logger.error("Cannot set auth token: pyngrok not available")
             return False
         
         try:
@@ -93,11 +96,11 @@ class NgrokManager(QObject):
             if self.config:
                 self.config.set('ngrok.auth_token', token)
             
-            print("[OK] Ngrok auth token configured")
+            logger.info("Ngrok auth token configured")
             self.status_changed.emit("Ngrok auth token configured")
             return True
         except Exception as e:
-            print(f"[ERROR] Failed to set auth token: {e}")
+            logger.exception(f"Failed to set auth token: {e}")
             self.status_changed.emit(f"Failed to set auth token: {e}")
             return False
     
@@ -123,13 +126,13 @@ class NgrokManager(QObject):
         """
         # Check if tunnel already exists (without blocking)
         if port in self.tunnels:
-            print(f"Info: Tunnel for port {port} already active")
+            logger.info(f"Tunnel for port {port} already active")
             return self.tunnels[port]['public_url']
         
         # Check availability
         if not self.is_available():
             error_msg = "Ngrok not available. Please configure auth token in Settings."
-            print(f"Error: {error_msg}")
+            logger.error(error_msg)
             self.tunnel_error.emit(port, error_msg)
             return None
         
@@ -138,7 +141,7 @@ class NgrokManager(QObject):
         
         def start_tunnel_thread():
             try:
-                print(f"Starting ngrok tunnel for port {port}...")
+                logger.info(f"Starting ngrok tunnel for port {port}...")
                 self.status_changed.emit(f"Starting tunnel for port {port}...")
                 
                 # Configure pyngrok to hide console window on Windows
@@ -178,7 +181,7 @@ class NgrokManager(QObject):
                         'started_at': time.time()
                     }
                 
-                print(f"Ngrok tunnel started: {public_url} -> localhost:{port}")
+                logger.info(f"Ngrok tunnel started: {public_url} -> localhost:{port}")
                 self.status_changed.emit(f"Tunnel active: {public_url}")
                 self.tunnel_started.emit(port, public_url)
                 
@@ -199,8 +202,8 @@ class NgrokManager(QObject):
                     url_match = re.search(r'https://[a-z0-9\-]+\.ngrok[a-z\-\.]+', error_msg)
                     if url_match:
                         existing_url = url_match.group(0)
-                        print(f"Info: Endpoint already exists: {existing_url}")
-                        print(f"Using existing ngrok tunnel: {existing_url} -> localhost:{port}")
+                        logger.info(f"Endpoint already exists: {existing_url}")
+                        logger.info(f"Using existing ngrok tunnel: {existing_url} -> localhost:{port}")
                         
                         # Store tunnel info with existing URL
                         with self.lock:
@@ -221,7 +224,7 @@ class NgrokManager(QObject):
                         result_holder['done'] = True
                         return
                 
-                print(f"Error: {error_msg}")
+                logger.error(error_msg)
                 self.tunnel_error.emit(port, error_msg)
                 self.status_changed.emit(error_msg)
                 result_holder['error'] = error_msg
@@ -239,7 +242,7 @@ class NgrokManager(QObject):
         
         if not result_holder['done']:
             error_msg = "Tunnel start timeout"
-            print(f"Error: {error_msg}")
+            logger.error(error_msg)
             self.tunnel_error.emit(port, error_msg)
             return None
         
@@ -249,34 +252,34 @@ class NgrokManager(QObject):
         """Stop a specific tunnel"""
         with self.lock:
             if port not in self.tunnels:
-                print(f"Info: No tunnel found for port {port}")
+                logger.info(f"No tunnel found for port {port}")
                 return
-            
+
             try:
                 tunnel_info = self.tunnels[port]
-                print(f"Stopping ngrok tunnel for port {port}...")
-                
+                logger.info(f"Stopping ngrok tunnel for port {port}...")
+
                 # Disconnect tunnel
                 if self.pyngrok_available:
                     ngrok.disconnect(tunnel_info['public_url'])
-                
+
                 # Remove from tracking
                 del self.tunnels[port]
-                
-                print(f"Tunnel stopped for port {port}")
+
+                logger.info(f"Tunnel stopped for port {port}")
                 self.status_changed.emit(f"Tunnel stopped for port {port}")
                 self.tunnel_stopped.emit(port)
-                
+
                 # Stop monitoring if no tunnels left
                 if not self.tunnels and self.monitoring:
                     self.stop_monitoring()
-                    
+
             except Exception as e:
-                print(f"Error stopping tunnel: {e}")
+                logger.exception(f"Error stopping tunnel: {e}")
     
     def stop_all_tunnels(self):
         """Stop all active tunnels"""
-        print("Stopping all ngrok tunnels...")
+        logger.info("Stopping all ngrok tunnels...")
         
         # Get list of ports to avoid dict change during iteration
         ports = list(self.tunnels.keys())
@@ -288,9 +291,9 @@ class NgrokManager(QObject):
         if self.pyngrok_available:
             try:
                 ngrok.kill()
-                print("Ngrok process terminated")
+                logger.info("Ngrok process terminated")
             except Exception as e:
-                print(f"Warning: Error killing ngrok: {e}")
+                logger.warning(f"Error killing ngrok: {e}")
         
         self.tunnels.clear()
         self.status_changed.emit("All tunnels stopped")
@@ -335,7 +338,7 @@ class NgrokManager(QObject):
         self.monitoring = True
         self.monitor_thread = Thread(target=self._monitor_tunnels, daemon=True)
         self.monitor_thread.start()
-        print("Tunnel monitoring started")
+        logger.info("Tunnel monitoring started")
     
     def stop_monitoring(self):
         """Stop monitoring tunnel health"""
@@ -343,7 +346,7 @@ class NgrokManager(QObject):
         if self.monitor_thread:
             self.monitor_thread.join(timeout=2)
             self.monitor_thread = None
-        print("Tunnel monitoring stopped")
+        logger.info("Tunnel monitoring stopped")
     
     def _monitor_tunnels(self):
         """Monitor tunnel health (runs in background thread)"""
@@ -366,7 +369,7 @@ class NgrokManager(QObject):
                             # Check if our tunnels are still active
                             for port, info in list(self.tunnels.items()):
                                 if info['public_url'] not in active_urls:
-                                    print(f"Warning: Tunnel for port {port} is no longer active")
+                                    logger.warning(f"Tunnel for port {port} is no longer active")
                                     self.tunnel_error.emit(port, "Tunnel disconnected")
                                     
                     except requests.exceptions.RequestException:
@@ -374,7 +377,7 @@ class NgrokManager(QObject):
                         pass
                         
             except Exception as e:
-                print(f"Warning: Monitor error: {e}")
+                logger.exception(f"Monitor error: {e}")
     
     def get_status_summary(self) -> str:
         """Get a summary of tunnel status (non-blocking)"""
@@ -396,10 +399,10 @@ class NgrokManager(QObject):
     
     def cleanup(self):
         """Cleanup resources on shutdown"""
-        print("Cleaning up NgrokManager...")
+        logger.info("Cleaning up NgrokManager...")
         self.stop_monitoring()
         self.stop_all_tunnels()
-        print("NgrokManager cleanup complete")
+        logger.info("NgrokManager cleanup complete")
 
 
 # Platform requirements - which platforms need ngrok tunnels

@@ -1,18 +1,21 @@
 import threading
 import time
 from core.config import ConfigManager
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Test function for writing config in a thread
 def write_config(manager, key, value, delay=0):
     time.sleep(delay)
     manager.set(key, value)
-    print(f"[Writer] Set {key} = {value}")
+    logger.info(f"[Writer] Set {key} = {value}")
 
 # Test function for reading config in a thread
 def read_config(manager, key, delay=0):
     time.sleep(delay)
     value = manager.get(key)
-    print(f"[Reader] Got {key} = {value}")
+    logger.info(f"[Reader] Got {key} = {value}")
 
 def main():
     manager = ConfigManager()
@@ -28,7 +31,7 @@ def main():
         t.start()
     for t in threads:
         t.join()
-    print("[Test] All threads finished.")
+    logger.info("[Test] All threads finished.")
 
 if __name__ == "__main__":
     main()

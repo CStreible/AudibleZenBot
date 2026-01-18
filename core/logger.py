@@ -151,7 +151,7 @@ class LogManager:
     def start_logging(self):
         """Start logging to file"""
         if not self.log_folder:
-            print("[Logger] No log folder configured")
+            sys.stdout.write("[Logger] No log folder configured\n")
             return False
         
         try:
@@ -179,11 +179,11 @@ class LogManager:
             self.tee_stderr.enable()
             
             self.enabled = True
-            print(f"[Logger] [OK] Logging enabled: {log_path}")
+            sys.stdout.write(f"[Logger] [OK] Logging enabled: {log_path}\n")
             return True
             
         except Exception as e:
-            print(f"[Logger] [ERROR] Error starting logging: {e}")
+            sys.stderr.write(f"[Logger] [ERROR] Error starting logging: {e}\n")
             import traceback
             traceback.print_exc()
             return False
@@ -209,10 +209,10 @@ class LogManager:
             self.tee_stderr.disable()
             
             self.enabled = False
-            print("[Logger] [OK] Logging disabled")
+            sys.stdout.write("[Logger] [OK] Logging disabled\n")
             
         except Exception as e:
-            print(f"[Logger] [ERROR] Error stopping logging: {e}")
+            sys.stderr.write(f"[Logger] [ERROR] Error stopping logging: {e}\n")
     
     def set_log_folder(self, folder_path):
         """Set the log folder and restart logging if enabled"""
@@ -231,7 +231,7 @@ class LogManager:
         """Enable or disable logging"""
         if enabled:
             if not self.log_folder:
-                print("[Logger] Cannot enable logging: No folder configured")
+                sys.stderr.write("[Logger] Cannot enable logging: No folder configured\n")
                 return False
             
             if not self.enabled:

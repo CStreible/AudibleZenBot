@@ -13,6 +13,9 @@ import json
 import time
 import websockets
 import requests
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DLiveConnector(BasePlatformConnector):
@@ -39,12 +42,12 @@ class DLiveConnector(BasePlatformConnector):
     
     def connect(self, username: str):
         """Connect to DLive chat"""
-        print(f"[DLiveConnector] connect() called for username: {username}")
+        logger.info(f"[DLiveConnector] connect() called for username: {username}")
         self.username = username
         
         # Disconnect existing worker first to prevent duplicates
         if self.worker:
-            print(f"[DLiveConnector] Disconnecting existing worker before creating new one")
+            logger.info(f"[DLiveConnector] Disconnecting existing worker before creating new one")
             self.disconnect()
         
         self.worker = DLiveWorker(username, self.access_token)
@@ -56,7 +59,7 @@ class DLiveConnector(BasePlatformConnector):
     
     def disconnect(self):
         """Disconnect from DLive"""
-        print("[DLiveConnector] disconnect() called")
+        logger.info("[DLiveConnector] disconnect() called")
         if self.worker:
             self.worker.stop()
             self.worker.wait(5000)  # Wait up to 5 seconds
@@ -77,11 +80,11 @@ class DLiveConnector(BasePlatformConnector):
         Message deletion may not be supported for regular chat messages.
         """
         if not message_id or not self.access_token:
-            print(f"[DLive] Cannot delete message: missing message_id or access_token")
+            logger.warning(f"[DLive] Cannot delete message: missing message_id or access_token")
             return
-        
-        print(f"[DLive] Message deletion not currently supported (API requires integer ID, messages use UUID)")
-        print(f"[DLive] Message ID was: {message_id}")
+
+        logger.info("[DLive] Message deletion not currently supported (API requires integer ID, messages use UUID)")
+        logger.debug(f"[DLive] Message ID was: {message_id}")
         return False
     
     def ban_user(self, username: str, user_id: str = None):
@@ -117,19 +120,19 @@ class DLiveConnector(BasePlatformConnector):
             )
             
             if response.status_code == 200:
-                print(f"[DLive] User banned: {username}")
+                logger.info(f"[DLive] User banned: {username}")
             else:
-                print(f"[DLive] Failed to ban user: {response.status_code}")
+                logger.error(f"[DLive] Failed to ban user: {response.status_code}")
         except Exception as e:
-            print(f"[DLive] Error banning user: {e}")
+            logger.exception(f"[DLive] Error banning user: {e}")
     
     def onMessageReceived(self, username: str, message: str, metadata: dict):
-        print(f"[DLiveConnector] onMessageReceived: {username}, {message}, metadata: {metadata}")
+        logger.debug(f"[DLiveConnector] onMessageReceived: {username}, {message}, metadata: {metadata}")
         self.message_received_with_metadata.emit('dlive', username, message, metadata)
     
     def onMessageDeleted(self, message_id: str):
         """Handle message deletion event from DLive"""
-        print(f"[DLiveConnector] Message deleted by platform: {message_id}")
+        logger.info(f"[DLiveConnector] Message deleted by platform: {message_id}")
         self.message_deleted.emit('dlive', message_id)
     
     def onStatusChanged(self, connected: bool):
@@ -137,7 +140,7 @@ class DLiveConnector(BasePlatformConnector):
         self.connection_status.emit(connected)
     
     def onError(self, error: str):
-        print(f"[DLiveConnector] Error: {error}")
+        logger.error(f"[DLiveConnector] Error: {error}")
         self.error_occurred.emit(error)
 
 
@@ -175,7 +178,7 @@ class DLiveWorker(QThread):
     def resolve_username(self):
         """Resolve display name to actual DLive username"""
         try:
-            print(f"[DLiveWorker] Resolving username for displayname: {self.displayname}")
+            logger.debug(f"[DLiveWorker] Resolving username for displayname: {self.displayname}")
             
             query = """
             query UserQuery($displayname: String!) {
@@ -214,25 +217,25 @@ class DLiveWorker(QThread):
                 user = data.get('data', {}).get('userByDisplayName')
                 if user:
                     self.username = user.get('username')
-                    print(f"[DLiveWorker] ✓ Resolved username: {self.username}")
+                    logger.info(f"[DLiveWorker] ✓ Resolved username: {self.username}")
                     return True
                 else:
-                    print(f"[DLiveWorker] ❌ User not found: {self.displayname}")
+                    logger.warning(f"[DLiveWorker] ❌ User not found: {self.displayname}")
                     return False
             else:
-                print(f"[DLiveWorker] ❌ Failed to resolve username: HTTP {response.status_code}")
+                logger.error(f"[DLiveWorker] ❌ Failed to resolve username: HTTP {response.status_code}")
                 return False
                 
         except Exception as e:
-            print(f"[DLiveWorker] ❌ Error resolving username: {e}")
+            logger.exception(f"[DLiveWorker] ❌ Error resolving username: {e}")
             return False
     
     def run(self):
         # Prevent worker from running if disabled in config
         if hasattr(self, 'config') and self.config and self.config.get('platforms', {}).get('dlive', {}).get('disabled', False):
-            print("[DLiveWorker] Skipping run: platform is disabled")
+            logger.info("[DLiveWorker] Skipping run: platform is disabled")
             return
-        print("[DLiveWorker] Starting run()")
+        logger.info("[DLiveWorker] Starting run()")
         self.running = True
         self.connection_time = time.time()
         # Resolve display name to actual username first
@@ -242,22 +245,22 @@ class DLiveWorker(QThread):
         try:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
-            print("[DLiveWorker] Event loop created, connecting with auto-retry...")
+            logger.debug("[DLiveWorker] Event loop created, connecting with auto-retry...")
             try:
                 self.loop.run_until_complete(self.connect_with_retry())
             except Exception as e:
                 import traceback
-                print(f"[DLiveWorker] Error in event loop: {type(e).__name__}: {e}")
-                print(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
+                logger.exception(f"[DLiveWorker] Error in event loop: {type(e).__name__}: {e}")
+                logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
                 self.error_signal.emit(str(e))
             finally:
                 if self.loop and not self.loop.is_closed():
-                    print("[DLiveWorker] Closing event loop")
+                    logger.debug("[DLiveWorker] Closing event loop")
                     self.loop.close()
         except Exception as e:
             import traceback
-            print(f"[DLiveWorker] Exception in run(): {type(e).__name__}: {e}")
-            print(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
+            logger.exception(f"[DLiveWorker] Exception in run(): {type(e).__name__}: {e}")
+            logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
             self.error_signal.emit(str(e))
     
     async def connect_with_retry(self, max_retries=10):
@@ -267,23 +270,23 @@ class DLiveWorker(QThread):
         
         while self.running and retry_count < max_retries:
             try:
-                print(f"[DLiveWorker] Connection attempt {retry_count + 1}/{max_retries}")
+                logger.info(f"[DLiveWorker] Connection attempt {retry_count + 1}/{max_retries}")
                 await self.connect_and_listen()
                 # If we get here, connection ended normally (not an error)
-                print("[DLiveWorker] Connection ended normally")
+                logger.info("[DLiveWorker] Connection ended normally")
                 break
             except Exception as e:
                 retry_count += 1
-                print(f"[DLiveWorker] Connection failed: {type(e).__name__}: {e}")
+                logger.warning(f"[DLiveWorker] Connection failed: {type(e).__name__}: {e}")
                 
                 if retry_count < max_retries:
                     # Exponential backoff with max 60 seconds
                     wait_time = min(backoff * (2 ** (retry_count - 1)), 60)
-                    print(f"[DLiveWorker] Retrying in {wait_time} seconds...")
+                    logger.info(f"[DLiveWorker] Retrying in {wait_time} seconds...")
                     self.status_signal.emit(False)
                     await asyncio.sleep(wait_time)
                 else:
-                    print(f"[DLiveWorker] Max retries ({max_retries}) reached, giving up")
+                    logger.error(f"[DLiveWorker] Max retries ({max_retries}) reached, giving up")
                     self.error_signal.emit(f"Connection failed after {max_retries} attempts")
                     self.status_signal.emit(False)
                     break
@@ -291,10 +294,10 @@ class DLiveWorker(QThread):
     async def connect_and_listen(self):
         """Connect to WebSocket and listen for messages"""
         try:
-            print(f"[DLiveWorker] Connecting to: {self.WS_URL}")
-            print(f"[DLiveWorker] Display Name: {self.displayname}")
-            print(f"[DLiveWorker] Actual Username: {self.username}")
-            print(f"[DLiveWorker] Has access token: {bool(self.access_token)}")
+            logger.info(f"[DLiveWorker] Connecting to: {self.WS_URL}")
+            logger.debug(f"[DLiveWorker] Display Name: {self.displayname}")
+            logger.debug(f"[DLiveWorker] Actual Username: {self.username}")
+            logger.debug(f"[DLiveWorker] Has access token: {bool(self.access_token)}")
             
             # Parse token if it's stored as JSON
             token = self.access_token
@@ -302,7 +305,7 @@ class DLiveWorker(QThread):
                 try:
                     token_data = json.loads(token)
                     token = token_data.get('token', token)
-                    print(f"[DLiveWorker] Extracted token from JSON for WebSocket")
+                    logger.debug(f"[DLiveWorker] Extracted token from JSON for WebSocket")
                 except:
                     pass
             
@@ -317,7 +320,7 @@ class DLiveWorker(QThread):
                 extra_headers=headers
             ) as websocket:
                 self.ws = websocket
-                print("[DLiveWorker] WebSocket connected")
+                logger.info("[DLiveWorker] WebSocket connected")
                 
                 # Send connection_init
                 init_payload = {}
@@ -329,15 +332,15 @@ class DLiveWorker(QThread):
                     "payload": init_payload
                 }
                 await websocket.send(json.dumps(init_message))
-                print("[DLiveWorker] Sent connection_init")
+                logger.debug("[DLiveWorker] Sent connection_init")
                 
                 # Wait for connection_ack
                 response = await asyncio.wait_for(websocket.recv(), timeout=10)
                 msg = json.loads(response)
-                print(f"[DLiveWorker] Received: {msg.get('type')}")
+                logger.debug(f"[DLiveWorker] Received: {msg.get('type')}")
                 
                 if msg.get("type") == "connection_ack":
-                    print("[DLiveWorker] Connection acknowledged")
+                    logger.info("[DLiveWorker] Connection acknowledged")
                     self.status_signal.emit(True)
                     
                     # Subscribe to chat
@@ -346,18 +349,18 @@ class DLiveWorker(QThread):
                     # Listen for messages
                     await self.listen_for_messages(websocket)
                 else:
-                    print(f"[DLiveWorker] Unexpected response: {msg}")
+                    logger.warning(f"[DLiveWorker] Unexpected response: {msg}")
                     self.error_signal.emit("Connection not acknowledged")
                     self.status_signal.emit(False)
                     
         except websockets.exceptions.WebSocketException as e:
-            print(f"[DLiveWorker] WebSocket error: {e}")
+            logger.exception(f"[DLiveWorker] WebSocket error: {e}")
             self.error_signal.emit(f"WebSocket error: {e}")
             self.status_signal.emit(False)
         except Exception as e:
             import traceback
-            print(f"[DLiveWorker] Connection error: {type(e).__name__}: {e}")
-            print(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
+            logger.exception(f"[DLiveWorker] Connection error: {type(e).__name__}: {e}")
+            logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
             self.error_signal.emit(f"Connection error: {e}")
             self.status_signal.emit(False)
     
@@ -372,17 +375,17 @@ class DLiveWorker(QThread):
                     time_since_last = time.time() - self.last_message_time
                     
                     if time_since_last > self.connection_timeout:
-                        print(f"[DLiveWorker] ⚠ No messages for {time_since_last:.0f}s, connection may be dead")
-                        print(f"[DLiveWorker] Forcing reconnection...")
+                        logger.warning(f"[DLiveWorker] ⚠ No messages for {time_since_last:.0f}s, connection may be dead")
+                        logger.info(f"[DLiveWorker] Forcing reconnection...")
                         # Close the websocket to trigger reconnection
                         await websocket.close()
                         break
                     elif time_since_last > self.health_check_interval:
-                        print(f"[DLiveWorker] Connection healthy (last message: {time_since_last:.0f}s ago)")
+                        logger.debug(f"[DLiveWorker] Connection healthy (last message: {time_since_last:.0f}s ago)")
         except asyncio.CancelledError:
-            print("[DLiveWorker] Health check cancelled")
+            logger.debug("[DLiveWorker] Health check cancelled")
         except Exception as e:
-            print(f"[DLiveWorker] Health check error: {e}")
+            logger.exception(f"[DLiveWorker] Health check error: {e}")
     
     async def subscribe_to_chat(self, websocket):
         """Subscribe to streamMessageReceived"""
@@ -442,8 +445,8 @@ class DLiveWorker(QThread):
         }
         
         await websocket.send(json.dumps(subscribe_message))
-        print(f"[DLiveWorker] Sent subscription for username: {self.username}")
-        print(f"[DLiveWorker] Full subscription: {json.dumps(subscribe_message, indent=2)}")
+        logger.info(f"[DLiveWorker] Sent subscription for username: {self.username}")
+        logger.debug(f"[DLiveWorker] Full subscription: {json.dumps(subscribe_message, indent=2)}")
         
         # Wait for responses (error or keep-alive)
         try:
@@ -453,31 +456,31 @@ class DLiveWorker(QThread):
                 msg_type = data.get('type')
                 msg_id = data.get('id')
                 
-                print(f"[DLiveWorker] Post-subscribe response: type={msg_type}, id={msg_id}")
+                logger.debug(f"[DLiveWorker] Post-subscribe response: type={msg_type}, id={msg_id}")
                 
                 if msg_type == 'error':
                     if msg_id == self.subscription_id:
-                        print(f"[DLiveWorker] ❌ SUBSCRIPTION ERROR: {json.dumps(data, indent=2)}")
+                        logger.error(f"[DLiveWorker] ❌ SUBSCRIPTION ERROR: {json.dumps(data, indent=2)}")
                         self.error_signal.emit(f"Subscription failed: {data}")
                         return
                     else:
-                        print(f"[DLiveWorker] Other error: {json.dumps(data, indent=2)}")
+                        logger.warning(f"[DLiveWorker] Other error: {json.dumps(data, indent=2)}")
                 elif msg_type == 'data' and msg_id == self.subscription_id:
-                    print(f"[DLiveWorker] ✓ Subscription active - received data message")
+                    logger.info(f"[DLiveWorker] ✓ Subscription active - received data message")
                     break
                 elif msg_type == 'ka':
-                    print(f"[DLiveWorker] Keep-alive received")
+                    logger.debug(f"[DLiveWorker] Keep-alive received")
                     break
         except asyncio.TimeoutError:
-            print(f"[DLiveWorker] No error after 9s - subscription likely successful")
+            logger.debug(f"[DLiveWorker] No error after 9s - subscription likely successful")
         except Exception as e:
-            print(f"[DLiveWorker] Error checking subscription: {e}")
+            logger.exception(f"[DLiveWorker] Error checking subscription: {e}")
     
     async def listen_for_messages(self, websocket):
         """Listen for incoming messages with health monitoring"""
-        print(f"[DLiveWorker] Now listening for chat messages...")
-        print(f"[DLiveWorker] TIP: Send a test message in your DLive chat to verify it works!")
-        print(f"[DLiveWorker] NOTE: Messages only appear when stream is LIVE and someone chats")
+        logger.info(f"[DLiveWorker] Now listening for chat messages...")
+        logger.debug(f"[DLiveWorker] TIP: Send a test message in your DLive chat to verify it works!")
+        logger.debug(f"[DLiveWorker] NOTE: Messages only appear when stream is LIVE and someone chats")
         
         # Start health monitoring in background
         health_task = asyncio.create_task(self.health_check_loop(websocket))
@@ -491,26 +494,26 @@ class DLiveWorker(QThread):
                     message_count += 1
                     self.last_message_time = time.time()  # Update timestamp
                     
-                    print(f"[DLiveWorker] RAW MESSAGE #{message_count}: {message[:200]}...")
+                    logger.debug(f"[DLiveWorker] RAW MESSAGE #{message_count}: {message[:200]}...")
                     data = json.loads(message)
                     
                     msg_type = data.get("type")
                     msg_id = data.get("id", "N/A")
-                    print(f"[DLiveWorker] Parsed message type: {msg_type}, id: {msg_id}")
+                    logger.debug(f"[DLiveWorker] Parsed message type: {msg_type}, id: {msg_id}")
                     
                     if msg_type == "data":
                         # Process subscription data
                         payload = data.get("payload", {})
-                        print(f"[DLiveWorker] Data payload: {json.dumps(payload, indent=2)[:500]}")
+                        logger.debug(f"[DLiveWorker] Data payload: {json.dumps(payload, indent=2)[:500]}")
                         
                         if "errors" in payload:
-                            print(f"[DLiveWorker] Subscription errors: {payload['errors']}")
+                            logger.warning(f"[DLiveWorker] Subscription errors: {payload['errors']}")
                             continue
                         
                         # Extract message
                         stream_msg = payload.get("data", {}).get("streamMessageReceived")
                         if stream_msg:
-                            print(f"[DLiveWorker] Processing stream message: {stream_msg}")
+                            logger.debug(f"[DLiveWorker] Processing stream message: {stream_msg}")
                             try:
                                 # streamMessageReceived returns a LIST of messages
                                 if isinstance(stream_msg, list):
@@ -520,68 +523,68 @@ class DLiveWorker(QThread):
                                     # Single message (shouldn't happen but handle it)
                                     self.process_message(stream_msg)
                             except Exception as e:
-                                print(f"[DLiveWorker] ⚠ Error processing message (continuing): {e}")
+                                logger.exception(f"[DLiveWorker] ⚠ Error processing message (continuing): {e}")
                                 import traceback
-                                traceback.print_exc()
+                                logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
                                 # Don't stop listening - continue to next message
                         else:
-                            print(f"[DLiveWorker] No streamMessageReceived in payload")
+                            logger.debug(f"[DLiveWorker] No streamMessageReceived in payload")
                     
                     elif msg_type == "error":
                         error_data = data.get('payload', data)
-                        print(f"[DLiveWorker] Full error response: {json.dumps(data, indent=2)}")
+                        logger.error(f"[DLiveWorker] Full error response: {json.dumps(data, indent=2)}")
                         
                         error_msg = error_data[0].get('message', '') if isinstance(error_data, list) else error_data.get('message', '')
                         
                         # DLive sometimes returns empty error messages for successful mutations
                         # If the error message is empty and this is a send_msg response, treat as success
                         if not error_msg and data.get('id') == 'send_msg':
-                            print(f"[DLiveWorker] ✓ Message mutation completed (empty error = success)")
+                            logger.info(f"[DLiveWorker] ✓ Message mutation completed (empty error = success)")
                             # But also check if there's actually data in the response
                             if 'data' in data:
-                                print(f"[DLiveWorker] Response also contains data: {json.dumps(data.get('data'), indent=2)}")
+                                logger.debug(f"[DLiveWorker] Response also contains data: {json.dumps(data.get('data'), indent=2)}")
                         else:
-                            print(f"[DLiveWorker] Error from server: {json.dumps(error_data, indent=2)}")
+                            logger.error(f"[DLiveWorker] Error from server: {json.dumps(error_data, indent=2)}")
                             if error_msg:
                                 self.error_signal.emit(f"Server error: {error_msg}")
                             
                             # If this is a subscription error, it might be the wrong username format
                             if data.get('id') == '1':
-                                print(f"[DLiveWorker] Subscription error - check username format")
+                                logger.warning(f"[DLiveWorker] Subscription error - check username format")
                     
                     elif msg_type == "complete":
-                        print("[DLiveWorker] Subscription completed")
+                        logger.info("[DLiveWorker] Subscription completed")
                         break
                     
                     elif msg_type == "ka":
                         # Keep-alive - connection is healthy
-                        print("[DLiveWorker] ✓ Keep-alive received")
+                        logger.debug("[DLiveWorker] ✓ Keep-alive received")
                         pass
                 
                 except asyncio.TimeoutError:
                     # No message received in timeout period
-                    print(f"[DLiveWorker] ⏱ No messages for 30s (total received: {message_count})")
+                    logger.debug(f"[DLiveWorker] ⏱ No messages for 30s (total received: {message_count})")
                     # Check if we're still connected
                     try:
                         pong = await websocket.ping()
                         await asyncio.wait_for(pong, timeout=5)
-                        print("[DLiveWorker] ✓ Ping successful, connection alive")
+                        logger.debug("[DLiveWorker] ✓ Ping successful, connection alive")
                     except Exception as e:
-                        print(f"[DLiveWorker] ❌ Ping failed: {e}")
+                        logger.warning(f"[DLiveWorker] ❌ Ping failed: {e}")
                         raise
                     continue
                     
                 except json.JSONDecodeError as e:
-                    print(f"[DLiveWorker] ⚠ Invalid JSON received (continuing): {e}")
+                    logger.warning(f"[DLiveWorker] ⚠ Invalid JSON received (continuing): {e}")
                     # Continue listening despite bad message
                     
         except websockets.exceptions.ConnectionClosed:
-            print("[DLiveWorker] WebSocket connection closed")
+            logger.info("[DLiveWorker] WebSocket connection closed")
             self.status_signal.emit(False)
         except Exception as e:
             import traceback
-            print(f"[DLiveWorker] Error listening: {type(e).__name__}: {e}")
-            print(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
+            logger.exception(f"[DLiveWorker] Error listening: {type(e).__name__}: {e}")
+            logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
             self.error_signal.emit(f"Listening error: {e}")
         finally:
             # Cancel health monitoring
@@ -596,23 +599,23 @@ class DLiveWorker(QThread):
         try:
             # Message deduplication
             msg_id = msg.get('id')
-            print(f"[DLiveWorker] process_message called with msg_id: {msg_id}")
-            print(f"[DLiveWorker] Current seen_message_ids size: {len(self.seen_message_ids)}")
+            logger.debug(f"[DLiveWorker] process_message called with msg_id: {msg_id}")
+            logger.debug(f"[DLiveWorker] Current seen_message_ids size: {len(self.seen_message_ids)}")
             
             if msg_id:
                 if msg_id in self.seen_message_ids:
-                    print(f"[DLiveWorker] ✓ Skipping duplicate message: {msg_id}")
+                    logger.debug(f"[DLiveWorker] ✓ Skipping duplicate message: {msg_id}")
                     return
                 
                 # Add to seen messages
                 self.seen_message_ids.add(msg_id)
-                print(f"[DLiveWorker] Added {msg_id} to seen_message_ids")
+                logger.debug(f"[DLiveWorker] Added {msg_id} to seen_message_ids")
                 
                 # Limit size to prevent unbounded memory growth
                 if len(self.seen_message_ids) > self.max_seen_ids:
                     # Keep only the most recent half
                     self.seen_message_ids = set(list(self.seen_message_ids)[self.max_seen_ids // 2:])
-                    print(f"[DLiveWorker] Trimmed seen_message_ids to {len(self.seen_message_ids)}")
+                    logger.debug(f"[DLiveWorker] Trimmed seen_message_ids to {len(self.seen_message_ids)}")
             
             msg_type = msg.get("type") or msg.get("__typename")
             
@@ -624,7 +627,7 @@ class DLiveWorker(QThread):
                 
                 # Validate essential data
                 if not username or not content:
-                    print(f"[DLiveWorker] ⚠ Incomplete message data, skipping: {msg}")
+                    logger.warning(f"[DLiveWorker] ⚠ Incomplete message data, skipping: {msg}")
                     return
                 
                 # Parse badges
@@ -641,7 +644,7 @@ class DLiveWorker(QThread):
                     'message_id': msg.get('id')
                 }
                 
-                print(f"[DLiveWorker] Chat: {username}: {content}")
+                logger.info(f"[DLiveWorker] Chat: {username}: {content}")
                 self.message_signal.emit(username, content, metadata)
             
             elif msg_type == "ChatGift":
@@ -652,7 +655,7 @@ class DLiveWorker(QThread):
                 amount = msg.get("amount", 1)
                 
                 if not username:
-                    print(f"[DLiveWorker] ⚠ Gift message missing username, skipping")
+                    logger.warning(f"[DLiveWorker] ⚠ Gift message missing username, skipping")
                     return
                 
                 content = f"sent {amount}x {gift}"
@@ -663,7 +666,7 @@ class DLiveWorker(QThread):
                     'message_id': msg.get('id')
                 }
                 
-                print(f"[DLiveWorker] Gift: {username} {content}")
+                logger.info(f"[DLiveWorker] Gift: {username} {content}")
                 self.message_signal.emit(username, content, metadata)
             
             elif msg_type == "ChatFollow":
@@ -672,7 +675,7 @@ class DLiveWorker(QThread):
                 username = sender.get("displayname") or sender.get("username", "Unknown")
                 
                 if not username:
-                    print(f"[DLiveWorker] ⚠ Follow message missing username, skipping")
+                    logger.warning(f"[DLiveWorker] ⚠ Follow message missing username, skipping")
                     return
                 
                 event_data = {
@@ -680,7 +683,7 @@ class DLiveWorker(QThread):
                     'message_id': msg.get('id')
                 }
                 
-                print(f"[DLiveWorker] Follow: {username}")
+                logger.info(f"[DLiveWorker] Follow: {username}")
                 # Emit as stream event instead of regular message
                 self.message_signal.emit(username, "🎯 followed the stream", {'event_type': 'follow', **event_data})
             
@@ -691,7 +694,7 @@ class DLiveWorker(QThread):
                 month = msg.get("month", 1)
                 
                 if not username:
-                    print(f"[DLiveWorker] ⚠ Subscription message missing username, skipping")
+                    logger.warning(f"[DLiveWorker] ⚠ Subscription message missing username, skipping")
                     return
                 
                 event_data = {
@@ -700,7 +703,7 @@ class DLiveWorker(QThread):
                     'months': month
                 }
                 
-                print(f"[DLiveWorker] Subscription: {username} for {month} month(s)")
+                logger.info(f"[DLiveWorker] Subscription: {username} for {month} month(s)")
                 # Emit as stream event instead of regular message
                 self.message_signal.emit(username, f"⭐ subscribed for {month} month{'s' if month > 1 else ''}", {'event_type': 'subscription', **event_data})
             
@@ -711,7 +714,7 @@ class DLiveWorker(QThread):
                 viewer_count = msg.get("viewer") or msg.get("viewers") or msg.get("viewerCount", 0)
                 
                 if not username:
-                    print(f"[DLiveWorker] ⚠ Host message missing username, skipping")
+                    logger.warning(f"[DLiveWorker] ⚠ Host message missing username, skipping")
                     return
                 
                 event_data = {
@@ -720,7 +723,7 @@ class DLiveWorker(QThread):
                     'viewers': viewer_count
                 }
                 
-                print(f"[DLiveWorker] Host/Raid: {username} with {viewer_count} viewer(s)")
+                logger.info(f"[DLiveWorker] Host/Raid: {username} with {viewer_count} viewer(s)")
                 # Emit as stream event
                 self.message_signal.emit(username, f"📢 hosted with {viewer_count} viewer{'s' if viewer_count != 1 else ''}", {'event_type': 'raid', **event_data})
             
@@ -728,25 +731,25 @@ class DLiveWorker(QThread):
                 # Message deletion event
                 deleted_msg_id = msg.get('id') or msg.get('deletedMessageId')
                 if deleted_msg_id:
-                    print(f"[DLiveWorker] Message deleted by moderator: {deleted_msg_id}")
+                    logger.info(f"[DLiveWorker] Message deleted by moderator: {deleted_msg_id}")
                     self.deletion_signal.emit(deleted_msg_id)
                 else:
-                    print(f"[DLiveWorker] ⚠ Delete event without message ID")
+                    logger.warning(f"[DLiveWorker] ⚠ Delete event without message ID")
             else:
                 # Unknown message type
-                print(f"[DLiveWorker] Unknown message type: {msg_type}")
+                logger.debug(f"[DLiveWorker] Unknown message type: {msg_type}")
         
         except KeyError as e:
-            print(f"[DLiveWorker] ⚠ Missing required field in message: {e}")
+            logger.warning(f"[DLiveWorker] ⚠ Missing required field in message: {e}")
         except Exception as e:
             import traceback
-            print(f"[DLiveWorker] ⚠ Error processing message: {type(e).__name__}: {e}")
-            print(f"[DLiveWorker] Message data: {msg}")
-            print(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
+            logger.exception(f"[DLiveWorker] ⚠ Error processing message: {type(e).__name__}: {e}")
+            logger.debug(f"[DLiveWorker] Message data: {msg}")
+            logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
     
     def stop(self):
         """Stop the worker"""
-        print("[DLiveWorker] Stopping...")
+        logger.info("[DLiveWorker] Stopping...")
         self.running = False
         
         # Close WebSocket if open
@@ -768,16 +771,16 @@ class DLiveWorker(QThread):
                     self.loop
                 )
             except Exception as e:
-                print(f"[DLiveWorker] Error closing WebSocket: {e}")
+                logger.exception(f"[DLiveWorker] Error closing WebSocket: {e}")
     
     def send_message(self, message: str):
         """Send a message to DLive chat using HTTP POST (not WebSocket)"""
         if not self.access_token:
-            print("[DLiveWorker] Cannot send message: No access token")
+            logger.warning("[DLiveWorker] Cannot send message: No access token")
             return False
         
         # Debug: Show which account is sending
-        print(f"[DLiveWorker] send_message: Sending as streamer: {self.username}")
+        logger.debug(f"[DLiveWorker] send_message: Sending as streamer: {self.username}")
         
         # Parse token if it's stored as JSON
         token = self.access_token
@@ -785,9 +788,9 @@ class DLiveWorker(QThread):
             try:
                 token_data = json.loads(token)
                 token = token_data.get('token', token)
-                print(f"[DLiveWorker] Extracted token from JSON (length: {len(token)})")
+                logger.debug(f"[DLiveWorker] Extracted token from JSON (length: {len(token)})")
             except:
-                print(f"[DLiveWorker] Token is JSON-like but couldn't parse, using as-is")
+                logger.debug(f"[DLiveWorker] Token is JSON-like but couldn't parse, using as-is")
         
         # Use HTTP POST for sending messages (more reliable than WebSocket mutation)
         mutation = """
@@ -823,8 +826,8 @@ class DLiveWorker(QThread):
             "Authorization": token  # Use extracted token
         }
         
-        print(f"[DLiveWorker] Sending via HTTP POST to {self.GRAPHQL_URL}")
-        print(f"[DLiveWorker] Payload: {json.dumps(payload, indent=2)}")
+        logger.info(f"[DLiveWorker] Sending via HTTP POST to {self.GRAPHQL_URL}")
+        logger.debug(f"[DLiveWorker] Payload: {json.dumps(payload, indent=2)}")
         
         try:
             response = requests.post(
@@ -834,8 +837,8 @@ class DLiveWorker(QThread):
                 timeout=10
             )
             
-            print(f"[DLiveWorker] Response status: {response.status_code}")
-            print(f"[DLiveWorker] Response body: {response.text[:500]}")
+            logger.debug(f"[DLiveWorker] Response status: {response.status_code}")
+            logger.debug(f"[DLiveWorker] Response body: {response.text[:500]}")
             
             if response.status_code == 200:
                 data = response.json()
@@ -843,8 +846,8 @@ class DLiveWorker(QThread):
                 # Check for errors first
                 if data.get('errors'):
                     error_msg = data['errors'][0].get('message', 'Unknown error')
-                    print(f"[DLiveWorker] ❌ GraphQL error: {error_msg}")
-                    print(f"[DLiveWorker] Full errors: {json.dumps(data['errors'], indent=2)}")
+                    logger.error(f"[DLiveWorker] ❌ GraphQL error: {error_msg}")
+                    logger.debug(f"[DLiveWorker] Full errors: {json.dumps(data['errors'], indent=2)}")
                     return False
                 
                 result = data.get('data', {})
@@ -853,23 +856,23 @@ class DLiveWorker(QThread):
                     err = send_result.get('err', {})
                     
                     if err and err.get('message'):
-                        print(f"[DLiveWorker] ❌ Message send failed: {err.get('message')}")
+                        logger.error(f"[DLiveWorker] ❌ Message send failed: {err.get('message')}")
                         return False
                     else:
-                        print(f"[DLiveWorker] ✓ Message sent successfully via HTTP")
+                        logger.info(f"[DLiveWorker] ✓ Message sent successfully via HTTP")
                         return True
                 else:
-                    print(f"[DLiveWorker] ❌ No data in response")
+                    logger.error(f"[DLiveWorker] ❌ No data in response")
                     return False
             else:
-                print(f"[DLiveWorker] ❌ HTTP error: {response.status_code}")
+                logger.error(f"[DLiveWorker] ❌ HTTP error: {response.status_code}")
                 return False
                 
         except Exception as e:
-            print(f"[DLiveWorker] ❌ Error sending message: {e}")
+            logger.exception(f"[DLiveWorker] ❌ Error sending message: {e}")
             import traceback
-            traceback.print_exc()
+            logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
             return False
         except Exception as e:
-            print(f"[DLiveWorker] Error sending message: {e}")
+            logger.exception(f"[DLiveWorker] Error sending message: {e}")
             return False

@@ -42,4 +42,8 @@ Protocol: graphql-ws (GraphQL over WebSocket)
 For more information, visit: https://docs.dlive.tv/
 """
 
-print(__doc__)
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
+logger.info(__doc__)

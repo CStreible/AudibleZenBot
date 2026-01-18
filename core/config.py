@@ -9,6 +9,9 @@ from typing import Dict, Any
 from pathlib import Path
 from core import secret_store
 from copy import deepcopy
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Keys considered sensitive and should be encrypted on disk
 SENSITIVE_KEYS = ['bot_token', 'streamer_token', 'access_token', 'refresh_token', 'client_secret', 'access_token_secret', 'api_key', 'streamer_cookies', 'oauth_token']
@@ -60,7 +63,7 @@ class ConfigManager:
                             pass
                         return loaded
                 except Exception as e:
-                    print(f"Error loading config: {e}")
+                    logger.exception(f"Error loading config: {e}")
                     return self.get_default_config()
             else:
                 return self.get_default_config()
@@ -71,13 +74,13 @@ class ConfigManager:
             try:
                 # Debug: Check if trovo streamer_user_id is in config before saving
                 if self.verbose:
-                    if "platforms" in self.config and "trovo" in self.config["platforms"]:
-                        trovo_keys = list(self.config["platforms"]["trovo"].keys())
-                        has_user_id = "streamer_user_id" in trovo_keys
-                        print(f"[ConfigManager] DEBUG save(): Trovo keys = {trovo_keys}")
-                        print(f"[ConfigManager] DEBUG save(): Has streamer_user_id = {has_user_id}")
-                        if has_user_id:
-                            print(f"[ConfigManager] DEBUG save(): streamer_user_id value = {self.config['platforms']['trovo']['streamer_user_id']}")
+                        if "platforms" in self.config and "trovo" in self.config["platforms"]:
+                            trovo_keys = list(self.config["platforms"]["trovo"].keys())
+                            has_user_id = "streamer_user_id" in trovo_keys
+                            logger.debug(f"[ConfigManager] DEBUG save(): Trovo keys = {trovo_keys}")
+                            logger.debug(f"[ConfigManager] DEBUG save(): Has streamer_user_id = {has_user_id}")
+                            if has_user_id:
+                                logger.debug(f"[ConfigManager] DEBUG save(): streamer_user_id value = {self.config['platforms']['trovo']['streamer_user_id']}")
                 # Make a deep copy and encrypt sensitive fields before writing
                 write_copy = deepcopy(self.config)
                 try:
@@ -102,7 +105,7 @@ class ConfigManager:
                     f.flush()  # Ensure data is written to disk
                     os.fsync(f.fileno())  # Force OS to write to disk
             except Exception as e:
-                print(f"Error saving config: {e}")
+                logger.exception(f"Error saving config: {e}")
     
     def get_default_config(self) -> Dict[str, Any]:
         """Get default configuration"""

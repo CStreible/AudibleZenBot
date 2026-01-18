@@ -740,7 +740,7 @@ class KickConnector(BasePlatformConnector):
                 if response.status_code == 204:
                     logger.info("✓ Kick: Unsubscribed from events")
             except Exception as e:
-                print(f"Error unsubscribing: {e}")
+                logger.exception(f"Error unsubscribing: {e}")
         
         # Stop webhook server (shared callback server)
         if self.webhook_server:
@@ -921,16 +921,16 @@ class KickConnector(BasePlatformConnector):
                     time_since_last = time.time() - self.last_message_time
                     
                     if time_since_last > self.health_check_interval:
-                        print(f"⚠ Kick: No messages received for {int(time_since_last)}s")
-                        print(f"   Verifying subscription status...")
+                        logger.warning(f"⚠ Kick: No messages received for {int(time_since_last)}s")
+                        logger.info(f"Verifying subscription status...")
                         
                         # Verify subscription is still active
                         if not self.verify_subscription():
-                            print(f"⚠ Kick: Subscription not active, attempting to resubscribe...")
+                            logger.warning(f"⚠ Kick: Subscription not active, attempting to resubscribe...")
                             if self.subscribe_to_chat_events():
-                                print(f"✓ Kick: Successfully resubscribed")
+                                logger.info(f"✓ Kick: Successfully resubscribed")
                             else:
-                                print(f"✗ Kick: Failed to resubscribe")
+                                logger.error(f"✗ Kick: Failed to resubscribe")
                                 self.error_occurred.emit("Kick webhook subscription failed")
             
             logger.info(f"Health monitoring stopped")

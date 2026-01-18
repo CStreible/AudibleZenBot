@@ -103,7 +103,7 @@ class KickConnector(BasePlatformConnector):
                 return False
                 
         except Exception as e:
-            print(f"Error refreshing Kick token: {e}")
+            logger.exception(f"Error refreshing Kick token: {e}")
             return False
     
     def connect(self, username: str):
@@ -176,7 +176,7 @@ class KickWorker(QThread):
     def run(self):
         # Prevent worker from running if disabled in config
         if hasattr(self, 'config') and self.config and self.config.get('platforms', {}).get('kick', {}).get('disabled', False):
-            print("[KickWorker] Skipping run: platform is disabled")
+            logger.info("KickWorker: Skipping run - platform is disabled")
             return
         """Run the Kick WebSocket connection"""
         self.running = True
@@ -196,7 +196,7 @@ class KickWorker(QThread):
         """Connect to Kick WebSocket"""
         try:
             # Get chatroom ID from channel name
-            print(f"Fetching Kick chatroom ID for channel: {self.channel}")
+            logger.info(f"Fetching Kick chatroom ID for channel: {self.channel}")
             self.chatroom_id = await self.get_chatroom_id()
             if not self.chatroom_id:
                 self.error_signal.emit(f"Failed to get Kick chatroom ID for {self.channel}")

@@ -1,5 +1,8 @@
 from PyQt6.QtCore import QObject, pyqtSignal
 import traceback
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class MainThreadExecutor(QObject):
@@ -14,7 +17,7 @@ class MainThreadExecutor(QObject):
         try:
             func(*args, **kwargs)
         except Exception:
-            print("[MainThreadExecutor] Exception in scheduled function")
+            logger.exception("Exception in scheduled function")
             traceback.print_exc()
 
 

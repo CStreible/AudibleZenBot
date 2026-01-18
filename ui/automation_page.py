@@ -19,6 +19,9 @@ import sys
 import json
 import random
 import base64
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 
@@ -102,21 +105,21 @@ class AutomationPage(QWidget):
         return 'string'
 
     def print_variables_tab_diagnostics(self):
-        print("\n[DIAGNOSTICS] Variables Tab Layout:")
-        print(f"  TabWidget geometry: {self.tab_widget.geometry()}")
-        print(f"  Variables tab QWidget geometry: {self.variables_tab.geometry()}")
-        print(f"  Variables tab QWidget size: {self.variables_tab.size()}")
-        print(f"  Variables tab QWidget minimumSize: {self.variables_tab.minimumSize()}")
-        print(f"  Variables tab QWidget maximumSize: {self.variables_tab.maximumSize()}")
+        logger.debug("\n[DIAGNOSTICS] Variables Tab Layout:")
+        logger.debug(f"  TabWidget geometry: {self.tab_widget.geometry()}")
+        logger.debug(f"  Variables tab QWidget geometry: {self.variables_tab.geometry()}")
+        logger.debug(f"  Variables tab QWidget size: {self.variables_tab.size()}")
+        logger.debug(f"  Variables tab QWidget minimumSize: {self.variables_tab.minimumSize()}")
+        logger.debug(f"  Variables tab QWidget maximumSize: {self.variables_tab.maximumSize()}")
         margins = self.variables_tab.contentsMargins()
-        print(f"  Variables tab QWidget contentsMargins: left={margins.left()}, top={margins.top()}, right={margins.right()}, bottom={margins.bottom()}")
-        print(f"  Variables rows container count: {self.variables_rows_container.count()}")
+        logger.debug(f"  Variables tab QWidget contentsMargins: left={margins.left()}, top={margins.top()}, right={margins.right()}, bottom={margins.bottom()}")
+        logger.debug(f"  Variables rows container count: {self.variables_rows_container.count()}")
         for i in range(self.variables_rows_container.count()):
             row_widget = self.variables_rows_container.itemAt(i).widget()
             if row_widget:
-                print(f"    Row {i}: {row_widget.geometry()} size={row_widget.size()} min={row_widget.minimumSize()} max={row_widget.maximumSize()} policy={row_widget.sizePolicy()}")
+                logger.debug(f"    Row {i}: {row_widget.geometry()} size={row_widget.size()} min={row_widget.minimumSize()} max={row_widget.maximumSize()} policy={row_widget.sizePolicy()}")
                 for child in row_widget.findChildren(QWidget):
-                    print(f"      Child: {type(child).__name__} geometry={child.geometry()} size={child.size()} min={child.minimumSize()} max={child.maximumSize()} policy={child.sizePolicy()}")
+                    logger.debug(f"      Child: {type(child).__name__} geometry={child.geometry()} size={child.size()} min={child.minimumSize()} max={child.maximumSize()} policy={child.sizePolicy()}")
 
     def create_variables_tab(self):
         """Create the Variables tab with a styled box like timer groups"""
@@ -217,7 +220,7 @@ class AutomationPage(QWidget):
         return outer_widget
 
     def add_variable_row(self, name='', value='', default='', initialize=False, var_type='string'):
-        print(f"[VariablesTab] DEBUG: add_variable_row called with name='{name}', value='{value}', default='{default}', initialize={initialize}")
+        logger.debug(f"[VariablesTab] DEBUG: add_variable_row called with name='{name}', value='{value}', default='{default}', initialize={initialize}")
         from ui.variable_row_widget import VariableRowWidget
         # Always set value to default if Initialize? is selected
         if initialize:
@@ -286,9 +289,9 @@ class AutomationPage(QWidget):
         self.save_variables_to_config()
 
     def _on_add_variable_clicked_with_log(self):
-        print("[VariablesTab] DEBUG: Add Variable button clicked")
+        logger.debug("[VariablesTab] DEBUG: Add Variable button clicked")
         self.add_variable_row()
-        print("[VariablesTab] DEBUG: add_variable_row() called")
+        logger.debug("[VariablesTab] DEBUG: add_variable_row() called")
         # Do NOT call save_variables_to_config() here; only save on cell edit or checkbox toggle
 
     def __init__(self, chat_manager, config):
@@ -515,7 +518,7 @@ QTabBar::tab:hover {
         """Add a new timer message group"""
         # Validate group_name if provided
         if group_name is not None and not isinstance(group_name, str):
-            print(f"[TimerMessages] Invalid group_name type: {type(group_name)}, value: {group_name}")
+            logger.warning(f"[TimerMessages] Invalid group_name type: {type(group_name)}, value: {group_name}")
             return
         
         if group_name is None:
@@ -1038,7 +1041,7 @@ QTabBar::tab:hover {
                                     username = pc.get('bot_username') or pc.get('username')
                                     token = pc.get('bot_token')
                                     account_type = 'bot'
-                                    print(f"[TimerMessages] Using live bot connector for {platform}: {username}")
+                                    logger.info(f"[TimerMessages] Using live bot connector for {platform}: {username}")
                         except Exception:
                             pass
 
@@ -1060,10 +1063,10 @@ QTabBar::tab:hover {
                         platforms_sent.append(f"{platform}({account_type})")
                         
                 except Exception as e:
-                    print(f"[TimerMessages] Error sending specific message to {platform}: {e}")
+                    logger.exception(f"[TimerMessages] Error sending specific message to {platform}: {e}")
         
         if platforms_sent:
-            print(f"[TimerMessages] SPECIFIC SEND from '{group_name}' to {platforms_sent}: {message}")
+            logger.info(f"[TimerMessages] SPECIFIC SEND from '{group_name}' to {platforms_sent}: {message}")
         else:
             QMessageBox.warning(
                 self,
@@ -1079,7 +1082,7 @@ QTabBar::tab:hover {
         if group_name in self.timer_groups:
             self.timer_groups[group_name]['send_as_streamer'] = enabled
             self.save_timer_config()
-            print(f"[TimerMessages] Group '{group_name}' send_as_streamer: {enabled}")
+            logger.debug(f"[TimerMessages] Group '{group_name}' send_as_streamer: {enabled}")
     
     def test_send_timer_message(self, group_name):
         """Manually send a random message from the timer group immediately"""
@@ -1125,35 +1128,35 @@ QTabBar::tab:hover {
                                 username = pc.get('bot_username') or pc.get('username')
                                 token = pc.get('bot_token')
                                 account_type = 'bot'
-                                print(f"[TimerMessages] Test: {platform} - Using live BOT connector: {username}")
+                                logger.debug(f"[TimerMessages] Test: {platform} - Using live BOT connector: {username}")
                         except Exception:
                             pass
 
                         if account_type != 'bot':
                             bot_username = platform_config.get('bot_username')
                             bot_token = platform_config.get('bot_token')
-                            print(f"[TimerMessages] Test: {platform} - Checking bot credentials: username='{bot_username}', has_token={bool(bot_token)}")
+                            logger.debug(f"[TimerMessages] Test: {platform} - Checking bot credentials: username='{bot_username}', has_token={bool(bot_token)}")
                             if bot_username and bot_token:
                                 username = bot_username
                                 token = bot_token
                                 account_type = 'bot'
-                                print(f"[TimerMessages] Test: {platform} - Using BOT account: {bot_username}")
+                                logger.debug(f"[TimerMessages] Test: {platform} - Using BOT account: {bot_username}")
                             else:
-                                print(f"[TimerMessages] Test: {platform} - Bot not available, falling back to STREAMER account")
+                                logger.debug(f"[TimerMessages] Test: {platform} - Bot not available, falling back to STREAMER account")
 
                     if not username or not token:
-                        print(f"[TimerMessages] Test: No credentials for {platform} ({account_type} account)")
+                        logger.debug(f"[TimerMessages] Test: No credentials for {platform} ({account_type} account)")
                         continue
 
                     success = self.send_message_as_account(platform, message, username, token, account_type)
                     if success:
                         platforms_sent.append(f"{platform}({account_type})")
                 except Exception as e:
-                    print(f"[TimerMessages] Test: Error sending to {platform}: {e}")
+                    logger.exception(f"[TimerMessages] Test: Error sending to {platform}: {e}")
                     import traceback
                     traceback.print_exc()
 
-        print(f"[TimerMessages] TEST SEND from '{group_name}' to {platforms_sent}: {message}")
+        logger.info(f"[TimerMessages] TEST SEND from '{group_name}' to {platforms_sent}: {message}")
         QMessageBox.information(self, "Test Message Sent", 
                                f"Message sent to: {', '.join(platforms_sent)}\n\nMessage: {message}")
     
@@ -1289,12 +1292,12 @@ QTabBar::tab:hover {
         
         group = self.timer_groups[group_name]
         if not group['messages']:
-            print(f"[TimerMessages] Group '{group_name}' has no messages, skipping")
+            logger.info(f"[TimerMessages] Group '{group_name}' has no messages, skipping")
             return
         
         # Check if any stream is live (unless allow_offline is enabled)
         if not group.get('allow_offline', False) and not self.any_stream_live:
-            print(f"[TimerMessages] Group '{group_name}' waiting for stream to start (allow_offline=False)")
+            logger.info(f"[TimerMessages] Group '{group_name}' waiting for stream to start (allow_offline=False)")
             return
         
         # Initialize state
@@ -1316,7 +1319,7 @@ QTabBar::tab:hover {
         
         display_name = group.get('display_name', group_name)
         offline_status = " (offline mode)" if group.get('allow_offline', False) and not self.any_stream_live else ""
-        print(f"[TimerMessages] Started group '{display_name}' with {len(group['messages'])} messages, interval: {group['interval']}s (first message in {group['interval']}s){offline_status}")
+        logger.info(f"[TimerMessages] Started group '{display_name}' with {len(group['messages'])} messages, interval: {group['interval']}s (first message in {group['interval']}s){offline_status}")
     
     def stop_timer_group(self, group_name):
         """Stop sending messages for a timer group"""
@@ -1326,7 +1329,7 @@ QTabBar::tab:hover {
                 timer.stop()
                 timer.deleteLater()
             del self.timer_state[group_name]
-            print(f"[TimerMessages] Stopped group '{group_name}'")
+            logger.info(f"[TimerMessages] Stopped group '{group_name}'")
     
     def send_next_timer_message(self, group_name):
         """Send the next message from a timer group"""
@@ -1340,7 +1343,7 @@ QTabBar::tab:hover {
         if not state['remaining_messages']:
             state['remaining_messages'] = group['messages'].copy()
             random.shuffle(state['remaining_messages'])
-            print(f"[TimerMessages] Group '{group_name}' reshuffled messages")
+            logger.info(f"[TimerMessages] Group '{group_name}' reshuffled messages")
         
         # Get next message
         message = state['remaining_messages'].pop(0)
@@ -1374,7 +1377,7 @@ QTabBar::tab:hover {
                                 username = pc.get('bot_username') or pc.get('username')
                                 token = pc.get('bot_token')
                                 account_type = 'bot'
-                                print(f"[TimerMessages] Using live bot connector for {platform}: {username}")
+                                logger.info(f"[TimerMessages] Using live bot connector for {platform}: {username}")
                         except Exception:
                             pass
 
@@ -1387,18 +1390,18 @@ QTabBar::tab:hover {
                                 account_type = 'bot'
 
                     if not username or not token:
-                        print(f"[TimerMessages] No credentials for {platform} ({account_type} account)")
+                        logger.debug(f"[TimerMessages] No credentials for {platform} ({account_type} account)")
                         continue
 
                     success = self.send_message_as_account(platform, message, username, token, account_type)
                     if success:
                         platforms_sent.append(f"{platform}({account_type})")
                 except Exception as e:
-                    print(f"[TimerMessages] Error sending to {platform}: {e}")
+                    logger.exception(f"[TimerMessages] Error sending to {platform}: {e}")
                     import traceback
                     traceback.print_exc()
         
-        print(f"[TimerMessages] Sent message from '{group_name}' to {platforms_sent}: {message[:50]}...")
+        logger.info(f"[TimerMessages] Sent message from '{group_name}' to {platforms_sent}: {message[:50]}...")
     
     def send_message_as_account(self, platform, message, username, token, account_type):
         """Send a message to a platform using specific account credentials"""
@@ -1416,81 +1419,81 @@ QTabBar::tab:hover {
         try:
             # For Twitch, use the appropriate persistent connection
             if platform == 'twitch':
-                print(f"[TimerMessages] Twitch send: account_type={account_type}, username={username}")
+                logger.debug(f"[TimerMessages] Twitch send: account_type={account_type}, username={username}")
                 if account_type == 'bot':
                     # Use persistent bot connector from chat_manager
-                    print(f"[TimerMessages] Calling sendMessageAsBot for Twitch...")
+                    logger.debug(f"[TimerMessages] Calling sendMessageAsBot for Twitch...")
                     # Disable fallback to ensure only bot sends (no streamer fallback)
                     success = self.chat_manager.sendMessageAsBot('twitch', message, allow_fallback=False)
                     if success:
-                        print(f"[TimerMessages] ✓ Twitch: Sent via persistent bot connection ({username})")
+                        logger.info(f"[TimerMessages] ✓ Twitch: Sent via persistent bot connection ({username})")
                         # Don't echo - bot connector will read its own message back from IRC
                         return True
                     else:
-                        print(f"[TimerMessages] ⚠ Twitch: Bot connector not available")
+                        logger.warning(f"[TimerMessages] ⚠ Twitch: Bot connector not available")
                         return False
                 else:  # account_type == 'streamer'
                     # Use streamer connector directly
                     connector = self.chat_manager.connectors.get('twitch')
                     if connector and hasattr(connector, 'send_message') and getattr(connector, 'connected', False):
-                        print(f"[TimerMessages][TRACE] Twitch streamer send: connector_connected={getattr(connector, 'connected', False)} username={username}")
+                        logger.debug(f"[TimerMessages][TRACE] Twitch streamer send: connector_connected={getattr(connector, 'connected', False)} username={username}")
                         result = connector.send_message(message)
-                        print(f"[TimerMessages][TRACE] Twitch streamer send result: {result}")
+                        logger.debug(f"[TimerMessages][TRACE] Twitch streamer send result: {result}")
                         if result:
-                            print(f"[TimerMessages] ✓ Twitch: Sent via persistent streamer connection ({username})")
+                            logger.info(f"[TimerMessages] ✓ Twitch: Sent via persistent streamer connection ({username})")
                             # Don't echo - Twitch IRC echoes back our own messages
                             return True
                         else:
-                            print(f"[TimerMessages] ✗ Twitch: send_message returned False for streamer ({username})")
+                            logger.warning(f"[TimerMessages] ✗ Twitch: send_message returned False for streamer ({username})")
                             return False
                     else:
-                        print(f"[TimerMessages] ✗ Twitch: Streamer connector not available")
+                        logger.warning(f"[TimerMessages] ✗ Twitch: Streamer connector not available")
                         return False
             
             elif platform == 'kick':
                 # Use Kick persistent connection
-                print(f"[TimerMessages] Kick send: account_type={account_type}, username={username}")
+                logger.debug(f"[TimerMessages] Kick send: account_type={account_type}, username={username}")
                 if account_type == 'bot':
                     # Use persistent bot connector from chat_manager
                     # Disable fallback to ensure only bot sends (no streamer fallback)
                     success = self.chat_manager.sendMessageAsBot('kick', message, allow_fallback=False)
                     if success:
-                        print(f"[TimerMessages] ✓ Kick: Sent via persistent bot connection ({username})")
+                        logger.info(f"[TimerMessages] ✓ Kick: Sent via persistent bot connection ({username})")
                         return True
                     else:
-                        print(f"[TimerMessages] ⚠ Kick: Bot connector not available")
+                        logger.warning(f"[TimerMessages] ⚠ Kick: Bot connector not available")
                         return False
                 else:  # account_type == 'streamer'
                     # Use streamer connector directly
                     connector = self.chat_manager.connectors.get('kick')
                     if connector and hasattr(connector, 'send_message') and getattr(connector, 'connected', False):
                         connector.send_message(message)
-                        print(f"[TimerMessages] ✓ Kick: Sent via persistent streamer connection ({username})")
+                        logger.info(f"[TimerMessages] ✓ Kick: Sent via persistent streamer connection ({username})")
                         
                         # No need to echo - Kick webhook will receive it back
                         # (message will appear in chat log via normal webhook flow)
                         return True
                     else:
-                        print(f"[TimerMessages] ✗ Kick: Streamer connector not available")
+                        logger.warning(f"[TimerMessages] ✗ Kick: Streamer connector not available")
                         return False
             
             elif platform == 'youtube':
                 # Use YouTube persistent connection
-                print(f"[TimerMessages] YouTube send: account_type={account_type}, username={username}")
+                logger.debug(f"[TimerMessages] YouTube send: account_type={account_type}, username={username}")
                 if account_type == 'bot':
                     # Disable fallback to ensure only bot sends (no streamer fallback)
                     success = self.chat_manager.sendMessageAsBot('youtube', message, allow_fallback=False)
                     if success:
-                        print(f"[TimerMessages] ✓ YouTube: Sent via persistent bot connection ({username})")
+                        logger.info(f"[TimerMessages] ✓ YouTube: Sent via persistent bot connection ({username})")
                         return True
                     else:
-                        print(f"[TimerMessages] ⚠ YouTube: Bot connector not available")
+                        logger.warning(f"[TimerMessages] ⚠ YouTube: Bot connector not available")
                         return False
                 else:  # account_type == 'streamer'
                     connector = self.chat_manager.connectors.get('youtube')
                     if connector and hasattr(connector, 'send_message') and getattr(connector, 'connected', False):
                         connector.send_message(message)
-                        print(f"[TimerMessages] ✓ YouTube: Sent via persistent streamer connection ({username})")
+                        logger.info(f"[TimerMessages] ✓ YouTube: Sent via persistent streamer connection ({username})")
                         
                         # Echo the message to chat log
                         from datetime import datetime
@@ -1506,26 +1509,26 @@ QTabBar::tab:hover {
                             self.chat_manager.message_received.emit('youtube', username, message, metadata)
                         return True
                     else:
-                        print(f"[TimerMessages] ✗ YouTube: Streamer connector not available")
+                        logger.warning(f"[TimerMessages] ✗ YouTube: Streamer connector not available")
                         return False
             
             elif platform == 'trovo':
                 # Use Trovo persistent connection
-                print(f"[TimerMessages] Trovo send: account_type={account_type}, username={username}")
+                logger.debug(f"[TimerMessages] Trovo send: account_type={account_type}, username={username}")
                 if account_type == 'bot':
                     # Disable fallback to ensure only bot sends (no streamer fallback)
                     success = self.chat_manager.sendMessageAsBot('trovo', message, allow_fallback=False)
                     if success:
-                        print(f"[TimerMessages] ✓ Trovo: Sent via persistent bot connection ({username})")
+                        logger.info(f"[TimerMessages] ✓ Trovo: Sent via persistent bot connection ({username})")
                         return True
                     else:
-                        print(f"[TimerMessages] ⚠ Trovo: Bot connector not available")
+                        logger.warning(f"[TimerMessages] ⚠ Trovo: Bot connector not available")
                         return False
                 else:  # account_type == 'streamer'
                     connector = self.chat_manager.connectors.get('trovo')
                     if connector and hasattr(connector, 'send_message') and getattr(connector, 'connected', False):
                         connector.send_message(message)
-                        print(f"[TimerMessages] ✓ Trovo: Sent via persistent streamer connection ({username})")
+                        logger.info(f"[TimerMessages] ✓ Trovo: Sent via persistent streamer connection ({username})")
                         
                         # Echo the message to chat log
                         from datetime import datetime
@@ -1541,31 +1544,31 @@ QTabBar::tab:hover {
                             self.chat_manager.message_received.emit('trovo', username, message, metadata)
                         return True
                     else:
-                        print(f"[TimerMessages] ✗ Trovo: Streamer connector not available")
+                        logger.warning(f"[TimerMessages] ✗ Trovo: Streamer connector not available")
                         return False
             
             elif platform == 'dlive':
                 # Use DLive persistent connection
-                print(f"[TimerMessages] DLive send: account_type={account_type}, username={username}")
+                logger.debug(f"[TimerMessages] DLive send: account_type={account_type}, username={username}")
                 if account_type == 'bot':
                     # Disable fallback to ensure only bot sends (no streamer fallback)
                     success = self.chat_manager.sendMessageAsBot('dlive', message, allow_fallback=False)
                     if success:
-                        print(f"[TimerMessages] ✓ DLive: Sent via persistent bot connection ({username})")
+                        logger.info(f"[TimerMessages] ✓ DLive: Sent via persistent bot connection ({username})")
                         return True
                     else:
-                        print(f"[TimerMessages] ⚠ DLive: Bot connector not available")
+                        logger.warning(f"[TimerMessages] ⚠ DLive: Bot connector not available")
                         return False
                 else:  # account_type == 'streamer'
                     connector = self.chat_manager.connectors.get('dlive')
                     if connector and hasattr(connector, 'send_message') and getattr(connector, 'connected', False):
                         connector.send_message(message)
-                        print(f"[TimerMessages] ✓ DLive: Sent via persistent streamer connection ({username})")
+                        logger.info(f"[TimerMessages] ✓ DLive: Sent via persistent streamer connection ({username})")
                         
                         # Don't echo - DLive WebSocket subscription will receive the message back
                         return True
                     else:
-                        print(f"[TimerMessages] ✗ DLive: Streamer connector not available")
+                        logger.warning(f"[TimerMessages] ✗ DLive: Streamer connector not available")
                         return False
             
             elif platform == 'twitter':
@@ -1583,18 +1586,18 @@ QTabBar::tab:hover {
                 )
                 
                 if response.status_code in [200, 201]:
-                    print(f"[TimerMessages] ✓ Twitter: Sent as {account_type}")
+                    logger.info(f"[TimerMessages] ✓ Twitter: Sent as {account_type}")
                     return True
                 else:
-                    print(f"[TimerMessages] ✗ Twitter: Failed ({response.status_code})")
+                    logger.warning(f"[TimerMessages] ✗ Twitter: Failed ({response.status_code})")
                     return False
             
             else:
-                print(f"[TimerMessages] Platform {platform} not supported for direct sending")
+                logger.warning(f"[TimerMessages] Platform {platform} not supported for direct sending")
                 return False
                 
         except Exception as e:
-            print(f"[TimerMessages] Error sending to {platform}: {e}")
+            logger.exception(f"[TimerMessages] Error sending to {platform}: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -1635,12 +1638,12 @@ QTabBar::tab:hover {
         for group_name, group_data in groups.items():
             # Skip if group_name is not a valid string
             if not isinstance(group_name, str) or not group_name.strip():
-                print(f"[TimerMessages] Skipping invalid group name: {group_name}")
+                logger.warning(f"[TimerMessages] Skipping invalid group name: {group_name}")
                 continue
             
             # Ensure group_data is a dictionary
             if not isinstance(group_data, dict):
-                print(f"[TimerMessages] Skipping invalid group data for: {group_name}")
+                logger.warning(f"[TimerMessages] Skipping invalid group data for: {group_name}")
                 continue
             
             self.add_timer_group(
@@ -1690,14 +1693,14 @@ QTabBar::tab:hover {
         
         # If we just went live and have active groups, start them
         if any_live and not was_live:
-            print(f"[TimerMessages] Stream started, activating timer groups")
+            logger.info(f"[TimerMessages] Stream started, activating timer groups")
             for group_name, group in self.timer_groups.items():
                 if group.get('active', False) and group_name not in self.timer_state:
                     self.start_timer_group(group_name)
         
         # If all streams stopped, stop all timers
         elif not any_live and was_live:
-            print(f"[TimerMessages] All streams stopped, pausing timer groups")
+            logger.info(f"[TimerMessages] All streams stopped, pausing timer groups")
             for group_name in list(self.timer_state.keys()):
                 self.stop_timer_group(group_name)
     
@@ -1728,7 +1731,7 @@ QTabBar::tab:hover {
                                                               Qt.TransformationMode.SmoothTransformation)
                                 return QIcon(scaled_pixmap)
                     except Exception as e:
-                        print(f"[AutomationPage] Failed to download icon from URL for {platform_name}: {e}")
+                        logger.exception(f"[AutomationPage] Failed to download icon from URL for {platform_name}: {e}")
                 return QIcon()
             
             # Try to load icon from resources - check multiple locations
@@ -1759,7 +1762,7 @@ QTabBar::tab:hover {
                                                           Qt.TransformationMode.SmoothTransformation)
                             return QIcon(scaled_pixmap)
         except Exception as e:
-            print(f"[AutomationPage] Failed to load icon for {platform_name}: {e}")
+            logger.exception(f"[AutomationPage] Failed to load icon for {platform_name}: {e}")
         
         # Return empty icon if loading fails
         return QIcon()

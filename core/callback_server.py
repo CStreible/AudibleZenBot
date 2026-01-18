@@ -18,6 +18,9 @@ Flask response. This module runs the Flask app in a background thread.
 
 from threading import Thread, Lock
 from typing import Callable, Dict, List
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 try:
     from flask import Flask, request, jsonify
@@ -103,7 +106,7 @@ def start_server(port: int = 8889):
             try:
                 _app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
             except Exception as e:
-                print(f"[CallbackServer] Flask server error: {e}")
+                logger.exception(f"Flask server error: {e}")
 
         _thread = Thread(target=_run, daemon=True)
         _thread.start()

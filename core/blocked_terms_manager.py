@@ -5,6 +5,9 @@ Blocked Terms Manager - Manage blocked words and phrases
 import json
 from pathlib import Path
 from typing import List, Set
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class BlockedTermsManager:
@@ -25,9 +28,9 @@ class BlockedTermsManager:
                 with open(self.blocked_terms_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self.blocked_terms = set(data.get('blocked_terms', []))
-                print(f"[BlockedTerms] Loaded {len(self.blocked_terms)} blocked terms")
+                logger.info(f"Loaded {len(self.blocked_terms)} blocked terms")
             except Exception as e:
-                print(f"[BlockedTerms] Error loading blocked terms: {e}")
+                logger.exception(f"Error loading blocked terms: {e}")
                 self.blocked_terms = set()
         else:
             self.blocked_terms = set()
@@ -40,9 +43,9 @@ class BlockedTermsManager:
             }
             with open(self.blocked_terms_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
-            print(f"[BlockedTerms] Saved {len(self.blocked_terms)} blocked terms")
+            logger.info(f"Saved {len(self.blocked_terms)} blocked terms")
         except Exception as e:
-            print(f"[BlockedTerms] Error saving blocked terms: {e}")
+            logger.exception(f"Error saving blocked terms: {e}")
     
     def add_term(self, term: str):
         """Add a term to the blocked list"""
@@ -50,7 +53,7 @@ class BlockedTermsManager:
         if term:
             self.blocked_terms.add(term)
             self.save()
-            print(f"[BlockedTerms] Added blocked term: {term}")
+            logger.info(f"Added blocked term: {term}")
     
     def remove_term(self, term: str):
         """Remove a term from the blocked list"""
@@ -58,7 +61,7 @@ class BlockedTermsManager:
         if term in self.blocked_terms:
             self.blocked_terms.discard(term)
             self.save()
-            print(f"[BlockedTerms] Removed blocked term: {term}")
+            logger.info(f"Removed blocked term: {term}")
     
     def is_blocked(self, message: str) -> bool:
         """Check if a message contains any blocked terms"""
@@ -85,7 +88,7 @@ class BlockedTermsManager:
         """Clear all blocked terms"""
         self.blocked_terms.clear()
         self.save()
-        print("[BlockedTerms] Cleared all blocked terms")
+        logger.info("Cleared all blocked terms")
 
 
 # Global instance

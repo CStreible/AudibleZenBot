@@ -222,7 +222,7 @@ class TwitterWorker(QThread):
         
         if not self.oauth_token:
             error_msg = "No OAuth token provided. Cannot connect to Twitter."
-            print(f"[TwitterWorker] ERROR: {error_msg}")
+            logger.error(f"TwitterWorker ERROR: {error_msg}")
             self.error_signal.emit(error_msg)
             self.status_signal.emit(False)
             return
@@ -459,11 +459,11 @@ class TwitterWorker(QThread):
                         'badges': []
                     }
                     
-                    print(f"[TwitterWorker] Mention from {author_name}: {text[:50]}...")
+                    logger.info(f"Mention from {author_name}: {text[:50]}...")
                     self.message_signal.emit(author_name, text, metadata)
                     
         except Exception as e:
-            print(f"[TwitterWorker] Exception fetching mentions: {e}")
+            logger.exception(f"Exception fetching mentions: {e}")
     
     def fetch_home_timeline(self):
         """Fetch home timeline tweets (from accounts you follow)"""
@@ -555,13 +555,12 @@ class TwitterWorker(QThread):
                     self.processed_tweets = set(list(self.processed_tweets)[-1000:])
             
             elif response.status_code == 429:
-                print("[TwitterWorker] Rate limit hit, waiting longer...")
+                logger.warning("[TwitterWorker] Rate limit hit, waiting longer...")
                 time.sleep(60)
             else:
-                print(f"[TwitterWorker] Error fetching timeline: {response.status_code}")
-                
+                logger.error(f"[TwitterWorker] Error fetching timeline: {response.status_code}")
         except Exception as e:
-            print(f"[TwitterWorker] Exception fetching timeline: {e}")
+            logger.exception(f"Exception fetching timeline: {e}")
     
     def fetch_tweet_replies(self):
         """Fetch replies to the user's recent tweets"""
@@ -601,7 +600,7 @@ class TwitterWorker(QThread):
                     self.fetch_conversation(conversation_id)
             
         except Exception as e:
-            print(f"[TwitterWorker] Exception fetching tweet replies: {e}")
+            logger.exception(f"Exception fetching tweet replies: {e}")
     
     def fetch_conversation(self, conversation_id: str):
         """Fetch tweets in a conversation thread"""
@@ -663,7 +662,7 @@ class TwitterWorker(QThread):
                     self.message_signal.emit(author_name, text, metadata)
                 
         except Exception as e:
-            print(f"[TwitterWorker] Exception fetching conversation: {e}")
+            logger.exception(f"Exception fetching conversation: {e}")
     
     def refresh_access_token(self) -> bool:
         """Refresh the access token using refresh token"""
@@ -686,20 +685,20 @@ class TwitterWorker(QThread):
                 new_refresh = data.get('refresh_token')
                 if new_refresh:
                     self.refresh_token = new_refresh
-                print("[TwitterWorker] Token refreshed successfully")
+                logger.info("TwitterWorker: Token refreshed successfully")
                 return True
             else:
-                print(f"[TwitterWorker] Token refresh failed: {response.status_code}")
+                logger.warning(f"TwitterWorker: Token refresh failed: {response.status_code}")
                 return False
                 
         except Exception as e:
-            print(f"[TwitterWorker] Error refreshing token: {e}")
+            logger.exception(f"Error refreshing token: {e}")
             return False
     
     def send_tweet(self, message: str):
         """Send a tweet"""
         if not self.oauth_token:
-            print("[TwitterWorker] Cannot send tweet: No OAuth token")
+            logger.warning("Cannot send tweet: No OAuth token")
             return
         
         try:
@@ -719,13 +718,13 @@ class TwitterWorker(QThread):
             )
             
             if response.status_code == 201:
-                print(f"[TwitterWorker] Tweet sent successfully")
+                logger.info("Tweet sent successfully")
             else:
-                print(f"[TwitterWorker] Failed to send tweet: {response.status_code}")
-                print(f"[TwitterWorker] Response: {response.text}")
+                logger.warning(f"Failed to send tweet: {response.status_code}")
+                logger.debug(f"Response: {response.text}")
                 
         except Exception as e:
-            print(f"[TwitterWorker] Error sending tweet: {e}")
+            logger.exception(f"Error sending tweet: {e}")
     
     def stop(self):
         """Stop the worker"""

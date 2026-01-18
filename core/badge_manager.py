@@ -7,6 +7,9 @@ import json
 import requests
 from pathlib import Path
 from typing import Dict, Optional
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class BadgeManager:
@@ -37,7 +40,7 @@ class BadgeManager:
                 with open(self.cache_file, 'r') as f:
                     self.badge_urls = json.load(f)
             except Exception as e:
-                print(f"Error loading badge cache: {e}")
+                logger.exception(f"Error loading badge cache: {e}")
                 self.badge_urls = {}
     
     def save_cache(self):
@@ -46,7 +49,7 @@ class BadgeManager:
             with open(self.cache_file, 'w') as f:
                 json.dump(self.badge_urls, f, indent=2)
         except Exception as e:
-            print(f"Error saving badge cache: {e}")
+            logger.exception(f"Error saving badge cache: {e}")
     
     def fetch_twitch_badges(self, client_id: str, access_token: str, channel_id: str = None):
         """
@@ -84,12 +87,12 @@ class BadgeManager:
                         }
                 
                 self.save_cache()
-                print(f"Fetched {len(self.badge_urls)} global Twitch badges")
+                logger.info(f"Fetched {len(self.badge_urls)} global Twitch badges")
             else:
-                print(f"Failed to fetch badges: {response.status_code}")
+                logger.warning(f"Failed to fetch badges: {response.status_code}")
                 
         except Exception as e:
-            print(f"Error fetching Twitch badges: {e}")
+            logger.exception(f"Error fetching Twitch badges: {e}")
         
         # Fetch channel-specific badges if channel_id provided
         if channel_id:
@@ -114,10 +117,10 @@ class BadgeManager:
                             }
                     
                     self.save_cache()
-                    print(f"Fetched channel-specific badges for channel {channel_id}")
+                    logger.info(f"Fetched channel-specific badges for channel {channel_id}")
                     
             except Exception as e:
-                print(f"Error fetching channel badges: {e}")
+                logger.exception(f"Error fetching channel badges: {e}")
     
     def download_badge(self, badge_key: str, size: str = '1x') -> Optional[str]:
         """
@@ -131,7 +134,7 @@ class BadgeManager:
             Path to downloaded badge image, or None if not found
         """
         if badge_key not in self.badge_urls:
-            print(f"Badge key {badge_key} not in badge_urls. Available keys: {len(self.badge_urls)}")
+            logger.warning(f"Badge key {badge_key} not in badge_urls. Available keys: {len(self.badge_urls)}")
             return None
         
         badge_info = self.badge_urls[badge_key]
@@ -139,7 +142,7 @@ class BadgeManager:
         url = badge_info.get(url_key)
         
         if not url:
-            print(f"No URL found for badge {badge_key} with size {size}")
+            logger.warning(f"No URL found for badge {badge_key} with size {size}")
             return None
         
         # Create filename from badge key
@@ -150,17 +153,17 @@ class BadgeManager:
         # Download if not cached
         if not filepath.exists():
             try:
-                print(f"Downloading badge from: {url}")
+                logger.info(f"Downloading badge from: {url}")
                 response = requests.get(url, timeout=5)
                 if response.status_code == 200:
                     with open(filepath, 'wb') as f:
                         f.write(response.content)
-                    print(f"Downloaded badge: {badge_key} to {filepath}")
+                    logger.info(f"Downloaded badge: {badge_key} to {filepath}")
                 else:
-                    print(f"Failed to download badge {badge_key}: HTTP {response.status_code}")
+                    logger.warning(f"Failed to download badge {badge_key}: HTTP {response.status_code}")
                     return None
             except Exception as e:
-                print(f"Error downloading badge {badge_key}: {e}")
+                logger.exception(f"Error downloading badge {badge_key}: {e}")
                 return None
         
         return str(filepath)

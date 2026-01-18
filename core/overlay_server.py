@@ -10,6 +10,9 @@ import threading
 import json
 import os
 import mimetypes
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 app = Flask(__name__)
 CORS(app)
@@ -799,7 +802,7 @@ def receive_devices():
         with devices_lock:
             video_devices = formatted_devices
         
-        print(f"[OverlayServer] Received {len(formatted_devices)} video devices")
+        logger.info(f"Received {len(formatted_devices)} video devices")
         
         # Signal the UI to update (will be implemented)
         if server_instance:
@@ -807,7 +810,7 @@ def receive_devices():
         
         return jsonify({'status': 'ok', 'count': len(formatted_devices)})
     except Exception as e:
-        print(f"[OverlayServer] Error receiving devices: {e}")
+        logger.exception(f"Error receiving devices: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
@@ -815,7 +818,7 @@ def update_overlay_settings(new_settings):
     """Update overlay settings"""
     with settings_lock:
         overlay_settings.update(new_settings)
-        print(f"[OverlayServer] Settings updated: {new_settings}")
+        logger.info(f"Settings updated: {new_settings}")
 
 
 
@@ -899,11 +902,11 @@ class OverlayServer(QObject):
         
         self.server_thread = threading.Thread(target=run_server, daemon=True)
         self.server_thread.start()
-        
+
         # Emit the overlay URL
         overlay_url = f"http://localhost:{self.port}/overlay"
         self.server_started.emit(overlay_url)
-        print(f"[OverlayServer] Started on {overlay_url}")
+        logger.info(f"Started on {overlay_url}")
         
     def add_message(self, platform, username, message, message_id, badges=None, color=None):
         """Add a message to the overlay"""

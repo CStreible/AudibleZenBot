@@ -58,7 +58,7 @@ class ChatManager(QObject):
             if pid not in self.disabled_platforms:
                 self.connectors[pid] = ctor(self.config)
             else:
-                print(f"[ChatManager] Not instantiating connector for disabled platform: {pid}")
+                logger.info(f"Not instantiating connector for disabled platform: {pid}")
         
         # Bot connectors (for sending messages - bot account)
         self.bot_connectors: Dict[str, object] = {}
@@ -436,7 +436,7 @@ class ChatManager(QObject):
         try:
             bot_states = {k: getattr(v, 'connected', False) for k, v in self.bot_connectors.items()}
             streamer_states = {k: getattr(v, 'connected', False) for k, v in self.connectors.items()}
-            print(f"[ChatManager][SEND-TRACE] bot_connectors={bot_states} connectors={streamer_states}")
+            logger.debug(f"[SEND-TRACE] bot_connectors={bot_states} connectors={streamer_states}")
         except Exception:
             pass
 
@@ -449,7 +449,7 @@ class ChatManager(QObject):
             if has_worker and hasattr(bot_connector.worker, 'websocket') and bot_connector.worker.websocket:
                 worker_connected = True
 
-            print(f"[ChatManager] Bot connector found for {platform_id}, connected={getattr(bot_connector, 'connected', False)}, has_worker={has_worker}, worker_connected={worker_connected}")
+            logger.info(f"Bot connector found for {platform_id}, connected={getattr(bot_connector, 'connected', False)}, has_worker={has_worker}, worker_connected={worker_connected}")
 
             try:
                 # Determine if bot can send messages
@@ -472,7 +472,7 @@ class ChatManager(QObject):
                         pass
 
                     if result:
-                        print(f"[ChatManager] [OK] Sent message as bot on {platform_id}")
+                        logger.info(f"[OK] Sent message as bot on {platform_id}")
                         # Echo the message to chat log (except for Twitch - IRC echoes automatically)
                         if platform_id != 'twitch':
                             from datetime import datetime
@@ -493,44 +493,44 @@ class ChatManager(QObject):
                                 self.message_received.emit(platform_id, bot_username, message, metadata)
                         return True
                     else:
-                        print(f"[ChatManager] [ERROR] Bot send failed for {platform_id}")
+                        logger.error(f"Bot send failed for {platform_id}")
                         if not allow_fallback:
-                            print(f"[ChatManager] [ERROR] Fallback disabled, not trying streamer")
+                            logger.error("Fallback disabled, not trying streamer")
                             return False
-                        print(f"[ChatManager] Trying fallback to streamer...")
+                        logger.info("Trying fallback to streamer...")
                 elif not can_send:
-                    print(f"[ChatManager] [WARN] Bot connector not ready for {platform_id}")
+                    logger.warning(f"Bot connector not ready for {platform_id}")
                     if not allow_fallback:
-                        print(f"[ChatManager] [ERROR] Fallback disabled, not trying streamer")
+                        logger.error("Fallback disabled, not trying streamer")
                         return False
-                    print(f"[ChatManager] Falling back to streamer...")
+                    logger.info("Falling back to streamer...")
                 else:
-                    print(f"[ChatManager] [WARN] Bot connector missing send_message for {platform_id}")
+                    logger.warning(f"Bot connector missing send_message for {platform_id}")
                     if not allow_fallback:
-                        print(f"[ChatManager] [ERROR] Fallback disabled, not trying streamer")
+                        logger.error("Fallback disabled, not trying streamer")
                         return False
             except Exception as e:
-                print(f"[ChatManager] [ERROR] Error sending as bot on {platform_id}: {e}")
+                logger.exception(f"Error sending as bot on {platform_id}: {e}")
                 import traceback
                 traceback.print_exc()
                 if not allow_fallback:
-                    print(f"[ChatManager] [ERROR] Fallback disabled after exception")
+                    logger.error("Fallback disabled after exception")
                     return False
         else:
-            print(f"[ChatManager] No bot connector for {platform_id}")
+            logger.info(f"No bot connector for {platform_id}")
             if not allow_fallback:
-                print(f"[ChatManager] [ERROR] Fallback disabled, not trying streamer")
+                logger.error("Fallback disabled, not trying streamer")
                 return False
-            print(f"[ChatManager] Using streamer as fallback...")
+            logger.info("Using streamer as fallback...")
 
         # Fallback to streamer connector (only if allowed)
         if not allow_fallback:
-            print(f"[ChatManager] [ERROR] Bot send failed and fallback disabled for {platform_id}")
+            logger.error(f"Bot send failed and fallback disabled for {platform_id}")
             return False
 
         connector = self.connectors.get(platform_id)
         if connector and hasattr(connector, 'send_message'):
-            print(f"[ChatManager] Streamer connector found for {platform_id}, connected={getattr(connector, 'connected', False)}")
+            logger.info(f"Streamer connector found for {platform_id}, connected={getattr(connector, 'connected', False)}")
             try:
                 # Persistent send log for fallback/streamer path
                 try:
@@ -544,7 +544,7 @@ class ChatManager(QObject):
                 if getattr(connector, 'connected', False):
                     result = connector.send_message(message)
                     if result:
-                        print(f"[ChatManager] [OK] Sent message as streamer on {platform_id}")
+                        logger.info(f"[OK] Sent message as streamer on {platform_id}")
                         # Echo the message to chat log (except for Twitch - IRC echoes automatically)
                         if platform_id != 'twitch':
                             from datetime import datetime
@@ -563,16 +563,16 @@ class ChatManager(QObject):
                                 self.message_received.emit(platform_id, streamer_username, message, metadata)
                         return True
                     else:
-                        print(f"[ChatManager] [ERROR] Streamer send also failed for {platform_id}")
+                        logger.error(f"Streamer send also failed for {platform_id}")
                         return False
                 else:
-                    print(f"[ChatManager] [WARN] Streamer connector not connected for {platform_id}")
+                    logger.warning(f"Streamer connector not connected for {platform_id}")
             except Exception as e:
-                print(f"[ChatManager] [ERROR] Error sending as streamer on {platform_id}: {e}")
+                logger.exception(f"Error sending as streamer on {platform_id}: {e}")
                 import traceback
                 traceback.print_exc()
 
-        print(f"[ChatManager] [ERROR] Failed to send message on {platform_id} - no available connectors")
+        logger.error(f"Failed to send message on {platform_id} - no available connectors")
         return False
     
     def disablePlatform(self, platform_id: str, disabled: bool):
@@ -588,7 +588,7 @@ class ChatManager(QObject):
                 username = platform_config.get('streamer_username', '') or platform_config.get('username', '')
                 token = platform_config.get('streamer_token', '') or platform_config.get('token', '')
                 if username and token:
-                    print(f"[ChatManager] Enabled {platform_id}, reconnecting...")
+                    logger.info(f"Enabled {platform_id}, reconnecting...")
                     self.connectPlatform(platform_id, username, token)
         # Save disabled state to config
         if self.config:
@@ -601,26 +601,26 @@ class ChatManager(QObject):
             preview = message[:120] if message else ''
         except Exception:
             preview = ''
-        print(f"[ChatManager][TRACE] onMessageReceived: platform={platform_id} username={username} preview={preview}")
+        logger.debug(f"[TRACE] onMessageReceived: platform={platform_id} username={username} preview={preview}")
         # Don't emit if platform is disabled
         if platform_id not in self.disabled_platforms:
             self.message_received.emit(platform_id, username, message, {})
         else:
-            print(f"[ChatManager] Platform {platform_id} is disabled, message not emitted")
+            logger.info(f"Platform {platform_id} is disabled, message not emitted")
     
     def onMessageReceivedWithMetadata(self, platform_id: str, username: str, message: str, metadata: dict):
         """Handle incoming message from a platform with metadata (color, badges, timestamp)"""
         msg_preview = message[:50] + '...' if len(message) > 50 else message
-        print(f"[ChatManager] onMessageReceivedWithMetadata: {platform_id}, {username}, {msg_preview}")
+        logger.info(f"onMessageReceivedWithMetadata: {platform_id}, {username}, {msg_preview}")
         # TRACE: show metadata keys and preview
         try:
             keys = list(metadata.keys()) if isinstance(metadata, dict) else []
         except Exception:
             keys = []
-        print(f"[ChatManager][TRACE] onMessageReceivedWithMetadata: platform={platform_id} username={username} preview={msg_preview} metadata_keys={keys}")
+        logger.debug(f"[TRACE] onMessageReceivedWithMetadata: platform={platform_id} username={username} preview={msg_preview} metadata_keys={keys}")
         # Don't emit if platform is disabled
         if platform_id in self.disabled_platforms:
-            print(f"[ChatManager] Platform {platform_id} is disabled, message not emitted")
+            logger.info(f"Platform {platform_id} is disabled, message not emitted")
             return
 
         # De-duplication: suppress duplicate incoming messages from multiple connections
@@ -636,7 +636,7 @@ class ChatManager(QObject):
             if msg_id:
                 prev = self._recent_message_ids.get(msg_id)
                 if prev and (now - prev) < 2.0:
-                    print(f"[ChatManager][TRACE] Suppressing duplicate by message_id: {msg_id}")
+                    logger.debug(f"[TRACE] Suppressing duplicate by message_id: {msg_id}")
                     return
                 # record this id
                 try:
@@ -666,7 +666,7 @@ class ChatManager(QObject):
             # If we've recently seen the canonical signature, suppress duplicate
             prev_can = self._recent_canonical.get(canonical)
             if prev_can and (now - prev_can) < 2.0:
-                print(f"[ChatManager][TRACE] Suppressing duplicate by canonical key: {canonical}")
+                logger.debug(f"[TRACE] Suppressing duplicate by canonical key: {canonical}")
                 return
             # Record canonical occurrence for short window
             try:
@@ -686,7 +686,7 @@ class ChatManager(QObject):
             # check for duplicate
             for (p, u, m, ts) in self._recent_incoming:
                 if p == msg_key[0] and u == msg_key[1] and m == msg_key[2]:
-                    print(f"[ChatManager][TRACE] Suppressing duplicate message from {username} on {platform_id}: {message[:120]}")
+                    logger.debug(f"[TRACE] Suppressing duplicate message from {username} on {platform_id}: {message[:120]}")
                     return
             # record this message
             self._recent_incoming.append((msg_key[0], msg_key[1], msg_key[2], now))
@@ -695,7 +695,7 @@ class ChatManager(QObject):
 
         try:
             self.message_received.emit(platform_id, username, message, metadata)
-            print(f"[ChatManager][TRACE] Emitted message_received for {platform_id} {username}")
+            logger.debug(f"[TRACE] Emitted message_received for {platform_id} {username}")
             # Persistent diagnostic log to track emitted messages
             try:
                 log_dir = os.path.join(os.getcwd(), 'logs')
@@ -706,13 +706,13 @@ class ChatManager(QObject):
             except Exception:
                 pass
         except Exception as e:
-            print(f"[ChatManager] ✗ Error emitting message signal: {e}")
+            logger.exception(f"Error emitting message signal: {e}")
             import traceback
             traceback.print_exc()
     
     def onMessageDeleted(self, platform_id: str, message_id: str):
         """Handle message deletion event from platform (moderator or auto-moderation)"""
-        print(f"[ChatManager] onMessageDeleted: {platform_id}, message_id={message_id}")
+        logger.info(f"onMessageDeleted: {platform_id}, message_id={message_id}")
         # Propagate deletion event to UI
         self.message_deleted.emit(platform_id, message_id)
     
@@ -731,13 +731,13 @@ class ChatManager(QObject):
         if connector and hasattr(connector, 'delete_message'):
             try:
                 result = connector.delete_message(message_id)
-                print(f"[ChatManager] Deleted message {message_id} from {platform_id}")
+                logger.info(f"Deleted message {message_id} from {platform_id}")
                 return True
             except Exception as e:
-                print(f"[ChatManager] Error deleting message from {platform_id}: {e}")
+                logger.exception(f"Error deleting message from {platform_id}: {e}")
                 return False
         else:
-            print(f"[ChatManager] Message deletion not supported for {platform_id}")
+            logger.info(f"Message deletion not supported for {platform_id}")
             return False
     
     def banUser(self, platform_id: str, username: str, user_id: str = None):
@@ -753,11 +753,11 @@ class ChatManager(QObject):
         if connector and hasattr(connector, 'ban_user'):
             try:
                 connector.ban_user(username, user_id)
-                print(f"[ChatManager] Banned user {username} from {platform_id}")
+                logger.info(f"Banned user {username} from {platform_id}")
             except Exception as e:
-                print(f"[ChatManager] Error banning user on {platform_id}: {e}")
+                logger.exception(f"Error banning user on {platform_id}: {e}")
         else:
-            print(f"[ChatManager] User banning not supported for {platform_id}")
+            logger.info(f"User banning not supported for {platform_id}")
 
     def dump_connector_states(self) -> dict:
         """Return a diagnostic snapshot of connector and bot states.
