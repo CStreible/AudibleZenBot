@@ -602,11 +602,15 @@ class ChatManager(QObject):
         except Exception:
             preview = ''
         logger.debug(f"[TRACE] onMessageReceived: platform={platform_id} username={username} preview={preview}")
-        # Don't emit if platform is disabled
-        if platform_id not in self.disabled_platforms:
-            self.message_received.emit(platform_id, username, message, {})
-        else:
-            logger.info(f"Platform {platform_id} is disabled, message not emitted")
+        # Route legacy messages through the metadata handler so de-duplication
+        # and canonical checks run uniformly for all incoming messages.
+        try:
+            if platform_id not in self.disabled_platforms:
+                self.onMessageReceivedWithMetadata(platform_id, username, message, {})
+            else:
+                logger.info(f"Platform {platform_id} is disabled, message not emitted")
+        except Exception as e:
+            logger.exception(f"Error handling legacy message for {platform_id}: {e}")
     
     def onMessageReceivedWithMetadata(self, platform_id: str, username: str, message: str, metadata: dict):
         """Handle incoming message from a platform with metadata (color, badges, timestamp)"""
@@ -666,7 +670,7 @@ class ChatManager(QObject):
             # If we've recently seen the canonical signature, suppress duplicate
             prev_can = self._recent_canonical.get(canonical)
             if prev_can and (now - prev_can) < 2.0:
-                logger.debug(f"[TRACE] Suppressing duplicate by canonical key: {canonical}")
+                logger.debug(f"[TRACE] Suppressing duplicate by canonical key: {canonical} age={(now-prev_can):.3f}s")
                 return
             # Record canonical occurrence for short window
             try:
