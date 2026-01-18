@@ -217,43 +217,97 @@ class SettingsPage(QWidget):
         # --- Per-component debug toggles (uses LogManager debug schema) ---
         try:
             if self.log_manager:
-                toggles_layout = QGridLayout()
-                toggles_layout.setHorizontalSpacing(12)
+                # Keep references so we can programmatically update switches
+                self._debug_switches = {}
+                self._category_level_switches = {}
+
                 toggles = self.log_manager.get_debug_schema()
-                row = 0
-                # create a small grid of label + toggle for each schema entry
-                for key, label_text in toggles:
-                    lbl = QLabel(label_text)
-                    lbl.setStyleSheet("color: #ffffff; font-size: 12px;")
-                    toggle = ToggleSwitch()
-                    try:
-                        toggle.setChecked(self.log_manager.get_debug_value(key))
-                    except Exception:
-                        toggle.setChecked(False)
-                    # Bind handler
-                    toggle.stateChanged.connect(lambda state, k=key, t=toggle: self.on_debug_toggle(k, t.isChecked()))
-                    toggles_layout.addWidget(lbl, row, 0)
-                    toggles_layout.addWidget(toggle, row, 1)
-                    row += 1
-                layout.addLayout(toggles_layout)
-                # Add a separator and level toggles
-                level_layout = QGridLayout()
-                level_layout.setHorizontalSpacing(12)
                 levels = self.log_manager.get_level_schema()
-                lrow = 0
-                for key, label_text in levels:
+
+                # Determine number of columns (up to 4)
+                import math
+                count = len(toggles)
+                cols = min(4, max(1, math.ceil(count / 4)))
+                rows = math.ceil(count / cols)
+
+                grid = QGridLayout()
+                grid.setHorizontalSpacing(18)
+                grid.setVerticalSpacing(12)
+
+                for idx, (key, label_text) in enumerate(toggles):
+                    col = idx % cols
+                    row = idx // cols
+
+                    # Category container (vertical): main switch+label, then indented level toggles
+                    cat_vbox = QVBoxLayout()
+                    cat_vbox.setSpacing(4)
+
+                    # Main row: switch on left, label on right
+                    main_h = QHBoxLayout()
+                    main_h.setSpacing(8)
+                    switch = ToggleSwitch()
+                    try:
+                        switch.setChecked(self.log_manager.get_debug_value(key))
+                    except Exception:
+                        switch.setChecked(False)
+                    # connect to category handler
+                    switch.stateChanged.connect(lambda s, k=key, t=switch: self._on_category_switch_changed(k, t.isChecked()))
+                    self._debug_switches[key] = switch
+
                     lbl = QLabel(label_text)
                     lbl.setStyleSheet("color: #ffffff; font-size: 12px;")
-                    toggle = ToggleSwitch()
+                    main_h.addWidget(switch)
+                    main_h.addWidget(lbl)
+                    main_h.addStretch()
+                    cat_vbox.addLayout(main_h)
+
+                    # Level toggles (vertical, one per line), indented
+                    lvl_vbox = QVBoxLayout()
+                    lvl_vbox.setContentsMargins(20, 0, 0, 0)
+                    lvl_vbox.setSpacing(2)
+                    self._category_level_switches[key] = {}
+
+                    # Load persisted per-category level settings if available
+                    persisted = {}
                     try:
-                        toggle.setChecked(self.log_manager.get_level_value(key))
+                        persisted = self.config.get('logging.category_levels', {}) if self.config else {}
+                        persisted = persisted.get(key, {}) if isinstance(persisted, dict) else {}
                     except Exception:
-                        toggle.setChecked(False)
-                    toggle.stateChanged.connect(lambda s, k=key, t=toggle: self.on_level_toggle(k, t.isChecked()))
-                    level_layout.addWidget(lbl, lrow, 0)
-                    level_layout.addWidget(toggle, lrow, 1)
-                    lrow += 1
-                layout.addLayout(level_layout)
+                        persisted = {}
+
+                    for lkey, llabel in levels:
+                        row_h = QHBoxLayout()
+                        row_h.setSpacing(6)
+                        small = ToggleSwitch()
+
+                        # Determine default: use global level_map default if available
+                        try:
+                            default = bool(self.log_manager.level_map.get(lkey, False))
+                        except Exception:
+                            default = True if lkey in ('INFO', 'WARN', 'ERROR', 'CRITICAL') else False
+
+                        # persisted override
+                        val = persisted.get(lkey, default)
+                        try:
+                            small.setChecked(bool(val))
+                        except Exception:
+                            small.setChecked(default)
+
+                        small.stateChanged.connect(lambda s, ckey=key, lk=lkey, t=small: self._on_category_level_changed(ckey, lk, t.isChecked()))
+                        self._category_level_switches[key][lkey] = small
+
+                        lbl_lvl = QLabel(llabel.lower())
+                        lbl_lvl.setStyleSheet("color: #bbbbbb; font-size: 11px;")
+                        row_h.addWidget(small)
+                        row_h.addWidget(lbl_lvl)
+                        row_h.addStretch()
+                        lvl_vbox.addLayout(row_h)
+
+                    cat_vbox.addLayout(lvl_vbox)
+                    # Add the category vbox to grid
+                    grid.addLayout(cat_vbox, row, col)
+
+                layout.addLayout(grid)
         except Exception:
             pass
         
@@ -455,6 +509,177 @@ class SettingsPage(QWidget):
                         self.config.set('debug', self.log_manager.debug_map)
                     except Exception:
                         pass
+        except Exception:
+            pass
+
+    def _on_category_switch_changed(self, key: str, enabled: bool):
+        """Internal handler for category main switches. If 'all', toggle everything."""
+        try:
+            if not self.log_manager:
+                return
+
+            # If 'all', propagate to all categories and category-level toggles
+            if key == 'all':
+                try:
+                    for k, _ in self.log_manager.get_debug_schema():
+                        try:
+                            self.log_manager.set_debug_value(k, bool(enabled))
+                        except Exception:
+                            pass
+                    # persist
+                    if self.config:
+                        try:
+                            self.config.set('debug', self.log_manager.debug_map)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                # Update UI switches visually (trigger animation) without firing handlers
+                try:
+                    for k, sw in getattr(self, '_debug_switches', {}).items():
+                        try:
+                            sw.setChecked(bool(enabled))
+                            try:
+                                sw._on_state_changed(1 if sw.isChecked() else 0)
+                            except Exception:
+                                sw.update()
+                        except Exception:
+                            pass
+                    # Update category-level toggles as well
+                    for cat, lvl_map in getattr(self, '_category_level_switches', {}).items():
+                        for lk, s in lvl_map.items():
+                            try:
+                                s.setChecked(bool(enabled))
+                                try:
+                                    s._on_state_changed(1 if s.isChecked() else 0)
+                                except Exception:
+                                    s.update()
+                            except Exception:
+                                pass
+                                # apply to LogManager runtime state as well
+                                try:
+                                    if self.log_manager:
+                                        self.log_manager.set_category_level_value(cat, lk, bool(enabled))
+                                except Exception:
+                                    pass
+                    # persist category levels
+                    if self.config:
+                        try:
+                            cat_map = {c: {lk: s.isChecked() for lk, s in lv.items()} for c, lv in self._category_level_switches.items()}
+                            self.config.set('logging.category_levels', cat_map)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                return
+
+            # Normal category toggle
+            try:
+                self.log_manager.set_debug_value(key, bool(enabled))
+                if self.config:
+                    try:
+                        self.config.set('debug', self.log_manager.debug_map)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_category_level_changed(self, category: str, level: str, enabled: bool):
+        """Persist per-category per-level setting to config."""
+        try:
+            # Load existing map
+            try:
+                cat_map = self.config.get('logging.category_levels', {}) if self.config else {}
+                if not isinstance(cat_map, dict):
+                    cat_map = {}
+            except Exception:
+                cat_map = {}
+
+            entry = cat_map.get(category, {}) if isinstance(cat_map.get(category, {}), dict) else {}
+            entry[level] = bool(enabled)
+            cat_map[category] = entry
+            if self.config:
+                try:
+                    self.config.set('logging.category_levels', cat_map)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Apply to LogManager runtime state for the changed category/level
+        try:
+            if self.log_manager:
+                self.log_manager.set_category_level_value(category, level, bool(enabled))
+        except Exception:
+            pass
+
+        # If this is the master 'all' category, propagate this level change to all categories
+        try:
+            if category == 'all' and hasattr(self, '_category_level_switches'):
+                try:
+                    for cat, lvl_map in self._category_level_switches.items():
+                        # update the specific level switch for each category
+                        if level in lvl_map:
+                            s = lvl_map[level]
+                            try:
+                                s.setChecked(bool(enabled))
+                                try:
+                                    s._on_state_changed(1 if s.isChecked() else 0)
+                                except Exception:
+                                    s.update()
+                            except Exception:
+                                pass
+                            # inform log manager
+                            try:
+                                if self.log_manager:
+                                    self.log_manager.set_category_level_value(cat, level, bool(enabled))
+                            except Exception:
+                                pass
+                    # persist the whole map
+                    if self.config:
+                        try:
+                            cat_map = {c: {lk: s.isChecked() for lk, s in lv.items()} for c, lv in self._category_level_switches.items()}
+                            self.config.set('logging.category_levels', cat_map)
+                        except Exception:
+                            pass
+                    # ensure category main switches reflect new level states
+                    for cat, lvl_map in self._category_level_switches.items():
+                        main = getattr(self, '_debug_switches', {}).get(cat)
+                        if main:
+                            try:
+                                any_on = any(s.isChecked() for s in lvl_map.values())
+                                main.setChecked(bool(any_on))
+                                try:
+                                    main._on_state_changed(1 if main.isChecked() else 0)
+                                except Exception:
+                                    main.update()
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+
+        # For non-master categories, ensure the category switch follows the per-level switches
+        try:
+            if hasattr(self, '_category_level_switches'):
+                lvl_map = self._category_level_switches.get(category)
+                if lvl_map:
+                    any_on = any(s.isChecked() for s in lvl_map.values())
+                    main = getattr(self, '_debug_switches', {}).get(category)
+                    if main:
+                        try:
+                            main.setChecked(bool(any_on))
+                            try:
+                                main._on_state_changed(1 if main.isChecked() else 0)
+                            except Exception:
+                                main.update()
+                        except Exception:
+                            pass
         except Exception:
             pass
 

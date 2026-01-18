@@ -90,22 +90,29 @@ class LogManager:
         sys.stdout = self.tee_stdout
         sys.stderr = self.tee_stderr
         
-        # Load settings from config
+        # Load settings from config (populates debug_map, level_map, category_levels)
+        self.debug_map = {}
         if self.config:
-            self.enabled = self.config.get('logging.enabled', False)
-            self.log_folder = self.config.get('logging.folder', None)
-            # Debug map controls whether verbose messages (TRACE/DIAG/DEBUG)
-            # are emitted for given components. Example config:
-            # "debug": {"chatmanager": true, "all": false}
             try:
-                self.debug_map = self.config.get('debug', {}) or {}
+                self.reload_from_config(self.config)
             except Exception:
-                self.debug_map = {}
-            
+                # Fall back to safe defaults
+                try:
+                    self.debug_map = self.config.get('debug', {}) or {}
+                except Exception:
+                    self.debug_map = {}
+                try:
+                    self.level_map = self.config.get('logging.levels', {}) if self.config else {}
+                except Exception:
+                    pass
+                try:
+                    self.category_levels = self.config.get('logging.category_levels', {}) if self.config else {}
+                    if not isinstance(self.category_levels, dict):
+                        self.category_levels = {}
+                except Exception:
+                    self.category_levels = {}
             if self.enabled and self.log_folder:
                 self.start_logging()
-        else:
-            self.debug_map = {}
 
         # Default debug schema - maps keys to human friendly labels
         # UI will use this schema to render toggles
@@ -134,6 +141,13 @@ class LogManager:
             self.level_map = self.config.get('logging.levels', {}) if self.config else {}
         except Exception:
             self.level_map = {}
+        # Per-category level overrides (structure: {category: {LEVEL: bool}})
+        try:
+            self.category_levels = self.config.get('logging.category_levels', {}) if self.config else {}
+            if not isinstance(self.category_levels, dict):
+                self.category_levels = {}
+        except Exception:
+            self.category_levels = {}
         # Ensure defaults if not present
         for k, _ in self._level_keys:
             if k not in self.level_map:
@@ -164,7 +178,35 @@ class LogManager:
                     # Map WARN to WARN key used in UI/config
                     if level == 'WARNING':
                         level = 'WARN'
+                    # If global-level is disabled, consult per-category overrides before rejecting
                     if not self.level_map.get(level, True):
+                        # determine component/category
+                        comp = None
+                        try:
+                            start = message.find('[')
+                            end = message.find(']', start + 1)
+                            if start != -1 and end != -1:
+                                comp = message[start+1:end].strip().lower()
+                        except Exception:
+                            comp = None
+
+                        # check per-category level override
+                        if comp:
+                            # direct match
+                            cat_map = self.category_levels.get(comp, {}) if isinstance(self.category_levels, dict) else {}
+                            if isinstance(cat_map, dict) and cat_map.get(level):
+                                return True
+                            # parent (e.g., connectors.twitch -> connectors)
+                            if '.' in comp:
+                                parent = comp.split('.')[0]
+                                parent_map = self.category_levels.get(parent, {})
+                                if isinstance(parent_map, dict) and parent_map.get(level):
+                                    return True
+                            # try connectors.<comp>
+                            connectors_map = self.category_levels.get(f'connectors.{comp}', {})
+                            if isinstance(connectors_map, dict) and connectors_map.get(level):
+                                return True
+                        # no per-category override found -> respect global suppression
                         return False
             except Exception:
                 pass
@@ -382,6 +424,82 @@ class LogManager:
         except Exception:
             return False
 
+    # --- Per-category level API -------------------------------------------
+    def get_category_level_value(self, category: str, level: str) -> bool:
+        try:
+            cat = self.category_levels.get(category, {})
+            return bool(cat.get(level, False))
+        except Exception:
+            return False
+
+    def set_category_level_value(self, category: str, level: str, enabled: bool):
+        try:
+            if not isinstance(self.category_levels, dict):
+                self.category_levels = {}
+            entry = self.category_levels.get(category, {}) if isinstance(self.category_levels.get(category, {}), dict) else {}
+            entry[level] = bool(enabled)
+            self.category_levels[category] = entry
+            if self.config:
+                try:
+                    self.config.set('logging.category_levels', self.category_levels)
+                except Exception:
+                    pass
+            return True
+        except Exception:
+            return False
+
+    def reload_from_config(self, config=None):
+        """Reload logging-related settings from a `ConfigManager`-like object.
+
+        This will populate `debug_map`, `level_map`, `category_levels`, and
+        `log_folder`/`enabled` flags from the config. If `config` is None,
+        the existing `self.config` is used.
+        """
+        cfg = config or self.config
+        if not cfg:
+            return False
+        self.config = cfg
+        # Enabled / folder
+        try:
+            self.enabled = bool(self.config.get('logging.enabled', False))
+        except Exception:
+            self.enabled = False
+        try:
+            self.log_folder = self.config.get('logging.folder', None)
+        except Exception:
+            self.log_folder = None
+
+        # Debug map
+        try:
+            self.debug_map = self.config.get('debug', {}) or {}
+        except Exception:
+            self.debug_map = {}
+
+        # Level map (ensure defaults for missing keys)
+        try:
+            lm = self.config.get('logging.levels', {}) or {}
+            if not isinstance(lm, dict):
+                lm = {}
+            # default: allow INFO+ and suppress DEBUG/TRACE/DIAG
+            defaults = {'TRACE': False, 'DIAG': False, 'DEBUG': False, 'INFO': True, 'WARN': True, 'ERROR': True, 'CRITICAL': True}
+            for k, v in defaults.items():
+                self.level_map[k] = bool(lm.get(k, v))
+        except Exception:
+            # keep current level_map if something goes wrong
+            pass
+
+        # Category-specific level overrides
+        try:
+            cl = self.config.get('logging.category_levels', {}) or {}
+            if isinstance(cl, dict):
+                self.category_levels = cl
+            else:
+                self.category_levels = {}
+        except Exception:
+            self.category_levels = {}
+
+        return True
+
 
 # Global log manager instance
 _log_manager = None
@@ -392,6 +510,14 @@ def get_log_manager(config=None):
     global _log_manager
     if _log_manager is None:
         _log_manager = LogManager(config)
+    # If an existing manager is present and a config object was supplied,
+    # reload settings from the provided config so callers can update runtime
+    # settings after the first creation.
+    if config is not None and _log_manager is not None:
+        try:
+            _log_manager.reload_from_config(config)
+        except Exception:
+            pass
     return _log_manager
 
 

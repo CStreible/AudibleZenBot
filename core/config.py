@@ -176,6 +176,25 @@ class ConfigManager:
                     "trovo": {"enabled": False, "port": 5000}
                 }
             }
+            ,
+            "debug": {
+                "all": False
+            },
+            "logging": {
+                "enabled": False,
+                "folder": "",
+                "levels": {
+                    "TRACE": False,
+                    "DIAG": False,
+                    "DEBUG": False,
+                    "INFO": True,
+                    "WARN": True,
+                    "ERROR": True,
+                    "CRITICAL": True
+                },
+                # Per-category overrides structure: {"category": {"DEBUG": True, ...}}
+                "category_levels": {}
+            }
         }
     
     def get(self, key: str, default: Any = None) -> Any:
