@@ -1,6 +1,9 @@
 import requests
 import webbrowser
 from urllib.parse import urlencode
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 TROVO_CLIENT_ID = ""
 TROVO_CLIENT_SECRET = ""
@@ -64,26 +67,24 @@ def exchange_code_for_token(auth_code):
     if resp.status_code == 200:
         return resp.json()
     else:
-        print(f"[Trovo OAuth] Error: {resp.status_code} {resp.text}")
+        logger.error(f"[Trovo OAuth] Error: {resp.status_code} {resp.text}")
         return None
 
 if __name__ == "__main__":
-    print("Trovo OAuth2 Authorization Flow (Automated)")
-    print("\n" + "="*60)
-    print("IMPORTANT: Make sure the callback server is running!")
-    print("Run in another terminal: python platform_connectors/trovo_callback_server.py")
-    print("Or make sure ngrok is running: ngrok http 8889")
-    print("="*60 + "\n")
-    
+    logger.info("Trovo OAuth2 Authorization Flow (Automated)")
+    logger.info("IMPORTANT: Make sure the callback server is running!")
+    logger.info("Run in another terminal: python platform_connectors/trovo_callback_server.py")
+    logger.info("Or make sure ngrok is running: ngrok http 8889")
+
     url = get_authorization_url()
-    print(f"Open this URL in your browser and authorize the app:\n{url}\n")
+    logger.info(f"Open this URL in your browser and authorize the app:\n{url}\n")
     webbrowser.open(url)
-    print("\nAfter authorizing, check the callback server terminal for the code.")
+    logger.info("After authorizing, check the callback server terminal for the code.")
     auth_code = input("Paste the authorization code: ").strip()
     token_data = exchange_code_for_token(auth_code)
     if token_data:
-        print("Access Token Response:")
-        print(token_data)
+        logger.info("Access Token Response:")
+        logger.debug(f"{token_data}")
         # Save to config.json
         try:
             import sys, os
@@ -92,8 +93,8 @@ if __name__ == "__main__":
             config = ConfigManager()
             config.set_platform_config('trovo', 'access_token', token_data.get('access_token', ''))
             config.set_platform_config('trovo', 'refresh_token', token_data.get('refresh_token', ''))
-            print("Trovo access_token and refresh_token saved to config.json!")
+            logger.info("Trovo access_token and refresh_token saved to config.json")
         except Exception as e:
-            print(f"Error saving tokens to config: {e}")
+            logger.exception(f"Error saving tokens to config: {e}")
     else:
-        print("Failed to obtain access token.")
+        logger.error("Failed to obtain access token.")

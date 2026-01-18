@@ -22,6 +22,11 @@ from core.badge_manager import get_badge_manager
 from core.blocked_terms_manager import get_blocked_terms_manager
 from ui.platform_icons import get_platform_icon_html, PLATFORM_COLORS
 
+from core.logger import get_logger
+
+# Structured logger for this module
+logger = get_logger('ChatPage')
+
 
 # --- Kick badge icon mapping ---
 KICK_BADGE_ICONS = {
@@ -98,7 +103,7 @@ def set_username_colors(colors):
     global USERNAME_COLORS
     USERNAME_COLORS.clear()
     USERNAME_COLORS.extend(colors)
-    print(f"[ChatPage] Updated USERNAME_COLORS with {len(colors)} colors")
+    logger.info(f"Updated USERNAME_COLORS with {len(colors)} colors")
 
 
 def get_username_color(username: str) -> str:
@@ -137,16 +142,16 @@ def get_badge_html(badge_str: str, platform: str = 'twitch') -> str:
             # Select the appropriate badge icon set
             if platform == 'kick':
                 badge_icons = KICK_BADGE_ICONS
-                print(f"[DEBUG] Looking up Kick badge: '{badge_str}'")
+                logger.debug(f"Looking up Kick badge: '{badge_str}'")
             elif platform == 'trovo':
                 badge_icons = TROVO_BADGE_ICONS
-                print(f"[DEBUG] Looking up Trovo badge: '{badge_str}'")
+                logger.debug(f"Looking up Trovo badge: '{badge_str}'")
             elif platform == 'youtube':
                 badge_icons = YOUTUBE_BADGE_ICONS
-                print(f"[DEBUG] Looking up YouTube badge: '{badge_str}'")
+                logger.debug(f"Looking up YouTube badge: '{badge_str}'")
             elif platform == 'dlive':
                 badge_icons = DLIVE_BADGE_ICONS
-                print(f"[DEBUG] Looking up DLive badge: '{badge_str}'")
+                logger.debug(f"Looking up DLive badge: '{badge_str}'")
             else:
                 # Unknown platform without version - return empty
                 return ''
@@ -161,11 +166,11 @@ def get_badge_html(badge_str: str, platform: str = 'twitch') -> str:
                     data_uri = f'data:image/svg+xml;base64,{img_data}'
                     return f'<img src="{data_uri}" width="18" height="18" style="vertical-align: middle; margin-right: 2px;" title="{tooltip}" />'
                 except Exception as e:
-                    print(f"[DEBUG] Error reading {platform} badge SVG from {local_path}: {e}")
+                    logger.debug(f"Error reading {platform} badge SVG from {local_path}: {e}")
                     # Return text fallback if SVG not found
                     return f'<span style="background: #555; color: #fff; padding: 2px 4px; border-radius: 3px; font-size: 10px; margin-right: 4px;" title="{tooltip}">{badge_str.upper()}</span>'
             else:
-                print(f"[DEBUG] {platform} badge '{badge_str}' not found. Showing as text badge.")
+                logger.debug(f"{platform} badge '{badge_str}' not found. Showing as text badge.")
                 # Return text fallback for unknown badges
                 return f'<span style="background: #555; color: #fff; padding: 2px 4px; border-radius: 3px; font-size: 10px; margin-right: 4px;">{badge_str.upper()}</span>'
 
@@ -173,7 +178,7 @@ def get_badge_html(badge_str: str, platform: str = 'twitch') -> str:
         badge_manager = get_badge_manager()
         parts = badge_str.split('/')
         if len(parts) != 2:
-            print(f"Badge {badge_str} doesn't have version number")
+            logger.debug(f"Badge {badge_str} doesn't have version number")
             return ''
         badge_name, version = parts
         badge_key = f"{badge_name}/{version}"
@@ -182,16 +187,16 @@ def get_badge_html(badge_str: str, platform: str = 'twitch') -> str:
             badge_title = badge_name.replace('-', ' ').replace('_', ' ').title()
         badge_path = badge_manager.get_badge_path(badge_key, size='1x')
         if not badge_path or not os.path.exists(badge_path):
-            print(f"Downloading badge: {badge_key}")
+            logger.debug(f"Downloading badge: {badge_key}")
             badge_path = badge_manager.download_badge(badge_key, size='1x')
         if not badge_path or not os.path.exists(badge_path):
-            print(f"Badge not found after download attempt: {badge_key}")
+            logger.debug(f"Badge not found after download attempt: {badge_key}")
             return ''
         with open(badge_path, 'rb') as f:
             img_data = base64.b64encode(f.read()).decode()
         return f'<img src="data:image/png;base64,{img_data}" width="18" height="18" style="vertical-align: middle; margin-right: 2px;" title="{badge_title}" />'
     except Exception as e:
-        print(f"Error getting badge HTML for {badge_str}: {e}")
+        logger.error(f"Error getting badge HTML for {badge_str}: {e}")
         import traceback
         traceback.print_exc()
         return ''
@@ -216,7 +221,7 @@ class ChatPage(QWidget):
             custom_colors = self.config.get('ui.username_colors')
             if custom_colors and len(custom_colors) == 20:
                 set_username_colors(custom_colors)
-                print(f"[ChatPage] Loaded {len(custom_colors)} custom username colors from config")
+                logger.info(f"Loaded {len(custom_colors)} custom username colors from config")
         else:
             self.show_platform_icons = True
             self.show_user_colors = True
@@ -249,9 +254,9 @@ class ChatPage(QWidget):
         self.initUI()
         
         # Connect to chat manager signals
-        # Diagnostic: print IDs when connecting
+        # Diagnostic: log IDs when connecting
         try:
-            print(f"[ChatPage][TRACE] Connecting to ChatManager.message_received chat_manager_id={id(self.chat_manager)} chat_page_id={id(self)}")
+            logger.debug(f"[TRACE] Connecting to ChatManager.message_received chat_manager_id={id(self.chat_manager)} chat_page_id={id(self)}")
         except Exception:
             pass
         self.chat_manager.message_received.connect(self.addMessage)
@@ -595,26 +600,26 @@ class ChatPage(QWidget):
         except Exception:
             preview = ''
         try:
-            print(f"[ChatPage][TRACE] addMessage called: platform={platform} username={username} preview={preview} paused={self.is_paused} chat_page_id={id(self)} chat_manager_id={id(self.chat_manager)}")
+            logger.debug(f"[TRACE] addMessage called: platform={platform} username={username} preview={preview} paused={self.is_paused} chat_page_id={id(self)} chat_manager_id={id(self.chat_manager)}")
         except Exception:
-            print(f"[ChatPage][TRACE] addMessage called: platform={platform} username={username} preview={preview} paused={self.is_paused}")
+            logger.debug(f"[TRACE] addMessage called: platform={platform} username={username} preview={preview} paused={self.is_paused}")
         if self.is_paused:
             # Queue the message instead of displaying
             self.message_queue.append((platform, username, message, metadata))
-            print(f"[ChatPage][TRACE] Message queued (paused). queue_length={len(self.message_queue)}")
+            logger.debug(f"[TRACE] Message queued (paused). queue_length={len(self.message_queue)}")
             return
         
         self._displayMessage(platform, username, message, metadata)
     
     def _displayMessage(self, platform, username, message, metadata=None):
         """Internal method to display a message"""
-        print(f"[ChatPage] addMessage: platform={platform}, username={username}, message={message}, metadata={metadata}")
+        logger.info(f"addMessage: platform={platform}, username={username}, message={message}, metadata={metadata}")
         # TRACE: confirm display entry
         try:
             preview = message[:120] if message else ''
         except Exception:
             preview = ''
-        print(f"[ChatPage][TRACE] _displayMessage: platform={platform} username={username} preview={preview}")
+        logger.debug(f"[TRACE] _displayMessage: platform={platform} username={username} preview={preview}")
         if metadata is None:
             metadata = {}
         
@@ -623,7 +628,7 @@ class ChatPage(QWidget):
         message_deleted_from_platform = False
         
         if blocked_terms_found:
-            print(f"[ChatPage] Message contains blocked terms: {blocked_terms_found}")
+            logger.warning(f"Message contains blocked terms: {blocked_terms_found}")
             
             # Highlight blocked terms in the message
             import re
@@ -635,18 +640,18 @@ class ChatPage(QWidget):
             # Attempt to delete message from platform
             platform_msg_id = metadata.get('message_id')
             if platform_msg_id:
-                print(f"[ChatPage] Attempting to delete message {platform_msg_id} from {platform} due to blocked terms")
+                logger.debug(f"Attempting to delete message {platform_msg_id} from {platform} due to blocked terms")
                 try:
                     deletion_success = self.chat_manager.deleteMessage(platform.lower(), platform_msg_id)
                     if deletion_success:
                         message_deleted_from_platform = True
-                        print(f"[ChatPage] Successfully deleted message from {platform}")
+                        logger.info(f"Successfully deleted message from {platform}")
                     else:
-                        print(f"[ChatPage] Failed to delete message from {platform} (not supported or error)")
+                        logger.warning(f"Failed to delete message from {platform} (not supported or error)")
                 except Exception as e:
-                    print(f"[ChatPage] Error deleting message from {platform}: {e}")
+                    logger.error(f"Error deleting message from {platform}: {e}")
             else:
-                print(f"[ChatPage] No platform message_id available to delete from {platform}")
+                logger.debug(f"No platform message_id available to delete from {platform}")
         
         # Generate unique message ID
         message_id = f"msg_{self.message_count}"
@@ -865,7 +870,7 @@ class ChatPage(QWidget):
         self.message_queue.clear()
         self.platform_message_id_map.clear()
         self.message_count = 0
-        print("[ChatPage] Chat cleared")
+        logger.info("Chat cleared")
     
     def _queueJavaScriptExecution(self, js_code, message_id=None):
         """Queue JavaScript execution to prevent message loss during high volume"""
@@ -874,9 +879,9 @@ class ChatPage(QWidget):
         # Warn if queue is getting large
         queue_size = len(self.js_execution_queue)
         if queue_size > 50:
-            print(f"[ChatPage] ⚠️ JavaScript queue size: {queue_size} - Possible message delay or drops")
+            logger.warning(f"⚠️ JavaScript queue size: {queue_size} - Possible message delay or drops")
         elif queue_size > 100:
-            print(f"[ChatPage] ⚠️⚠️ CRITICAL: JavaScript queue size: {queue_size} - Messages likely being dropped!")
+            logger.error(f"⚠️⚠️ CRITICAL: JavaScript queue size: {queue_size} - Messages likely being dropped!")
         
         # Start processing if not already running and under pending limit
         if not self.is_processing_js and self.pending_js_count < self.max_pending_js:
@@ -903,12 +908,12 @@ class ChatPage(QWidget):
                 current_retries = retry_count.get(message_id, 0)
                 if current_retries < 3 and message_id:
                     retry_count[message_id] = current_retries + 1
-                    print(f"[ChatPage] ⚠️ JS execution failed for {message_id}, retry {current_retries + 1}/3")
+                    logger.warning(f"⚠️ JS execution failed for {message_id}, retry {current_retries + 1}/3")
                     # Re-queue at front for immediate retry
                     self.js_execution_queue.insert(0, (js_code, message_id))
                 else:
                     if message_id:
-                        print(f"[ChatPage] ✗ JS execution failed permanently for {message_id} - MESSAGE DROPPED")
+                        logger.error(f"✗ JS execution failed permanently for {message_id} - MESSAGE DROPPED")
                         # Clean up retry counter
                         retry_count.pop(message_id, None)
             else:
@@ -925,7 +930,7 @@ class ChatPage(QWidget):
         try:
             self.chat_display.page().runJavaScript(js_code, on_complete)
         except Exception as e:
-            print(f"[ChatPage] ✗ Exception executing JavaScript: {e}")
+            logger.error(f"✗ Exception executing JavaScript: {e}")
             import traceback
             traceback.print_exc()
             self.pending_js_count -= 1
@@ -953,10 +958,10 @@ class ChatPage(QWidget):
         
         if self.is_paused:
             self.pause_btn.setText("▶ Resume")
-            print(f"[ChatPage] Message display paused. Queuing new messages...")
+            logger.info(f"Message display paused. Queuing new messages...")
         else:
             self.pause_btn.setText("⏸ Pause")
-            print(f"[ChatPage] Message display resumed. Displaying {len(self.message_queue)} queued messages...")
+            logger.info(f"Message display resumed. Displaying {len(self.message_queue)} queued messages...")
             
             # Display all queued messages
             while self.message_queue:
@@ -966,8 +971,8 @@ class ChatPage(QWidget):
     def showContextMenu(self, pos):
         """Show context menu for message moderation"""
         def handle_message_id(message_id):
-            print(f"[ChatPage] Context menu - message_id: {message_id}")
-            print(f"[ChatPage] Available message IDs: {list(self.message_data.keys())}")
+            logger.debug(f"Context menu - message_id: {message_id}")
+            logger.debug(f"Available message IDs: {list(self.message_data.keys())}")
             
             menu = QMenu(self)
             menu.setStyleSheet("""
@@ -996,7 +1001,7 @@ class ChatPage(QWidget):
                 username = msg_data['username']
                 platform = msg_data['platform']
                 
-                print(f"[ChatPage] Showing context menu for message from {username} on {platform}")
+                logger.debug(f"Showing context menu for message from {username} on {platform}")
                 
                 # Delete message action
                 delete_action = QAction(f"Delete Message", self)
@@ -1015,7 +1020,7 @@ class ChatPage(QWidget):
                 block_selection_action.triggered.connect(lambda: self.blockSelectedText())
                 menu.addAction(block_selection_action)
             else:
-                print(f"[ChatPage] No message selected or message not found")
+                logger.debug(f"No message selected or message not found")
                 # No message selected - show general actions
                 # Block selected text action
                 block_selection_action = QAction("Block Selected Text", self)
@@ -1073,7 +1078,7 @@ class ChatPage(QWidget):
         if self.chat_manager and hasattr(self.chat_manager, 'deleteMessage'):
             self.chat_manager.deleteMessage(platform, msg_data['metadata'].get('message_id'))
         
-        print(f"[ChatPage] Deleted message: {message_id}")
+        logger.info(f"Deleted message: {message_id}")
     
     def onPlatformMessageDeleted(self, platform: str, platform_message_id: str):
         """Handle message deletion event from platform (moderator or auto-moderation)"""
@@ -1082,10 +1087,10 @@ class ChatPage(QWidget):
         message_id = self.platform_message_id_map.get(map_key)
         
         if not message_id or message_id not in self.message_data:
-            print(f"[ChatPage] Platform deleted unknown message: {platform}:{platform_message_id}")
+            logger.debug(f"Platform deleted unknown message: {platform}:{platform_message_id}")
             return
         
-        print(f"[ChatPage] Platform deleted message: {platform}:{platform_message_id} (internal: {message_id})")
+        logger.info(f"Platform deleted message: {platform}:{platform_message_id} (internal: {message_id})")
         
         # Remove message from UI
         js_code = f"""
@@ -1129,7 +1134,7 @@ class ChatPage(QWidget):
             if self.chat_manager and hasattr(self.chat_manager, 'banUser'):
                 self.chat_manager.banUser(platform, username, msg_data['metadata'].get('user_id'))
             
-            print(f"[ChatPage] Banned user: {username} on {platform}")
+            logger.info(f"Banned user: {username} on {platform}")
             QMessageBox.information(self, "User Banned", f"User '{username}' has been banned.")
     
     def blockSelectedText(self):
@@ -1149,9 +1154,9 @@ class ChatPage(QWidget):
                         if self.chat_manager and hasattr(self.chat_manager, 'deleteMessage') and platform_msg_id:
                             success = self.chat_manager.deleteMessage(platform, platform_msg_id)
                             if success:
-                                print(f"[ChatPage] Deleted message from {platform} after blocking term: '{text.strip()}'")
+                                logger.info(f"Deleted message from {platform} after blocking term: '{text.strip()}'")
                             else:
-                                print(f"[ChatPage] Could not delete message from {platform} (not supported or failed)")
+                                logger.warning(f"Could not delete message from {platform} (not supported or failed)")
                 
                 self.chat_display.page().runJavaScript("window.selectedMessageId", handle_message_id)
                 

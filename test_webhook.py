@@ -3,25 +3,27 @@ Test script to verify Kick webhook server is working
 """
 import requests
 import json
+from core.logger import get_logger
 
 # Test if webhook server is responding
+logger = get_logger('test_webhook')
 test_url = "http://localhost:8889"
 
-print("Testing webhook server...")
-print(f"URL: {test_url}")
+logger.info("Testing webhook server...")
+logger.info(f"URL: {test_url}")
 
 try:
     # Test GET request
     response = requests.get(test_url, timeout=2)
-    print(f"✓ GET request successful: {response.status_code}")
-    print(f"  Response: {response.text[:100]}")
+    logger.info(f"✓ GET request successful: {response.status_code}")
+    logger.debug(f"  Response: {response.text[:100]}")
 except requests.exceptions.ConnectionError:
-    print("✗ Connection failed - server not responding")
-    print("  Make sure AudibleZenBot is running")
+    logger.error("✗ Connection failed - server not responding")
+    logger.error("  Make sure AudibleZenBot is running")
 except Exception as e:
-    print(f"✗ Error: {e}")
+    logger.exception(f"✗ Error: {e}")
 
-print("\nAttempting POST request with fake chat message...")
+logger.info("\nAttempting POST request with fake chat message...")
 try:
     fake_message = {
         "message_id": "test-123",
@@ -47,9 +49,9 @@ try:
         },
         timeout=2
     )
-    print(f"✓ POST request successful: {response.status_code}")
-    print("  Check AudibleZenBot console for '[Webhook] Chat message from TestUser'")
+    logger.info(f"✓ POST request successful: {response.status_code}")
+    logger.info("  Check AudibleZenBot console for '[Webhook] Chat message from TestUser'")
 except requests.exceptions.ConnectionError:
-    print("✗ Connection failed - server not responding")
+    logger.error("✗ Connection failed - server not responding")
 except Exception as e:
-    print(f"✗ Error: {e}")
+    logger.exception(f"✗ Error: {e}")

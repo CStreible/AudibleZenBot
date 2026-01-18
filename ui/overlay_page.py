@@ -11,6 +11,10 @@ from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QFont, QColor
 from core.overlay_server import OverlayServer
 import cv2
+from core.logger import get_logger
+
+# Structured logger for this module
+logger = get_logger('OverlayPage')
 
 
 def get_windows_camera_names():
@@ -59,11 +63,11 @@ def get_windows_camera_names():
             # Remove duplicates while preserving order
             seen = set()
             camera_names = [x for x in names if not (x in seen or seen.add(x))]
-            print(f"[OverlayPage] Found {len(camera_names)} camera names from Windows: {camera_names}")
+            logger.info(f"Found {len(camera_names)} camera names from Windows: {camera_names}")
         else:
-            print(f"[OverlayPage] PowerShell camera query returned no results")
+            logger.debug(f"PowerShell camera query returned no results")
     except Exception as e:
-        print(f"[OverlayPage] Error querying Windows camera names: {e}")
+        logger.error(f"Error querying Windows camera names: {e}")
     
     return camera_names
 
@@ -71,7 +75,7 @@ def get_windows_camera_names():
 def enumerate_video_devices():
     """Enumerate available video devices using OpenCV with Windows device names"""
     devices = []
-    print("[OverlayPage] Starting camera enumeration...")
+    logger.debug("Starting camera enumeration...")
     
     # First, get Windows camera names
     windows_names = get_windows_camera_names()
@@ -88,7 +92,7 @@ def enumerate_video_devices():
                 # If we can't open this index, stop searching
                 break
         
-        print(f"[OverlayPage] OpenCV found {len(opencv_cameras)} cameras at indices: {opencv_cameras}")
+        logger.info(f"OpenCV found {len(opencv_cameras)} cameras at indices: {opencv_cameras}")
         
         # Match Windows names with OpenCV indices
         for i, opencv_idx in enumerate(opencv_cameras):
@@ -100,12 +104,12 @@ def enumerate_video_devices():
                 device_name = f"Camera {opencv_idx}"
             
             devices.append(f"{device_name}|{opencv_idx}")
-            print(f"[OverlayPage] Found camera: {device_name} (index {opencv_idx})")
+            logger.info(f"Found camera: {device_name} (index {opencv_idx})")
             
     except Exception as e:
-        print(f"[OverlayPage] Error during camera enumeration: {e}")
+        logger.error(f"Error during camera enumeration: {e}")
     
-    print(f"[OverlayPage] Camera enumeration complete. Found {len(devices)} device(s)")
+    logger.info(f"Camera enumeration complete. Found {len(devices)} device(s)")
     return devices
 
 
@@ -724,12 +728,12 @@ class OverlayPage(QWidget):
         self.url_label.setText(f"<b>Overlay URL:</b><br>{url}")
         self.copy_btn.setEnabled(True)
         self.open_btn.setEnabled(True)
-        print(f"[OverlayPage] Overlay server started: {url}")
+        logger.info(f"Overlay server started: {url}")
     
     def onRefreshDevices(self):
         """Refresh the list of video devices"""
         # NOTE: Video device feature disabled - interferes with Snap Cam and other virtual camera device settings
-        print("[OverlayPage] Video device refresh disabled - feature interferes with Snap Cam")
+        logger.debug("Video device refresh disabled - feature interferes with Snap Cam")
         return
         
         # # Save current selection
@@ -755,7 +759,7 @@ class OverlayPage(QWidget):
     
     def onDevicesUpdated(self, devices):
         """Handle updated list of video devices from browser"""
-        print(f"[OverlayPage] Received {len(devices)} video devices from browser")
+        logger.info(f"Received {len(devices)} video devices from browser")
         
         # Save current selection
         current_selection = self.overlay_device_combo.currentText()
@@ -1009,7 +1013,7 @@ class OverlayPage(QWidget):
         if index >= 0:
             self.overlay_device_combo.setCurrentIndex(index)
         
-        print("[OverlayPage] Settings loaded from config")
+        logger.debug("Settings loaded from config")
     
     def saveSettings(self):
         """Save overlay settings to config"""
@@ -1023,11 +1027,11 @@ class OverlayPage(QWidget):
         
         # Use ConfigManager.set which reloads and saves atomically
         self.config.set('overlay', settings)
-        print("[OverlayPage] Settings saved to config")
+        logger.debug("Settings saved to config")
     
     def onSettingsChanged(self):
         """Handle settings change - update overlay server and save to config"""
         settings = self.getSettings()
         self.overlay_server.update_settings(settings)
         self.saveSettings()
-        print(f"[OverlayPage] Settings changed: {settings}")
+        logger.info(f"Settings changed: {settings}")

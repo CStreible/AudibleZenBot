@@ -18,6 +18,10 @@ from core.config import ConfigManager
 from core.oauth_handler import OAuthHandler, SimpleAuthDialog
 import threading
 from core.qt_utils import get_main_thread_executor
+from core.logger import get_logger
+
+# Structured logger for this module
+logger = get_logger('ConnectionsPage')
 
 
 class OAuthBrowserDialog(QDialog):
@@ -80,7 +84,7 @@ class OAuthBrowserDialog(QDialog):
     def onUrlChanged(self, url):
         """Monitor URL changes to capture OAuth redirect"""
         url_str = url.toString()
-        print(f"[DEBUG] onUrlChanged called, url={url_str}")
+        logger.debug(f"onUrlChanged called, url={url_str}")
         # Check if this is the redirect URI with authorization code
         if url_str.startswith(self.redirect_uri):
             parsed = urlparse(url_str)
@@ -88,7 +92,7 @@ class OAuthBrowserDialog(QDialog):
             if 'code' in params:
                 # Success! Extract authorization code
                 self.authorization_code = params['code'][0]
-                print(f"[DEBUG] Authorization code detected: {self.authorization_code}")
+                logger.debug(f"Authorization code detected: {self.authorization_code}")
                 self.status_label.setText(f"✓ Authorization successful! Obtaining access token...")
                 self.status_label.setStyleSheet("""
                     QLabel {
@@ -100,7 +104,7 @@ class OAuthBrowserDialog(QDialog):
                 """)
                 self.progress.setRange(0, 1)
                 self.progress.setValue(1)
-                print(f"[DEBUG] Emitting auth_completed signal")
+                logger.debug(f"Emitting auth_completed signal")
                 self.auth_completed.emit(self.authorization_code)
                 # Clear browser session to prevent auto-login for next account
                 self.clearBrowserSession()
@@ -110,7 +114,7 @@ class OAuthBrowserDialog(QDialog):
             elif 'error' in params:
                 # OAuth error
                 error = params.get('error_description', [params['error'][0]])[0]
-                print(f"[DEBUG] OAuth error detected: {error}")
+                logger.debug(f"OAuth error detected: {error}")
                 self.status_label.setText(f"✗ Authorization failed: {error}")
                 self.status_label.setStyleSheet("""
                     QLabel {
@@ -205,9 +209,9 @@ class OAuthBrowserDialog(QDialog):
         
         def callback(result):
             if result:
-                print(f"[OAuth Browser] Username auto-filled successfully")
+                logger.info("[OAuth Browser] Username auto-filled successfully")
             else:
-                print(f"[OAuth Browser] Could not auto-fill username - field not found on page")
+                logger.warning("[OAuth Browser] Could not auto-fill username - field not found on page")
         
         if hasattr(self, 'browser') and self.browser is not None:
             page = self.browser.page() if hasattr(self.browser, 'page') else None
@@ -384,7 +388,7 @@ class PlatformConnectionWidget(QWidget):
                 self.info_text.append("[Ngrok] Trovo callback URL cleared")
                 self.status_label.setText("")
         except Exception as e:
-            print(f"[PlatformConnectionWidget] Error setting trovo callback URL: {e}")
+            logger.error(f"[PlatformConnectionWidget] Error setting trovo callback URL: {e}")
 
         # Main-thread executor for scheduling UI updates from worker threads
         try:
@@ -785,45 +789,45 @@ class PlatformConnectionWidget(QWidget):
                 headers = {"Client-ID": client_id, "Authorization": f"Bearer {oauth_token}"}
                 params = {"query": query_text.strip()}
                 try:
-                    import requests
-                    import traceback
-                    import threading
+                        import requests
+                        import traceback
+                        import threading
 
-                    resp = requests.get(url, headers=headers, params=params, timeout=6)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        # Fetch a larger set from Twitch and show up to 10 suggestions
-                        categories = data.get("data", [])[:12]
+                        resp = requests.get(url, headers=headers, params=params, timeout=6)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            # Fetch a larger set from Twitch and show up to 10 suggestions
+                            categories = data.get("data", [])[:12]
 
-                        def _update():
-                            # Update cache and UI
-                            names = [cat.get("name", "") for cat in categories]
-                            self.platform_widgets[platform_name]['category_suggestions_cache'] = names
-                            suggestions_list.clear()
-                            # Show up to 10 suggestions in the popup
-                            for name in names[:10]:
-                                suggestions_list.addItem(name)
-                            visible = suggestions_list.count() > 0
-                            if visible:
-                                # Position popup under the input and set width to match input
-                                try:
-                                    inp_w = category_input.width()
-                                    popup.setFixedWidth(inp_w)
-                                    # Map the intended global position into this widget's local coordinates
-                                    global_pos = category_input.mapToGlobal(QPoint(0, category_input.height()))
-                                    # For a top-level popup we can move directly to global coordinates
-                                    popup.move(global_pos)
-                                except Exception:
-                                    pass
-                                popup.show()
-                            else:
-                                popup.hide()
+                            def _update():
+                                # Update cache and UI
+                                names = [cat.get("name", "") for cat in categories]
+                                self.platform_widgets[platform_name]['category_suggestions_cache'] = names
+                                suggestions_list.clear()
+                                # Show up to 10 suggestions in the popup
+                                for name in names[:10]:
+                                    suggestions_list.addItem(name)
+                                visible = suggestions_list.count() > 0
+                                if visible:
+                                    # Position popup under the input and set width to match input
+                                    try:
+                                        inp_w = category_input.width()
+                                        popup.setFixedWidth(inp_w)
+                                        # Map the intended global position into this widget's local coordinates
+                                        global_pos = category_input.mapToGlobal(QPoint(0, category_input.height()))
+                                        # For a top-level popup we can move directly to global coordinates
+                                        popup.move(global_pos)
+                                    except Exception:
+                                        pass
+                                    popup.show()
+                                else:
+                                    popup.hide()
 
-                        self.run_on_main_thread(_update)
-                    else:
-                        self.run_on_main_thread(lambda: (suggestions_list.clear(), suggestions_list.setVisible(False)))
+                            self.run_on_main_thread(_update)
+                        else:
+                            self.run_on_main_thread(lambda: (suggestions_list.clear(), suggestions_list.setVisible(False)))
                 except Exception as e:
-                    print("Twitch suggestions fetch error:", e)
+                    logger.debug("Twitch suggestions fetch error: %s", e)
                     try:
                         import traceback
                         traceback.print_exc()
@@ -1000,28 +1004,28 @@ class PlatformConnectionWidget(QWidget):
                 except Exception:
                     pass
                 
-                print(f"[ConnectionsPage] Added tag '{tag_text}' for {platform_name}")
+                logger.info(f"[ConnectionsPage] Added tag '{tag_text}' for {platform_name}")
     
     def remove_tag(self, platform_name, tag_text, tag_chip):
         """Remove a tag from the platform"""
         tag_chip.deleteLater()
-        print(f"[ConnectionsPage] Removed tag '{tag_text}' from {platform_name}")
+        logger.info(f"[ConnectionsPage] Removed tag '{tag_text}' from {platform_name}")
     
     def refresh_platform_info(self, platform_name):
         """Refresh stream info from the platform API"""
-        print(f"[ConnectionsPage] Refreshing stream info for {platform_name}")
+        logger.info(f"[ConnectionsPage] Refreshing stream info for {platform_name}")
         
         # Get the platform connector
         platform_id = platform_name.lower()
         connector = self.chat_manager.connectors.get(platform_id)
         
         if not connector:
-            print(f"[ConnectionsPage] No connector found for {platform_name}")
+            logger.warning(f"[ConnectionsPage] No connector found for {platform_name}")
             return
         
         # Debug connector attributes
-        print(f"[{platform_name}] Connector: {connector.__class__.__name__}")
-        print(f"[{platform_name}] Is connected: {getattr(connector, 'is_connected', 'N/A')}")
+        logger.debug(f"[{platform_name}] Connector: {connector.__class__.__name__}")
+        logger.debug(f"[{platform_name}] Is connected: {getattr(connector, 'is_connected', 'N/A')}")
         
         try:
             if platform_name == 'twitch':
@@ -1035,7 +1039,7 @@ class PlatformConnectionWidget(QWidget):
             elif platform_name == 'dlive':
                 self.refresh_dlive_info(connector)
         except Exception as e:
-            print(f"[ConnectionsPage] Error refreshing {platform_name} info: {e}")
+            logger.error(f"[ConnectionsPage] Error refreshing {platform_name} info: {e}")
             import traceback
             traceback.print_exc()
     
@@ -1043,7 +1047,7 @@ class PlatformConnectionWidget(QWidget):
         """Refresh Twitch stream info"""
         import requests
         
-        print(f"[Twitch] Attempting to refresh info...")
+        logger.debug(f"[Twitch] Attempting to refresh info...")
         
         # Try to get credentials from config if connector doesn't have them
         twitch_config = self.config.get_platform_config('twitch') if self.config else {}
@@ -1096,7 +1100,7 @@ class PlatformConnectionWidget(QWidget):
                     except Exception:
                         pass
         except Exception as e:
-            print(f"[ConnectionsPage] Failed to pre-populate Twitch stream_info from config: {e}")
+            logger.debug(f"[ConnectionsPage] Failed to pre-populate Twitch stream_info from config: {e}")
         
         client_id = getattr(connector, 'client_id', None) if connector else None
         if not client_id:
@@ -1110,12 +1114,12 @@ class PlatformConnectionWidget(QWidget):
         if not username:
             username = twitch_config.get('username', '')
         
-        print(f"[Twitch] Has oauth_token: {bool(oauth_token)}")
-        print(f"[Twitch] Has client_id: {bool(client_id)}")
-        print(f"[Twitch] Has username: {bool(username)}")
+        logger.debug(f"[Twitch] Has oauth_token: {bool(oauth_token)}")
+        logger.debug(f"[Twitch] Has client_id: {bool(client_id)}")
+        logger.debug(f"[Twitch] Has username: {bool(username)}")
         
         if not oauth_token or not client_id or not username:
-            print(f"[Twitch] Missing required credentials (check config)")
+            logger.warning(f"[Twitch] Missing required credentials (check config)")
             return
         
         try:
@@ -1134,7 +1138,7 @@ class PlatformConnectionWidget(QWidget):
             )
             
             if user_response.status_code != 200:
-                print(f"[Twitch] Failed to get user info: {user_response.status_code}")
+                logger.error(f"[Twitch] Failed to get user info: {user_response.status_code}")
                 return
             
             user_data = user_response.json()
@@ -1158,7 +1162,7 @@ class PlatformConnectionWidget(QWidget):
                     # Update title
                     if 'title' in info and 'twitch' in self.platform_widgets:
                         self.platform_widgets['twitch']['title'].setText(info['title'])
-                        print(f"[Twitch] Loaded title: {info['title']}")
+                        logger.info(f"[Twitch] Loaded title: {info['title']}")
                     
                     # Update category
                     if 'game_name' in info and 'twitch' in self.platform_widgets:
@@ -1169,7 +1173,7 @@ class PlatformConnectionWidget(QWidget):
                                 category_widget.setText(info['game_name'])
                             finally:
                                 category_widget.blockSignals(False)
-                            print(f"[Twitch] Loaded category: {info['game_name']}")
+                            logger.info(f"[Twitch] Loaded category: {info['game_name']}")
                     
                     # Update tags (tags are now in the channel info as a list of strings)
                     if 'tags' in info and info['tags'] and 'twitch' in self.platform_widgets:
@@ -1191,14 +1195,14 @@ class PlatformConnectionWidget(QWidget):
                                 tags_display.show()
                             except Exception:
                                 pass
-                            print(f"[Twitch] Loaded {len(info['tags'])} tags")
+                            logger.info(f"[Twitch] Loaded {len(info['tags'])} tags")
                             # Diagnostic: report layout count and child widget visibilities
                             try:
                                 l = tags_display.layout()
                                 count = l.count() if l is not None else -1
                                 td_size = tags_display.size()
                                 td_hint = tags_display.sizeHint()
-                                print(f"[ConnectionsPage][DIAG] tags_populated: layout_count={count} tags_display_size={td_size.width()}x{td_size.height()} hint={td_hint.width()}x{td_hint.height()} visible={tags_display.isVisible()}")
+                                logger.debug(f"[ConnectionsPage][DIAG] tags_populated: layout_count={count} tags_display_size={td_size.width()}x{td_size.height()} hint={td_hint.width()}x{td_hint.height()} visible={tags_display.isVisible()}")
                                 # enumerate children
                                 if l is not None:
                                     for i in range(l.count()):
@@ -1211,7 +1215,7 @@ class PlatformConnectionWidget(QWidget):
                                                 text = sub.text() if hasattr(sub, 'text') else ''
                                             except Exception:
                                                 pass
-                                            print(f"[ConnectionsPage][DIAG] child[{i}]: class={w.__class__.__name__} visible={w.isVisible()} text={text}")
+                                            logger.debug(f"[ConnectionsPage][DIAG] child[{i}]: class={w.__class__.__name__} visible={w.isVisible()} text={text}")
                                 # Parent chain visibility
                                 try:
                                     chain = []
@@ -1222,30 +1226,30 @@ class PlatformConnectionWidget(QWidget):
                                         except Exception:
                                             chain.append((p.__class__.__name__, 'N/A'))
                                         p = getattr(p, 'parent', lambda: None)() if not hasattr(p, 'parentWidget') else p.parentWidget()
-                                    print(f"[ConnectionsPage][DIAG] parent_chain: {chain}")
+                                    logger.debug(f"[ConnectionsPage][DIAG] parent_chain: {chain}")
                                 except Exception as e:
-                                    print(f"[ConnectionsPage][DIAG] parent_chain diagnostic failed: {e}")
+                                    logger.debug(f"[ConnectionsPage][DIAG] parent_chain diagnostic failed: {e}")
                             except Exception as e:
-                                print(f"[ConnectionsPage][DIAG] tags_populated diagnostic failed: {e}")
+                                logger.debug(f"[ConnectionsPage][DIAG] tags_populated diagnostic failed: {e}")
+                            else:
+                                logger.debug(f"[Twitch] tags_display widget not found")
                         else:
-                            print(f"[Twitch] tags_display widget not found")
-                    else:
-                        print(f"[Twitch] No tags in channel info or widget missing")
+                            logger.debug(f"[Twitch] No tags in channel info or widget missing")
             else:
-                print(f"[Twitch] Channel info request failed: {channel_response.status_code}")
+                logger.error(f"[Twitch] Channel info request failed: {channel_response.status_code}")
                     
         except Exception as e:
-            print(f"[Twitch] Error refreshing info: {e}")
+            logger.error(f"[Twitch] Error refreshing info: {e}")
     
     def refresh_youtube_info(self, connector):
         """Refresh YouTube stream info"""
         import requests
         
-        print(f"[YouTube] Attempting to refresh info...")
-        print(f"[YouTube] Has oauth_token: {hasattr(connector, 'oauth_token')}")
+        logger.debug(f"[YouTube] Attempting to refresh info...")
+        logger.debug(f"[YouTube] Has oauth_token: {hasattr(connector, 'oauth_token')}")
         
         if not hasattr(connector, 'oauth_token') or not connector.oauth_token:
-            print(f"[YouTube] No oauth token, skipping refresh")
+            logger.warning(f"[YouTube] No oauth token, skipping refresh")
             return
         
         try:
@@ -1270,25 +1274,25 @@ class PlatformConnectionWidget(QWidget):
                     # Update title
                     if 'title' in info and 'youtube' in self.platform_widgets:
                         self.platform_widgets['youtube']['title'].setText(info['title'])
-                        print(f"[YouTube] Loaded title: {info['title']}")
+                        logger.debug(f"[YouTube] Loaded title: {info['title']}")
                 else:
-                    print(f"[YouTube] No active broadcasts found")
+                    logger.debug(f"[YouTube] No active broadcasts found")
             else:
-                print(f"[YouTube] API request failed: {response.status_code}")
+                logger.error(f"[YouTube] API request failed: {response.status_code}")
                 try:
                     error_data = response.json()
-                    print(f"[YouTube] Error details: {error_data}")
+                    logger.debug(f"[YouTube] Error details: {error_data}")
                 except:
                     pass
         except Exception as e:
-            print(f"[YouTube] Error refreshing info: {e}")
+            logger.exception(f"[YouTube] Error refreshing info: {e}")
     
     def refresh_kick_info(self, connector):
         """Refresh Kick stream info"""
         import requests
         import cloudscraper
         
-        print(f"[Kick] Attempting to refresh info...")
+        logger.debug(f"[Kick] Attempting to refresh info...")
         
         # Try to get credentials from config
         kick_config = self.config.get_platform_config('kick') if self.config else {}
@@ -1305,10 +1309,10 @@ class PlatformConnectionWidget(QWidget):
             channel_identifier = kick_config.get('username', '')
         
         if not channel_identifier:
-            print(f"[Kick] No channel identifier available (set username in config)")
+            logger.warning(f"[Kick] No channel identifier available (set username in config)")
             return
         
-        print(f"[Kick] Using channel identifier: {channel_identifier}")
+        logger.debug(f"[Kick] Using channel identifier: {channel_identifier}")
         
         try:
             scraper = cloudscraper.create_scraper(
@@ -1318,20 +1322,20 @@ class PlatformConnectionWidget(QWidget):
             
             if response.status_code == 200:
                 data = response.json()
-                print(f"[Kick] API response keys: {list(data.keys())}")
-                
+                logger.debug(f"[Kick] API response keys: {list(data.keys())}")
+
                 # Check if channel data exists (even if not live)
                 if 'user' in data and data.get('user'):
                     user_info = data['user']
-                    print(f"[Kick] Channel found: {user_info.get('username', 'Unknown')}")
-                
+                    logger.debug(f"[Kick] Channel found: {user_info.get('username', 'Unknown')}")
+
                 # Update title if stream is live
                 if data.get('livestream'):
                     stream_info = data['livestream']
                     if 'session_title' in stream_info and 'kick' in self.platform_widgets:
                         self.platform_widgets['kick']['title'].setText(stream_info['session_title'])
-                        print(f"[Kick] Loaded title: {stream_info['session_title']}")
-                    
+                        logger.debug(f"[Kick] Loaded title: {stream_info['session_title']}")
+
                     # Update category
                     if stream_info.get('categories') and 'kick' in self.platform_widgets:
                         category_widget = self.platform_widgets['kick'].get('category')
@@ -1342,14 +1346,14 @@ class PlatformConnectionWidget(QWidget):
                                 category_widget.setText(category_name)
                             finally:
                                 category_widget.blockSignals(False)
-                            print(f"[Kick] Loaded category: {category_name}")
+                            logger.debug(f"[Kick] Loaded category: {category_name}")
                     
                     # Update tags
                     if 'kick' in self.platform_widgets:
-                        print(f"[Kick] Checking for tags in stream_info...")
-                        print(f"[Kick] stream_info keys: {list(stream_info.keys())}")
+                        logger.debug(f"[Kick] Checking for tags in stream_info...")
+                        logger.debug(f"[Kick] stream_info keys: {list(stream_info.keys())}")
                         if 'tags' in stream_info:
-                            print(f"[Kick] Tags found: {stream_info['tags']}")
+                            logger.debug(f"[Kick] Tags found: {stream_info['tags']}")
                         
                         if stream_info.get('tags'):
                             tags_display = self.platform_widgets['kick'].get('tags_display')
@@ -1365,21 +1369,21 @@ class PlatformConnectionWidget(QWidget):
                                 # Add new tags (Kick returns tags as a list of strings)
                                 for tag_name in stream_info['tags']:
                                     self.add_tag_chip('kick', tag_name, tags_display)
-                                print(f"[Kick] Loaded {len(stream_info['tags'])} tags")
+                                logger.debug(f"[Kick] Loaded {len(stream_info['tags'])} tags")
                             else:
-                                print(f"[Kick] tags_display widget not found")
+                                logger.debug(f"[Kick] tags_display widget not found")
                         else:
-                            print(f"[Kick] No tags in stream_info")
+                            logger.debug(f"[Kick] No tags in stream_info")
                 else:
-                    print(f"[Kick] Channel is not currently live (no livestream data)")
-                    print(f"[Kick] Keeping saved config data displayed")
+                    logger.debug(f"[Kick] Channel is not currently live (no livestream data)")
+                    logger.debug(f"[Kick] Keeping saved config data displayed")
             else:
-                print(f"[Kick] API request failed: {response.status_code}")
-                print(f"[Kick] Response text: {response.text[:200]}")
-                print(f"[Kick] Keeping saved config data displayed")
+                logger.error(f"[Kick] API request failed: {response.status_code}")
+                logger.debug(f"[Kick] Response text: {response.text[:200]}")
+                logger.debug(f"[Kick] Keeping saved config data displayed")
         except Exception as e:
-            print(f"[Kick] Error refreshing info: {e}")
-            print(f"[Kick] Keeping saved config data displayed")
+            logger.exception(f"[Kick] Error refreshing info: {e}")
+            logger.debug(f"[Kick] Keeping saved config data displayed")
             import traceback
             traceback.print_exc()
     
@@ -1387,7 +1391,7 @@ class PlatformConnectionWidget(QWidget):
         """Refresh Trovo stream info"""
         import requests
         
-        print(f"[Trovo] Attempting to refresh info...")
+        logger.debug(f"[Trovo] Attempting to refresh info...")
         
         # Try loading username and access token from config
         trovo_config = self.config.get_platform_config('trovo') if self.config else {}
@@ -1399,11 +1403,11 @@ class PlatformConnectionWidget(QWidget):
             if not access_token:
                 access_token = connector.access_token
         
-        print(f"[Trovo] Username from config: '{username}'")
-        print(f"[Trovo] Has access token: {bool(access_token)}")
+        logger.debug(f"[Trovo] Username from config: '{username}'")
+        logger.debug(f"[Trovo] Has access token: {bool(access_token)}")
         
         if not username:
-            print(f"[Trovo] No username found in config")
+            logger.warning(f"[Trovo] No username found in config")
             return
         
         try:
@@ -1413,7 +1417,7 @@ class PlatformConnectionWidget(QWidget):
                 'Content-Type': 'application/json'
             }
             
-            print(f"[Trovo] Making API request with username: {username}")
+            logger.debug(f"[Trovo] Making API request with username: {username}")
             
             # First get user info (and channel_id) using getusers endpoint
             # This endpoint uses "user" (array) not "username" (string)
@@ -1423,19 +1427,19 @@ class PlatformConnectionWidget(QWidget):
                 json={'user': [username]}
             )
             
-            print(f"[Trovo] User API response status: {user_response.status_code}")
+            logger.debug(f"[Trovo] User API response status: {user_response.status_code}")
             
             if user_response.status_code != 200:
-                print(f"[Trovo] Failed to get user info: {user_response.text}")
+                logger.error(f"[Trovo] Failed to get user info: {user_response.text}")
                 return
             
             user_data = user_response.json()
             if not user_data.get('users') or len(user_data['users']) == 0:
-                print(f"[Trovo] No user found for username: {username}")
+                logger.debug(f"[Trovo] No user found for username: {username}")
                 return
             
             channel_id = user_data['users'][0]['channel_id']
-            print(f"[Trovo] Got channel_id: {channel_id}")
+            logger.debug(f"[Trovo] Got channel_id: {channel_id}")
             
             # Now get channel info using channel_id
             channel_response = requests.post(
@@ -1444,16 +1448,16 @@ class PlatformConnectionWidget(QWidget):
                 json={'channel_id': int(channel_id)}
             )
             
-            print(f"[Trovo] Channel API response status: {channel_response.status_code}")
+            logger.debug(f"[Trovo] Channel API response status: {channel_response.status_code}")
             
             if channel_response.status_code == 200:
                 data = channel_response.json()
-                print(f"[Trovo] Channel response keys: {list(data.keys())}")
+                logger.debug(f"[Trovo] Channel response keys: {list(data.keys())}")
                 
                 # Update title
                 if 'live_title' in data and 'trovo' in self.platform_widgets:
                     self.platform_widgets['trovo']['title'].setText(data['live_title'])
-                    print(f"[Trovo] Loaded title: {data['live_title']}")
+                    logger.debug(f"[Trovo] Loaded title: {data['live_title']}")
                 
                 # Update category
                 if 'category_name' in data and 'trovo' in self.platform_widgets:
@@ -1464,17 +1468,17 @@ class PlatformConnectionWidget(QWidget):
                             category_widget.setText(data['category_name'])
                         finally:
                             category_widget.blockSignals(False)
-                        print(f"[Trovo] Loaded category: {data['category_name']}")
+                        logger.debug(f"[Trovo] Loaded category: {data['category_name']}")
             else:
-                print(f"[Trovo] Channel API request failed: {channel_response.status_code}")
-                print(f"[Trovo] Response: {channel_response.text[:300]}")
+                logger.error(f"[Trovo] Channel API request failed: {channel_response.status_code}")
+                logger.debug(f"[Trovo] Response: {channel_response.text[:300]}")
                 try:
                     error_data = channel_response.json()
-                    print(f"[Trovo] Error details: {error_data}")
+                    logger.debug(f"[Trovo] Error details: {error_data}")
                 except:
                     pass
         except Exception as e:
-            print(f"[Trovo] Error refreshing info: {e}")
+            logger.exception(f"[Trovo] Error refreshing info: {e}")
             import traceback
             traceback.print_exc()
     
@@ -1484,7 +1488,7 @@ class PlatformConnectionWidget(QWidget):
         
         # DLive uses GraphQL API
         # This is a placeholder - actual implementation would need auth token
-        print(f"[DLive] Info refresh not yet implemented")
+        logger.debug(f"[DLive] Info refresh not yet implemented")
     
     def add_tag_chip(self, platform_name, tag_text, tags_display):
         """Add a tag chip to the tags display"""
@@ -1571,16 +1575,16 @@ class PlatformConnectionWidget(QWidget):
             td_hint = tags_display.sizeHint()
             visible = tag_chip.isVisible()
             parent = tag_chip.parent().__class__.__name__ if tag_chip.parent() is not None else 'None'
-            print(f"[ConnectionsPage][DIAG] add_tag_chip: platform={platform_name!r} tag={tag_text!r} layout_count={lc} parent={parent} visible={visible} tags_display_size={td_size.width()}x{td_size.height()} hint={td_hint.width()}x{td_hint.height()}")
+            logger.debug(f"[ConnectionsPage][DIAG] add_tag_chip: platform={platform_name!r} tag={tag_text!r} layout_count={lc} parent={parent} visible={visible} tags_display_size={td_size.width()}x{td_size.height()} hint={td_hint.width()}x{td_hint.height()}")
         except Exception as e:
-            print(f"[ConnectionsPage][DIAG] add_tag_chip: diagnostic failed: {e}")
+            logger.exception(f"[ConnectionsPage][DIAG] add_tag_chip: diagnostic failed: {e}")
 
     def save_platform_info(self, platform_name):
         """Save stream info locally and update platform API"""
-        print(f"[ConnectionsPage] Saving stream info for {platform_name}")
+        logger.info(f"[ConnectionsPage] Saving stream info for {platform_name}")
         
         if platform_name not in self.platform_widgets:
-            print(f"[ConnectionsPage] No widgets found for {platform_name}")
+            logger.warning(f"[ConnectionsPage] No widgets found for {platform_name}")
             return
         
         widgets = self.platform_widgets[platform_name]
@@ -1621,10 +1625,10 @@ class PlatformConnectionWidget(QWidget):
         # Persist stream_info atomically using ConfigManager helper to avoid races
         try:
             merged = self.config.merge_platform_stream_info(platform_key, stream_info)
-            print(f"[ConnectionsPage] Saved {platform_name} stream info to local config")
-            print(f"[ConnectionsPage] Saved data: {merged}")
+            logger.info(f"[ConnectionsPage] Saved {platform_name} stream info to local config")
+            logger.debug(f"[ConnectionsPage] Saved data: {merged}")
         except Exception as e:
-            print(f"[ConnectionsPage] Failed to save stream_info atomically: {e}")
+            logger.exception(f"[ConnectionsPage] Failed to save stream_info atomically: {e}")
         
         # Try to update platform API (title, category, tags only - notification is local)
         update_success = self.update_platform_api(platform_name, stream_info)
@@ -1654,7 +1658,7 @@ class PlatformConnectionWidget(QWidget):
             # Other platforms can be added here
             return False
         except Exception as e:
-            print(f"[{platform_name}] Error updating API: {e}")
+            logger.exception(f"[{platform_name}] Error updating API: {e}")
             return False
     
     def update_twitch_api(self, stream_info):
@@ -1663,11 +1667,11 @@ class PlatformConnectionWidget(QWidget):
         
         connector = self.chat_manager.connectors.get('twitch')
         if not connector or not hasattr(connector, 'oauth_token') or not hasattr(connector, 'client_id'):
-            print(f"[Twitch] Cannot update API: missing credentials")
+            logger.warning(f"[Twitch] Cannot update API: missing credentials")
             return False
         
         if not hasattr(connector, 'username') or not connector.username:
-            print(f"[Twitch] Cannot update API: no username set")
+            logger.warning(f"[Twitch] Cannot update API: no username set")
             return False
         
         try:
@@ -1685,12 +1689,12 @@ class PlatformConnectionWidget(QWidget):
             )
             
             if user_response.status_code != 200:
-                print(f"[Twitch] Failed to get user ID: {user_response.status_code}")
+                logger.error(f"[Twitch] Failed to get user ID: {user_response.status_code}")
                 return False
             
             user_data = user_response.json()
             if not user_data.get('data'):
-                print(f"[Twitch] No user data returned")
+                logger.error(f"[Twitch] No user data returned")
                 return False
             
             broadcaster_id = user_data['data'][0]['id']
@@ -1719,7 +1723,7 @@ class PlatformConnectionWidget(QWidget):
                 update_data['tags'] = tags
             
             if not update_data:
-                print(f"[Twitch] No data to update")
+                logger.debug(f"[Twitch] No data to update")
                 return False
             
             # Send PATCH request to update channel
@@ -1730,12 +1734,12 @@ class PlatformConnectionWidget(QWidget):
             )
             
             if response.status_code == 204:
-                print(f"[Twitch] Successfully updated channel info")
+                logger.info(f"[Twitch] Successfully updated channel info")
                 return True
             elif response.status_code == 401:
-                print(f"[Twitch] Authentication failed - token missing required scope")
-                print(f"[Twitch] Required scope: user:edit:broadcast or channel:manage:broadcast")
-                print(f"[Twitch] Your changes are saved locally but not pushed to Twitch")
+                logger.warning(f"[Twitch] Authentication failed - token missing required scope")
+                logger.debug(f"[Twitch] Required scope: user:edit:broadcast or channel:manage:broadcast")
+                logger.info(f"[Twitch] Your changes are saved locally but not pushed to Twitch")
                 
                 # Show OAuth warning in UI
                 if 'twitch' in self.platform_widgets:
@@ -1753,14 +1757,12 @@ class PlatformConnectionWidget(QWidget):
                 
                 return False
             else:
-                print(f"[Twitch] Failed to update channel: {response.status_code}")
-                print(f"[Twitch] Response: {response.text}")
+                logger.error(f"[Twitch] Failed to update channel: {response.status_code}")
+                logger.debug(f"[Twitch] Response: {response.text}")
                 return False
                 
         except Exception as e:
-            print(f"[Twitch] Error updating API: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"[Twitch] Error updating API: {e}")
             return False
     
     def update_trovo_api(self, stream_info):
@@ -1769,14 +1771,14 @@ class PlatformConnectionWidget(QWidget):
         
         connector = self.chat_manager.connectors.get('trovo')
         if not connector or not hasattr(connector, 'access_token'):
-            print(f"[Trovo] Cannot update API: missing credentials")
+            logger.warning(f"[Trovo] Cannot update API: missing credentials")
             return False
         
         trovo_config = self.config.get_platform_config('trovo') if self.config else {}
         username = trovo_config.get('username', '')
         
         if not username:
-            print(f"[Trovo] Cannot update API: no username set")
+            logger.warning(f"[Trovo] Cannot update API: no username set")
             return False
         
         try:
@@ -1794,13 +1796,13 @@ class PlatformConnectionWidget(QWidget):
             )
             
             if channel_response.status_code != 200:
-                print(f"[Trovo] Failed to get channel info: {channel_response.status_code}")
+                logger.error(f"[Trovo] Failed to get channel info: {channel_response.status_code}")
                 return False
             
             channel_data = channel_response.json()
             channel_id = channel_data.get('channel_id')
             if not channel_id:
-                print(f"[Trovo] No channel_id in response")
+                logger.error(f"[Trovo] No channel_id in response")
                 return False
             
             # Prepare update payload
@@ -1823,7 +1825,7 @@ class PlatformConnectionWidget(QWidget):
                         update_data['category_id'] = search_data['category_info'][0]['id']
             
             if len(update_data) == 1:  # Only channel_id
-                print(f"[Trovo] No data to update")
+                logger.debug(f"[Trovo] No data to update")
                 return False
             
             # Add OAuth token for update request
@@ -1837,17 +1839,15 @@ class PlatformConnectionWidget(QWidget):
             )
             
             if response.status_code == 200:
-                print(f"[Trovo] Successfully updated channel info")
+                logger.info(f"[Trovo] Successfully updated channel info")
                 return True
             else:
-                print(f"[Trovo] Failed to update channel: {response.status_code}")
-                print(f"[Trovo] Response: {response.text}")
+                logger.error(f"[Trovo] Failed to update channel: {response.status_code}")
+                logger.debug(f"[Trovo] Response: {response.text}")
                 return False
                 
         except Exception as e:
-            print(f"[Trovo] Error updating API: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"[Trovo] Error updating API: {e}")
             return False
     
     def update_kick_api(self, stream_info):
@@ -1857,7 +1857,7 @@ class PlatformConnectionWidget(QWidget):
         
         connector = self.chat_manager.connectors.get('kick')
         if not connector:
-            print(f"[Kick] Cannot update API: no connector")
+            logger.warning(f"[Kick] Cannot update API: no connector")
             return False
         
         # Get channel identifier
@@ -1871,20 +1871,20 @@ class PlatformConnectionWidget(QWidget):
             channel_identifier = kick_config.get('username', '')
         
         if not channel_identifier:
-            print(f"[Kick] Cannot update API: no channel identifier")
+            logger.warning(f"[Kick] Cannot update API: no channel identifier")
             return False
         
         # Note: Kick API does not currently provide a public authenticated endpoint
         # for updating channel information (title, category, tags)
         # The official Kick API is limited and requires special access/credentials
         # This is a placeholder for when/if Kick provides such an API
-        print(f"[Kick] API updates not yet supported - Kick does not provide public update endpoints")
-        print(f"[Kick] Your changes are saved locally only")
+        logger.info(f"[Kick] API updates not yet supported - Kick does not provide public update endpoints")
+        logger.info(f"[Kick] Your changes are saved locally only")
         return False
 
     def onTrovoAccountAction(self, account_type):
         """Handle Trovo login/logout button click"""
-        print(f"[Trovo] onTrovoAccountAction called for account_type: {account_type}")
+        logger.debug(f"[Trovo] onTrovoAccountAction called for account_type: {account_type}")
         from PyQt6.QtWidgets import QMessageBox, QInputDialog
         import secrets, threading, webbrowser, time
         from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -1921,7 +1921,7 @@ class PlatformConnectionWidget(QWidget):
                 btn = self.bot_login_btn
             if btn and btn.text() != 'Login':
                 # Perform logout/disconnect for Trovo account
-                print(f"[Trovo] Logout requested for {account_type}, disconnecting...")
+                logger.info(f"[Trovo] Logout requested for {account_type}, disconnecting...")
                 if self.chat_manager:
                     self.chat_manager.disconnectPlatform('trovo')
                 from core.config import ConfigManager
@@ -1960,7 +1960,7 @@ class PlatformConnectionWidget(QWidget):
             # Fall back to known public client id if not configured to avoid empty client_id in URL
             TROVO_CLIENT_ID = trovo_cfg.get('client_id', 'b239c1cc698e04e93a164df321d142b3')
             if not trovo_cfg.get('client_id'):
-                print("[Trovo] No client_id in config; using fallback public client_id for authorization URL")
+                logger.debug("[Trovo] No client_id in config; using fallback public client_id for authorization URL")
         except Exception:
             TROVO_CLIENT_ID = 'b239c1cc698e04e93a164df321d142b3'
         # Use configured redirect if available (ngrok), otherwise default to localhost callback
@@ -1983,7 +1983,7 @@ class PlatformConnectionWidget(QWidget):
             server_thread.daemon = True
             server_thread.start()
             local_callback_server = server
-            print(f"[Trovo] Started local OAuth callback server on port {port}")
+            logger.info(f"[Trovo] Started local OAuth callback server on port {port}")
         # Use Trovo's official OAuth scopes
         scopes = [
             "chat_connect",
@@ -2005,13 +2005,13 @@ class PlatformConnectionWidget(QWidget):
         # Use the Trovo public login page for authorization (browser UI),
         # then exchange the returned code against the API token endpoint.
         oauth_url = f"https://open.trovo.live/page/login.html?{urlencode(params)}"
-        print(f"[Trovo] Starting OAuth with scopes: {scope_string}")
-        print(f"[Trovo] Redirect URI: {TROVO_REDIRECT_URI}")
+        logger.info(f"[Trovo] Starting OAuth with scopes: {scope_string}")
+        logger.debug(f"[Trovo] Redirect URI: {TROVO_REDIRECT_URI}")
         webbrowser.open(oauth_url)
         # If we started a local callback server, wait for the code; otherwise, for non-local redirects
         # start the shared Flask callback server + ngrok automatically and wait for the code.
         if local_callback_server:
-            print("[Trovo] Waiting for OAuth callback on local server...")
+            logger.info("[Trovo] Waiting for OAuth callback on local server...")
             if callback_received.wait(timeout=120):
                 try:
                     local_callback_server.server_close()
@@ -2019,13 +2019,13 @@ class PlatformConnectionWidget(QWidget):
                     pass
                 if 'code' in auth_code_container:
                     auth_code = auth_code_container['code']
-                    print(f"[Trovo] Authorization code received: {auth_code[:20]}...")
+                    logger.info(f"[Trovo] Authorization code received: {auth_code[:20]}...")
                     self.exchangeCodeForToken(account_type, auth_code)
             else:
-                print("[Trovo] OAuth callback not received in time on local server.")
+                logger.warning("[Trovo] OAuth callback not received in time on local server.")
         else:
             # Non-local redirect (e.g., ngrok) - attempt automated capture
-            print("[Trovo] Opened authorization URL. Using non-local redirect (ngrok). Attempting automated capture...")
+            logger.info("[Trovo] Opened authorization URL. Using non-local redirect (ngrok). Attempting automated capture...")
             try:
                 # Import shared Flask callback server (it exposes last_code_event/last_code_container)
                 import platform_connectors.trovo_callback_server as tcs
@@ -2035,13 +2035,13 @@ class PlatformConnectionWidget(QWidget):
                         try:
                             tcs.app.run(host='0.0.0.0', port=8889, debug=False, use_reloader=False)
                         except Exception as e:
-                            print(f"[Trovo] Callback server error: {e}")
+                            logger.exception(f"[Trovo] Callback server error: {e}")
 
                     import threading
                     thr = threading.Thread(target=_run_callback, daemon=True)
                     thr.start()
                     self._trovo_callback_thread = thr
-                    print("[Trovo] Started shared Flask callback server on port 8889 (daemon thread)")
+                    logger.info("[Trovo] Started shared Flask callback server on port 8889 (daemon thread)")
 
                 # Ensure ngrok tunnel is running and get public URL
                 public_url = None
@@ -2052,7 +2052,7 @@ class PlatformConnectionWidget(QWidget):
                         if not public_url:
                             public_url = self.ngrok_manager.start_tunnel(8889, protocol='http', name='trovo_callback')
                         if public_url:
-                            print(f"[Trovo] Ngrok public URL for callback: {public_url}")
+                            logger.info(f"[Trovo] Ngrok public URL for callback: {public_url}")
                             # Surface URL in UI
                             try:
                                 if 'trovo' in self.platform_widgets:
@@ -2060,10 +2060,10 @@ class PlatformConnectionWidget(QWidget):
                             except Exception:
                                 pass
                 except Exception as e:
-                    print(f"[Trovo] Error starting/querying ngrok tunnel: {e}")
+                    logger.exception(f"[Trovo] Error starting/querying ngrok tunnel: {e}")
 
                 # Wait for the callback server to receive the code via the shared event
-                print("[Trovo] Waiting for authorization code via callback server (120s timeout)...")
+                logger.info("[Trovo] Waiting for authorization code via callback server (120s timeout)...")
                 if tcs.last_code_event.wait(timeout=120):
                     auth_code = tcs.last_code_container.get('code')
                     # Clear the event for future attempts
@@ -2072,22 +2072,22 @@ class PlatformConnectionWidget(QWidget):
                     except Exception:
                         pass
                     if auth_code:
-                        print(f"[Trovo] Authorization code received automatically: {auth_code[:20]}...")
+                        logger.info(f"[Trovo] Authorization code received automatically: {auth_code[:20]}...")
                         self.exchangeCodeForToken(account_type, auth_code)
                         return
                 else:
-                    print("[Trovo] Authorization code not received via callback server in time.")
+                    logger.warning("[Trovo] Authorization code not received via callback server in time.")
             except Exception as e:
-                print(f"[Trovo] Automated capture failed: {e}")
+                logger.exception(f"[Trovo] Automated capture failed: {e}")
 
             # Fallback: Offer manual paste
-            print("[Trovo] Falling back to manual paste of authorization code.")
+            logger.info("[Trovo] Falling back to manual paste of authorization code.")
             from PyQt6.QtWidgets import QInputDialog
             code, ok = QInputDialog.getText(self, "Trovo Authorization", "Paste the authorization code from the callback URL:")
             if ok and code:
                 self.exchangeCodeForToken(account_type, code.strip())
             else:
-                print("[Trovo] No authorization code provided by user.")
+                logger.warning("[Trovo] No authorization code provided by user.")
 
     def append_status_message(self, message):
         """Append a date and time stamped message to the info_text log box."""
@@ -2098,24 +2098,24 @@ class PlatformConnectionWidget(QWidget):
     def onAccountAction(self, account_type):
         """Handle login/logout button click"""
         from PyQt6.QtWidgets import QMessageBox, QInputDialog
-        print(f"[DEBUG] onAccountAction called for account_type: {account_type}")
+        logger.debug(f"onAccountAction called for account_type: {account_type}")
         if account_type == "streamer":
-            print(f"[DEBUG] streamer_login_btn text: {self.streamer_login_btn.text()}")
+            logger.debug(f"streamer_login_btn text: {self.streamer_login_btn.text()}")
             display_label = self.streamer_display_name
             button = self.streamer_login_btn
             config_prefix = "streamer_"
             status_role = "Streamer"
         else:
-            print(f"[DEBUG] bot_login_btn text: {self.bot_login_btn.text()}")
+            logger.debug(f"bot_login_btn text: {self.bot_login_btn.text()}")
             display_label = self.bot_display_name
             button = self.bot_login_btn
             config_prefix = "bot_"
             status_role = "Bot"
-        print(f"[DEBUG] Button text at start: {button.text()}")
-        print(f"[DEBUG] Platform: {self.platform_id}, Account: {account_type}, Button: {button}")
+        logger.debug(f"Button text at start: {button.text()}")
+        logger.debug(f"Platform: {self.platform_id}, Account: {account_type}, Button: {button}")
         # Check current state
         if button.text() == "Login":
-            print(f"[DEBUG] {account_type} login flow starting for platform {self.platform_id}")
+            logger.debug(f"{account_type} login flow starting for platform {self.platform_id}")
             import threading
             from http.server import HTTPServer, BaseHTTPRequestHandler
             from urllib.parse import urlparse, parse_qs, urlencode
@@ -2155,7 +2155,7 @@ class PlatformConnectionWidget(QWidget):
             server_thread.daemon = True
             server_thread.start()
 
-            print(f"[OAuth] Started local OAuth callback server on port {port}")
+            logger.info(f"[OAuth] Started local OAuth callback server on port {port}")
 
             if self.platform_id == 'twitch':
                 # Twitch OAuth credentials and flow
@@ -2190,11 +2190,11 @@ class PlatformConnectionWidget(QWidget):
                     "force_verify": "true"
                 }
                 oauth_url = f"https://id.twitch.tv/oauth2/authorize?{urlencode(params)}"
-                print(f"[Twitch] Starting OAuth with scopes: {scope_string}")
-                print(f"[Twitch] Redirect URI: {redirect_uri}")
+                logger.info(f"[Twitch] Starting OAuth with scopes: {scope_string}")
+                logger.debug(f"[Twitch] Redirect URI: {redirect_uri}")
                 import webbrowser
                 webbrowser.open(oauth_url)
-                print("[Twitch] Waiting for OAuth callback...")
+                logger.debug("[Twitch] Waiting for OAuth callback...")
             elif self.platform_id == 'kick':
                 # ...existing Kick OAuth logic...
                 # Prefer client credentials from config
@@ -2244,8 +2244,8 @@ class PlatformConnectionWidget(QWidget):
                     params["code_challenge"] = code_challenge
                     params["code_challenge_method"] = "S256"
                 oauth_url = f"https://id.kick.com/oauth/authorize?{urlencode(params)}"
-                print(f"[Kick] Starting OAuth with scopes: {scope_string}")
-                print(f"[Kick] Redirect URI: {redirect_uri}")
+                logger.info(f"[Kick] Starting OAuth with scopes: {scope_string}")
+                logger.debug(f"[Kick] Redirect URI: {redirect_uri}")
 
                 # Validate OAuth URL before opening browser
                 validation_ok = True
@@ -2280,13 +2280,13 @@ class PlatformConnectionWidget(QWidget):
                         from PyQt6.QtWidgets import QMessageBox
                         QMessageBox.warning(self, "Kick OAuth Error", f"{validation_msg}\n\nOAuth URL:\n{oauth_url}")
                     except Exception:
-                        print(f"[Kick] OAuth validation failed: {validation_msg}")
-                        print(f"[Kick] OAuth URL: {oauth_url}")
+                        logger.warning(f"[Kick] OAuth validation failed: {validation_msg}")
+                        logger.debug(f"[Kick] OAuth URL: {oauth_url}")
                     return
                 else:
-                    print(f"[Kick] OAuth URL validated, opening browser: {oauth_url}")
-                    webbrowser.open(oauth_url)
-                    print("[Kick] Waiting for OAuth callback...")
+                        logger.debug(f"[Kick] OAuth URL validated, opening browser: {oauth_url}")
+                        webbrowser.open(oauth_url)
+                        logger.debug("[Kick] Waiting for OAuth callback...")
             # Add other platforms as needed
 
             # Wait for callback (with timeout)
@@ -2294,13 +2294,13 @@ class PlatformConnectionWidget(QWidget):
                 server.server_close()
                 if 'code' in auth_code_container:
                     auth_code = auth_code_container['code']
-                    print(f"[OAuth] Authorization code received: {auth_code[:20]}...")
+                    logger.debug(f"[OAuth] Authorization code received: {auth_code[:20]}...")
                     # Trigger token exchange and UI update for the current platform
                     try:
-                        print(f"[DEBUG] Calling exchangeCodeForToken for {self.platform_id} {account_type} login")
+                        logger.debug(f"Calling exchangeCodeForToken for {self.platform_id} {account_type} login")
                         self.exchangeCodeForToken(account_type, auth_code)
                     except Exception as e:
-                        print(f"[OAuth] exchangeCodeForToken error: {e}")
+                        logger.error(f"[OAuth] exchangeCodeForToken error: {e}")
         else:
                 # Disconnect the account from the platform
             #if hasattr(self, 'parent') and hasattr(self.parent(), 'chat_manager'):
@@ -2330,7 +2330,7 @@ class PlatformConnectionWidget(QWidget):
 
     def extractUsernameFromProfilePage(self, browser_dialog, account_type):
         """Extract username from the profile settings page"""
-        print("[Kick] Extracting username from profile settings page...")
+        logger.debug("[Kick] Extracting username from profile settings page...")
         
         js_code = """
         (function() {
@@ -2396,18 +2396,18 @@ class PlatformConnectionWidget(QWidget):
             url = result.get('url', '')
             title = result.get('title', '')
             
-            print(f"[Kick] Profile page URL: {url}")
-            print(f"[Kick] Profile page title: {title}")
+            logger.debug(f"[Kick] Profile page URL: {url}")
+            logger.debug(f"[Kick] Profile page title: {title}")
             
             if username:
-                print(f"[Kick] ✓ Found username: {username}")
-                print(f"[Kick] Extraction method: {method}")
+                logger.info(f"[Kick] ✓ Found username: {username}")
+                logger.debug(f"[Kick] Extraction method: {method}")
                 self._kick_extracted_username = username
             else:
-                print(f"[Kick] ✗ Could not find username on profile page")
+                logger.warning(f"[Kick] ✗ Could not find username on profile page")
             
         except Exception as e:
-            print(f"[Kick] Error extracting username from profile: {e}")
+            logger.exception(f"[Kick] Error extracting username from profile: {e}")
 
         # Now extract the token and complete authentication
         from PyQt6.QtCore import QTimer
@@ -2420,15 +2420,15 @@ class PlatformConnectionWidget(QWidget):
         if state_json:
             try:
                 state = json.loads(state_json)
-                print(f"[Kick] Examining page state structure...")
+                logger.debug(f"[Kick] Examining page state structure...")
                 if isinstance(state, dict):
-                    print(f"[Kick] Root keys: {list(state.keys())}")
+                    logger.debug(f"[Kick] Root keys: {list(state.keys())}")
                     def find_username_in_obj(obj, path=""):
                         if isinstance(obj, dict):
                             if 'username' in obj or 'slug' in obj:
                                 found = obj.get('username') or obj.get('slug')
                                 if found and isinstance(found, str) and len(found) > 2:
-                                    print(f"[Kick] Found username candidate at {path}: {found}")
+                                    logger.debug(f"[Kick] Found username candidate at {path}: {found}")
                                     return found
                             for key in ['user', 'auth', 'currentUser', 'account', 'profile', 'channel']:
                                 if key in obj and isinstance(obj[key], dict):
@@ -2438,16 +2438,16 @@ class PlatformConnectionWidget(QWidget):
                         return None
                     username = find_username_in_obj(state, "state")
             except Exception as e:
-                print(f"[Kick] Error parsing page state: {e}")
+                logger.exception(f"[Kick] Error parsing page state: {e}")
         else:
-            print("[Kick] No page state data returned from JavaScript")
+            logger.debug("[Kick] No page state data returned from JavaScript")
         if username:
-            print(f"[Kick] ✓ Found username in page state: {username}")
+            logger.info(f"[Kick] ✓ Found username in page state: {username}")
             from PyQt6.QtCore import QTimer
             self._kick_extracted_username = username
             QTimer.singleShot(500, lambda: self.extractKickTokenAndUsername(browser_dialog, account_type))
         else:
-            print("[Kick] ERROR: Username could not be extracted from page state. Aborting Kick OAuth flow.")
+            logger.error("[Kick] ERROR: Username could not be extracted from page state. Aborting Kick OAuth flow.")
             # Optionally, show a message box or emit a signal for UI feedback
             # from PyQt6.QtWidgets import QMessageBox
             # QMessageBox.warning(self, "Kick Login Failed", "Could not extract username from Kick profile page. Please try again.")
@@ -2703,6 +2703,7 @@ class PlatformConnectionWidget(QWidget):
                     user_info = self.fetchUserInfo(access_token)
                     self.onOAuthSuccess(account_type, user_info, access_token, refresh_token)
                 else:
+                    logger.error("No access token in response")
                     self.onOAuthFailed(account_type, "No access token in response")
             elif self.platform_id == 'youtube':
                 YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -2734,6 +2735,7 @@ class PlatformConnectionWidget(QWidget):
                     user_info = self.fetchUserInfo(access_token)
                     self.onOAuthSuccess(account_type, user_info, access_token, refresh_token)
                 else:
+                    logger.error("No access token in response")
                     self.onOAuthFailed(account_type, "No access token in response")
             elif self.platform_id == 'twitch':
                 config = ConfigManager()
@@ -2771,6 +2773,7 @@ class PlatformConnectionWidget(QWidget):
                     user_info = self.fetchUserInfo(access_token)
                     self.onOAuthSuccess(account_type, user_info, access_token, refresh_token)
                 else:
+                    logger.error("No access token in response")
                     self.onOAuthFailed(account_type, "No access token in response")
             elif self.platform_id == 'kick':
                 KICK_TOKEN_URL = "https://id.kick.com/oauth/token"
@@ -2805,11 +2808,11 @@ class PlatformConnectionWidget(QWidget):
                     # Improved diagnostics: log status and body for debugging
                     try:
                         status = response.status_code
-                        print(f"[Kick] Token endpoint response status: {status}")
+                        logger.debug(f"[Kick] Token endpoint response status: {status}")
                         # response.text may be empty; show a truncated preview when large
                         body = response.text or ''
                         preview = body[:1000]
-                        print(f"[Kick] Token endpoint response body (first 1000 chars): {preview}")
+                        logger.debug(f"[Kick] Token endpoint response body (first 1000 chars): {preview}")
                         try:
                             # Surface succinct info in the UI status box for user visibility
                             self.append_status_message(f"[Kick] token POST status: {status}")
@@ -2830,11 +2833,12 @@ class PlatformConnectionWidget(QWidget):
                         # For Kick, fetchUserInfo will call /v1/user with Bearer token
                         self.onOAuthSuccess(account_type, user_info, access_token, refresh_token)
                     else:
+                        logger.error("No access token in response from Kick token endpoint")
                         self.onOAuthFailed(account_type, "No access token in response")
                 except requests.exceptions.RequestException as e:
                     # network / HTTP errors
                     msg = f"Kick token exchange HTTP error: {e}"
-                    print(f"[Kick] {msg}")
+                    logger.error(f"[Kick] {msg}")
                     try:
                         self.append_status_message(f"[Kick] token POST error: {e}")
                     except Exception:
@@ -2843,7 +2847,7 @@ class PlatformConnectionWidget(QWidget):
                 except ValueError as e:
                     # JSON decode error
                     msg = f"Kick token parse error: {e}"
-                    print(f"[Kick] {msg}")
+                    logger.error(f"[Kick] {msg}")
                     try:
                         self.append_status_message(f"[Kick] token parse error: {e}")
                     except Exception:
@@ -2854,6 +2858,7 @@ class PlatformConnectionWidget(QWidget):
                         self.append_status_message(f"[Kick] token exchange error: {e}")
                     except Exception:
                         pass
+                    logger.exception(f"[Kick] token exchange error: {e}")
                     self.onOAuthFailed(account_type, f"Kick token exchange error: {e}")
             else:
                 self.onOAuthFailed(account_type, f"Token exchange not implemented for {self.platform_id}")
@@ -2883,20 +2888,20 @@ class PlatformConnectionWidget(QWidget):
         # Save user_id for platforms that need it (like Trovo for sending messages)
         if user_id:
             config.set_platform_config(self.platform_id, f"{config_prefix}user_id", user_id)
-            print(f"[ConnectionsPage] DEBUG: Set {config_prefix}user_id = {user_id} in platform_config dict")
+            logger.debug(f"[ConnectionsPage] Set {config_prefix}user_id = {user_id} in platform_config dict")
             pc = config.get_platform_config(self.platform_id)
-            print(f"[ConnectionsPage] DEBUG: platform_config keys before save: {list(pc.keys())}")
+            logger.debug(f"[ConnectionsPage] platform_config keys before save: {list(pc.keys())}")
         # Save cookies for platforms that need them (like Kick for v2 API)
         if cookies:
             config.set_platform_config(self.platform_id, f"{config_prefix}cookies", json.dumps(cookies))
-            print(f"[ConnectionsPage] DEBUG: Stored {len(cookies) if hasattr(cookies, '__len__') else 'unknown'} cookies for {config_prefix}")
+            logger.debug(f"[ConnectionsPage] Stored {len(cookies) if hasattr(cookies, '__len__') else 'unknown'} cookies for {config_prefix}")
 
-        print(f"[ConnectionsPage] Saved {account_type} login to config: {config_prefix}logged_in = True")
-        print(f"[ConnectionsPage] Config saved: {config_prefix}username = {username}")
-        print(f"[ConnectionsPage] Config saved: {config_prefix}display_name = {display_name}")
-        print(f"[ConnectionsPage] Config saved: {config_prefix}user_id = {user_id}")
-        print(f"[ConnectionsPage] Config saved: {config_prefix}token exists = {bool(token)}")
-        print(f"[ConnectionsPage] Config file path: {self.config.config_file}")
+        logger.info(f"[ConnectionsPage] Saved {account_type} login to config: {config_prefix}logged_in = True")
+        logger.debug(f"[ConnectionsPage] Config saved: {config_prefix}username = {username}")
+        logger.debug(f"[ConnectionsPage] Config saved: {config_prefix}display_name = {display_name}")
+        logger.debug(f"[ConnectionsPage] Config saved: {config_prefix}user_id = {user_id}")
+        logger.debug(f"[ConnectionsPage] Config saved: {config_prefix}token exists = {bool(token)}")
+        logger.debug(f"[ConnectionsPage] Config file path: {getattr(self, 'config', {}).config_file if hasattr(getattr(self, 'config', None), 'config_file') else getattr(self, 'config', None)}")
 
         # Wait a moment for file system to flush
         import time as time_module
@@ -2907,40 +2912,40 @@ class PlatformConnectionWidget(QWidget):
         verify_data = verify_config.load()
         verify_platform = verify_data.get('platforms', {}).get(self.platform_id, {})
         saved_value = verify_platform.get(f"{config_prefix}logged_in", False)
-        print(f"[ConnectionsPage] Verified {config_prefix}logged_in in config: {saved_value}")
+        logger.debug(f"[ConnectionsPage] Verified {config_prefix}logged_in in config: {saved_value}")
         saved_username = verify_platform.get(f"{config_prefix}username", '')
-        print(f"[ConnectionsPage] Verified {config_prefix}username in config: {saved_username}")
+        logger.debug(f"[ConnectionsPage] Verified {config_prefix}username in config: {saved_username}")
         saved_user_id = verify_platform.get(f"{config_prefix}user_id", '')
-        print(f"[ConnectionsPage] Verified {config_prefix}user_id in config: {saved_user_id}")
+        logger.debug(f"[ConnectionsPage] Verified {config_prefix}user_id in config: {saved_user_id}")
 
         if not saved_value or not saved_username:
-            print(f"[ConnectionsPage] WARNING: Config verification failed! logged_in={saved_value}, username={saved_username}")
-            print(f"[ConnectionsPage] Attempting to save again...")
+            logger.warning(f"[ConnectionsPage] Config verification failed! logged_in={saved_value}, username={saved_username}")
+            logger.info(f"[ConnectionsPage] Attempting to save again...")
             # Try saving again using atomic set calls
             config.set_platform_config(self.platform_id, f"{config_prefix}logged_in", True)
             config.set_platform_config(self.platform_id, f"{config_prefix}username", username)
             time_module.sleep(0.1)
-            print(f"[ConnectionsPage] Second save attempt completed")
+            logger.info(f"[ConnectionsPage] Second save attempt completed")
         # Update UI
         if account_type == "streamer":
-            print(f"[DEBUG] Setting streamer_display_name to {display_name}")
+            logger.debug(f"Setting streamer_display_name to {display_name}")
             self.streamer_display_name.setText(display_name)
-            print(f"[DEBUG] Setting streamer_login_btn text to Logout")
+            logger.debug("Setting streamer_login_btn text to Logout")
             self.streamer_login_btn.setText("Logout")
             self.streamer_login_btn.setEnabled(True)
-            print(f"[DEBUG] streamer_login_btn text after set: {self.streamer_login_btn.text()}")
+            logger.debug(f"streamer_login_btn text after set: {self.streamer_login_btn.text()}")
             if hasattr(self, 'info_text'):
                 self.append_status_message(f"[{account_type.title()}] ✓ Successfully logged in as {display_name} (@{username})")
                 self.append_status_message(f"[{account_type.title()}] Connecting to {getattr(self, 'platform_name', self.platform_id)} chat...")
             if hasattr(self, 'connect_requested'):
                 self.connect_requested.emit(self.platform_id, username, token)
         elif account_type == "bot":
-            print(f"[DEBUG] Setting bot_display_name to {display_name}")
+            logger.debug(f"Setting bot_display_name to {display_name}")
             self.bot_display_name.setText(display_name)
-            print(f"[DEBUG] Setting bot_login_btn text to Logout")
+            logger.debug("Setting bot_login_btn text to Logout")
             self.bot_login_btn.setText("Logout")
             self.bot_login_btn.setEnabled(True)
-            print(f"[DEBUG] bot_login_btn text after set: {self.bot_login_btn.text()}")
+            logger.debug(f"bot_login_btn text after set: {self.bot_login_btn.text()}")
             if hasattr(self, 'info_text'):
                 self.append_status_message(f"[{account_type.title()}] ✓ Successfully logged in as {display_name} (@{username})")
                 self.append_status_message(f"[{account_type.title()}] Connecting bot to {getattr(self, 'platform_name', self.platform_id)}...")
@@ -2954,7 +2959,7 @@ class PlatformConnectionWidget(QWidget):
                         else:
                             self.info_text.append(f"[{account_type.title()}] ⚠ Failed to connect bot")
             except Exception as e:
-                print(f"[ConnectionsPage] Error connecting bot account: {e}")
+                logger.exception(f"[ConnectionsPage] Error connecting bot account: {e}")
     
     def onOAuthFailed(self, account_type, error):
         """Handle failed OAuth authentication"""
@@ -3119,7 +3124,7 @@ class PlatformConnectionWidget(QWidget):
                         'user_id': str(user.get('id', ''))
                     }
                 except Exception as e:
-                    print(f"[OAuth] Error fetching Kick user info: {e}")
+                    logger.exception(f"[OAuth] Error fetching Kick user info: {e}")
                     return {'username': 'Unknown', 'display_name': 'Unknown', 'user_id': ''}
             elif self.platform_id == 'dlive':
                 # DLive uses GraphQL - for now return minimal info
@@ -3133,7 +3138,7 @@ class PlatformConnectionWidget(QWidget):
                 return {'username': 'Unknown', 'display_name': 'Unknown', 'user_id': ''}
         except Exception as e:
             # Return minimal info on error
-            print(f"[OAuth] Error fetching user info: {str(e)}")
+            logger.exception(f"[OAuth] Error fetching user info: {str(e)}")
             return {'username': 'Unknown', 'display_name': 'Unknown', 'user_id': ''}
     
     def refreshToken(self, account_type):
@@ -3146,14 +3151,14 @@ class PlatformConnectionWidget(QWidget):
         platform_config = config.get_platform_config(self.platform_id)
 
         if not platform_config:
-            print(f"[OAuth] No config found for {self.platform_id}")
+            logger.warning(f"[OAuth] No config found for {self.platform_id}")
             return None
 
         config_prefix = "streamer_" if account_type == "streamer" else "bot_"
         refresh_token = platform_config.get(f"{config_prefix}refresh_token", '')
 
         if not refresh_token:
-            print(f"[OAuth] No refresh token available for {self.platform_id} {account_type}")
+            logger.debug(f"[OAuth] No refresh token available for {self.platform_id} {account_type}")
             return None
 
         try:
@@ -3181,10 +3186,10 @@ class PlatformConnectionWidget(QWidget):
                     config.set_platform_config(self.platform_id, f"{config_prefix}token", new_access_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}refresh_token", new_refresh_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}token_timestamp", int(time.time()))
-                    print(f"[OAuth] Token refreshed successfully for {self.platform_id} {account_type}")
+                    logger.info(f"[OAuth] Token refreshed successfully for {self.platform_id} {account_type}")
                     return new_access_token
                 else:
-                    print(f"[OAuth] No access token in refresh response")
+                    logger.error(f"[OAuth] No access token in refresh response")
                     return None
             elif self.platform_id == 'youtube':
                 YOUTUBE_CLIENT_ID = platform_config.get('client_id', '')
@@ -3206,17 +3211,17 @@ class PlatformConnectionWidget(QWidget):
                     config.set_platform_config(self.platform_id, f"{config_prefix}token", new_access_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}refresh_token", new_refresh_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}token_timestamp", int(time.time()))
-                    print(f"[OAuth] Token refreshed successfully for {self.platform_id} {account_type}")
+                    logger.info(f"[OAuth] Token refreshed successfully for {self.platform_id} {account_type}")
                     return new_access_token
                 else:
-                    print(f"[OAuth] No access token in refresh response")
+                    logger.error(f"[OAuth] No access token in refresh response")
                     return None
             elif self.platform_id == 'twitch':
                 twitch_config = config.get_platform_config('twitch')
                 client_id = twitch_config.get('client_id', 'h84tx3mvvpk9jyt8rv8p8utfzupz82') if twitch_config else 'h84tx3mvvpk9jyt8rv8p8utfzupz82'
                 client_secret = twitch_config.get('client_secret', '') if twitch_config else ''
                 if not client_secret:
-                    print(f"[OAuth] Twitch client_secret not configured, cannot refresh token")
+                    logger.warning(f"[OAuth] Twitch client_secret not configured, cannot refresh token")
                     return None
                 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
                 data = {
@@ -3225,17 +3230,17 @@ class PlatformConnectionWidget(QWidget):
                     "refresh_token": refresh_token,
                     "grant_type": "refresh_token"
                 }
-                print(f"[DEBUG] Attempting Twitch token refresh with data: {data}")
+                logger.debug(f"Attempting Twitch token refresh with data: {data}")
                 try:
                     response = requests.post(TWITCH_TOKEN_URL, data=data, timeout=10)
-                    print(f"[DEBUG] Twitch token refresh response status: {response.status_code}")
-                    print(f"[DEBUG] Twitch token refresh response body: {response.text}")
+                    logger.debug(f"Twitch token refresh response status: {response.status_code}")
+                    logger.debug(f"Twitch token refresh response body: {response.text}")
                     response.raise_for_status()
                     token_data = response.json()
                 except Exception as e:
-                    print(f"[ERROR] Twitch token refresh failed: {str(e)}")
-                    print(f"[ERROR] Twitch token refresh response: {getattr(e, 'response', None)}")
-                    print(f"[ERROR] Twitch token refresh guidance: This may be due to an expired or revoked refresh token. Prompting user to re-authenticate.")
+                    logger.error(f"Twitch token refresh failed: {str(e)}")
+                    logger.debug(f"Twitch token refresh response: {getattr(e, 'response', None)}")
+                    logger.info("Twitch token refresh guidance: This may be due to an expired or revoked refresh token. Prompting user to re-authenticate.")
                     return None
                 new_access_token = token_data.get('access_token')
                 new_refresh_token = token_data.get('refresh_token', refresh_token)  # Use old if not provided
@@ -3244,17 +3249,17 @@ class PlatformConnectionWidget(QWidget):
                     config.set_platform_config(self.platform_id, f"{config_prefix}token", new_access_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}refresh_token", new_refresh_token)
                     config.set_platform_config(self.platform_id, f"{config_prefix}token_timestamp", int(time.time()))
-                    print(f"[OAuth] Token refreshed successfully for {self.platform_id} {account_type}")
+                    logger.info(f"[OAuth] Token refreshed successfully for {self.platform_id} {account_type}")
                     return new_access_token
                 else:
-                    print(f"[ERROR] No access token in Twitch refresh response. Full response: {token_data}")
-                    print(f"[ERROR] Twitch token refresh guidance: This may be due to an invalid refresh token. Prompting user to re-authenticate.")
+                    logger.error(f"No access token in Twitch refresh response. Full response: {token_data}")
+                    logger.info(f"Twitch token refresh guidance: This may be due to an invalid refresh token. Prompting user to re-authenticate.")
                     return None
             else:
-                print(f"[OAuth] Token refresh not implemented for {self.platform_id}")
+                logger.warning(f"[OAuth] Token refresh not implemented for {self.platform_id}")
                 return None
         except Exception as e:
-            print(f"[OAuth] Error refreshing token: {str(e)}")
+            logger.exception(f"[OAuth] Error refreshing token: {str(e)}")
             return None
     
     def getValidToken(self, account_type):
@@ -3274,7 +3279,7 @@ class PlatformConnectionWidget(QWidget):
 
         # Check if token is older than 50 minutes (3000 seconds) - refresh before it expires
         if current_token and (time.time() - token_timestamp > 3000):
-            print(f"[OAuth] Token may be expired, attempting refresh...")
+            logger.info(f"[OAuth] Token may be expired, attempting refresh...")
             refreshed_token = self.refreshToken(account_type)
             if refreshed_token:
                 return refreshed_token
@@ -3288,11 +3293,11 @@ class PlatformConnectionWidget(QWidget):
         platform_config = config.get_platform_config(self.platform_id)
 
         if not platform_config:
-            print(f"[{self.platform_id}] No config found in loadAccountStates")
+            logger.debug(f"[{self.platform_id}] No config found in loadAccountStates")
             return
 
         # Debug: Show what's in the config
-        print(f"[{self.platform_id}] loadAccountStates: streamer_logged_in={platform_config.get('streamer_logged_in', False)}, has_username={bool(platform_config.get('streamer_username', ''))}, has_token={bool(platform_config.get('streamer_token', ''))}")
+        logger.debug(f"[{self.platform_id}] loadAccountStates: streamer_logged_in={platform_config.get('streamer_logged_in', False)}, has_username={bool(platform_config.get('streamer_username', ''))}, has_token={bool(platform_config.get('streamer_token', ''))}")
 
         # Load streamer account
         if platform_config.get('streamer_logged_in', False):
@@ -3314,7 +3319,7 @@ class PlatformConnectionWidget(QWidget):
                         self.append_status_message(f"[Streamer] Auto-connecting to {self.platform_name} chat...")
                     self.connect_requested.emit(self.platform_id, username, token)
                 else:
-                    print(f"[{self.platform_id}] Streamer logged in but missing username={bool(username)} or token={bool(token)}")
+                    logger.warning(f"[{self.platform_id}] Streamer logged in but missing username={bool(username)} or token={bool(token)}")
         else:
             self.streamer_display_name.setText("")
 
@@ -3447,9 +3452,7 @@ class PlatformConnectionWidget(QWidget):
                 self._mt_executor.run.emit(func, args, kwargs)
                 return
         except Exception as e:
-            import traceback
-            print(f"[run_on_main_thread] emit failed: {e}")
-            traceback.print_exc()
+            logger.exception(f"[run_on_main_thread] emit failed: {e}")
         # Fallback to QTimer if executor not available
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(0, lambda: func(*args, **kwargs))
@@ -3466,7 +3469,7 @@ class ConnectionsPage(QWidget):
             widget = self.platform_widgets.get(platform.lower())
             if widget:
                 pass
-        print("[ConnectionsPage] Applied global settings to all platforms")
+        logger.info("[ConnectionsPage] Applied global settings to all platforms")
     """Connections page for managing all platform connections"""
     
     def __init__(self, chat_manager, config, parent=None):
@@ -3514,7 +3517,7 @@ class ConnectionsPage(QWidget):
     
     def onBotConnectionChanged(self, platform_id, connected, username):
         """Handle bot connection state change"""
-        print(f"[ConnectionsPage] Bot connection changed: {platform_id}, connected={connected}, username={username}")
+        logger.info(f"[ConnectionsPage] Bot connection changed: {platform_id}, connected={connected}, username={username}")
         widget = self.platform_widgets.get(platform_id)
         if widget:
             if connected:
@@ -3527,16 +3530,16 @@ class ConnectionsPage(QWidget):
                     bot_display_name = username
                 widget.bot_display_name.setText(bot_display_name)
                 widget.bot_login_btn.setText("Logout")
-                print(f"[ConnectionsPage] Updated bot UI for {platform_id}: {bot_display_name}")
+                logger.debug(f"[ConnectionsPage] Updated bot UI for {platform_id}: {bot_display_name}")
             else:
                 # Update UI to show bot as logged out
                 widget.bot_display_name.setText("")
                 widget.bot_login_btn.setText("Login")
-                print(f"[ConnectionsPage] Cleared bot UI for {platform_id}")
+                logger.debug(f"[ConnectionsPage] Cleared bot UI for {platform_id}")
     
     def onStreamerConnectionChanged(self, platform_id, connected, username):
         """Handle streamer connection state change"""
-        print(f"[ConnectionsPage] Streamer connection changed: {platform_id}, connected={connected}, username={username}")
+        logger.info(f"[ConnectionsPage] Streamer connection changed: {platform_id}, connected={connected}, username={username}")
         widget = self.platform_widgets.get(platform_id)
         if widget:
             if connected:
@@ -3549,7 +3552,7 @@ class ConnectionsPage(QWidget):
                     streamer_display_name = username
                 widget.streamer_display_name.setText(streamer_display_name)
                 widget.streamer_login_btn.setText("Logout")
-                print(f"[ConnectionsPage] Updated streamer UI for {platform_id}: {streamer_display_name}")
+                logger.debug(f"[ConnectionsPage] Updated streamer UI for {platform_id}: {streamer_display_name}")
             else:
                 # If the streamer account is still considered "logged in" in
                 # the config but the connector is temporarily disconnected,
@@ -3566,13 +3569,13 @@ class ConnectionsPage(QWidget):
                         widget.streamer_display_name.setText(display_name)
                     widget.streamer_login_btn.setText("Logout")
                     widget.status_label.setText("Streamer disconnected — reconnecting...")
-                    print(f"[ConnectionsPage] Streamer {platform_id} appears logged in; showing reconnecting indicator")
+                    logger.debug(f"[ConnectionsPage] Streamer {platform_id} appears logged in; showing reconnecting indicator")
                 else:
                     # Update UI to show streamer as logged out
                     widget.streamer_display_name.setText("")
                     widget.streamer_login_btn.setText("Login")
                     widget.status_label.setText("Streamer account logged out.")
-                    print(f"[ConnectionsPage] Cleared streamer UI for {platform_id}")
+                    logger.debug(f"[ConnectionsPage] Cleared streamer UI for {platform_id}")
 
     def initUI(self):
         """Initialize the connections page UI"""
@@ -3665,22 +3668,22 @@ class ConnectionsPage(QWidget):
         platform_config = config.get_platform_config(platform_id);
         
         if not platform_config:
-            print(f"[ConnectionsPage] No config found for {platform_id}")
+            logger.warning(f"[ConnectionsPage] No config found for {platform_id}")
             return
         # Use streamer account credentials for reading chat
         streamer_username = platform_config.get('streamer_username', username)
         streamer_token = platform_config.get('streamer_token', token)
         if not streamer_username:
-            print(f"[ConnectionsPage] No streamer username configured for {platform_id}")
+            logger.warning(f"[ConnectionsPage] No streamer username configured for {platform_id}")
             return
-        print(f"[ConnectionsPage] Connecting to {platform_id} as streamer: {streamer_username}")
+        logger.info(f"[ConnectionsPage] Connecting to {platform_id} as streamer: {streamer_username}")
         # Debounce duplicate connect requests from UI (same platform+username within 1s)
         try:
             key = f"{platform_id}:{streamer_username}"
             now = time.time()
             last = self._last_connect_times.get(key, 0)
             if now - last < 1.0:
-                print(f"[ConnectionsPage][TRACE] Ignoring duplicate connect for {key} ({now - last:.3f}s since last)")
+                logger.debug(f"[ConnectionsPage][TRACE] Ignoring duplicate connect for {key} ({now - last:.3f}s since last)")
                 return
             self._last_connect_times[key] = now
         except Exception:
@@ -3692,7 +3695,7 @@ class ConnectionsPage(QWidget):
     
     def onPlatformDisconnect(self, platform_id):
         """Handle platform disconnection request"""
-        print(f"[ConnectionsPage] Disconnecting from {platform_id}")
+        logger.info(f"[ConnectionsPage] Disconnecting from {platform_id}")
         if self.chat_manager:
             self.chat_manager.disconnectPlatform(platform_id)
     

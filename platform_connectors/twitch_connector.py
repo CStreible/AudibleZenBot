@@ -14,6 +14,10 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from platform_connectors.base_connector import BasePlatformConnector
 from core.badge_manager import get_badge_manager
 import websockets
+from core.logger import get_logger
+
+# Structured logger for this module
+logger = get_logger('TwitchConnector')
 
 
 class TwitchConnector(BasePlatformConnector):
@@ -27,7 +31,9 @@ class TwitchConnector(BasePlatformConnector):
             inst = cls._streamer_instance
             if inst is not None:
                 try:
-                    print(f"[TwitchConnector][TRACE] __new__: reusing existing streamer connector id={id(inst)}")
+                    from core.logger import get_logger
+                    _logger = get_logger('TwitchConnector')
+                    _logger.debug(f"[TwitchConnector][TRACE] __new__: reusing existing streamer connector id={id(inst)}")
                 except Exception:
                     pass
                 return inst
@@ -54,7 +60,7 @@ class TwitchConnector(BasePlatformConnector):
 
         if initialized:
             try:
-                print(f"[TwitchConnector][TRACE] __init__: skipping re-init for existing connector id={id(self)} is_bot={is_bot_account}")
+                logger.debug(f"[TwitchConnector][TRACE] __init__: skipping re-init for existing connector id={id(self)} is_bot={is_bot_account}")
             except Exception:
                 pass
             return
@@ -85,7 +91,7 @@ class TwitchConnector(BasePlatformConnector):
             refresh = platform_cfg.get(section, '')
             if refresh:
                 self.refresh_token = refresh
-            print(f"[TwitchConnector] refresh set to: {refresh[:20] if refresh else 'None'}...")
+            logger.info(f"[TwitchConnector] refresh set to: {refresh[:20] if refresh else 'None'}...")
             username = platform_cfg.get('username', '')
             if username:
                 self.username = username
@@ -109,7 +115,7 @@ class TwitchConnector(BasePlatformConnector):
         # Max entries to keep in the recent ids map to avoid unbounded growth
         self._max_recent_message_ids = 10000
         try:
-            print(f"[TwitchConnector][TRACE] __init__: id={id(self)} is_bot={self.is_bot_account} username={self.username}")
+            logger.debug(f"[TwitchConnector][TRACE] __init__: id={id(self)} is_bot={self.is_bot_account} username={self.username}")
         except Exception:
             pass
         # Mark initialized so future __init__ calls (from reused singleton) are no-ops
@@ -122,10 +128,10 @@ class TwitchConnector(BasePlatformConnector):
         """Set OAuth token for authentication"""
         section = 'twitch'  # canonical platform section
         token_prefix = token[:20] if token else "None"
-        print(f"[TwitchConnector] set_token called with: {token_prefix}...")
+        logger.info(f"[TwitchConnector] set_token called with: {token_prefix}...")
         if token:
             self.oauth_token = token
-            print(f"[TwitchConnector] Token updated to: {self.oauth_token[:20]}...")
+            logger.info(f"[TwitchConnector] Token updated to: {self.oauth_token[:20]}...")
             if self.config:
                 # Persist token under the canonical 'twitch' platform keys.
                 if self.is_bot_account:
@@ -164,7 +170,7 @@ class TwitchConnector(BasePlatformConnector):
             worker_running = bool(getattr(self, 'worker', None) and getattr(self.worker, 'running', False))
             if already_connected and same_user and worker_running:
                 try:
-                    print(f"[TwitchConnector][TRACE] connect: already connected for {username} connector_id={id(self)} worker_id={id(self.worker)} is_bot={self.is_bot_account}")
+                    logger.debug(f"[TwitchConnector][TRACE] connect: already connected for {username} connector_id={id(self)} worker_id={id(self.worker)} is_bot={self.is_bot_account}")
                 except Exception:
                     pass
                 return True
@@ -185,35 +191,35 @@ class TwitchConnector(BasePlatformConnector):
             self.refresh_access_token()
         else:
             # Bot account: check if we have a refresh token for the bot
-            print(f"[TwitchConnector] Bot account refresh check: refresh_token={self.refresh_token[:20] if self.refresh_token else 'None'}...")
+            logger.debug(f"[TwitchConnector] Bot account refresh check: refresh_token={self.refresh_token[:20] if self.refresh_token else 'None'}...")
             if self.refresh_token and self.refresh_token != self.DEFAULT_REFRESH_TOKEN:
-                print(f"[TwitchConnector] Bot account has refresh token, attempting refresh...")
+                logger.info(f"[TwitchConnector] Bot account has refresh token, attempting refresh...")
                 refresh_result = self.refresh_access_token()
                 if refresh_result is False:
-                    print(f"[TwitchConnector] ⚠️ Bot token refresh failed with invalid token. Connection aborted.")
-                    print(f"[TwitchConnector] Bot needs to log out and log back in to get fresh credentials.")
+                    logger.error(f"[TwitchConnector] ⚠️ Bot token refresh failed with invalid token. Connection aborted.")
+                    logger.error(f"[TwitchConnector] Bot needs to log out and log back in to get fresh credentials.")
                     return False
             else:
-                print(f"[TwitchConnector] Bot account has no refresh token or using default, skipping refresh")
+                logger.debug(f"[TwitchConnector] Bot account has no refresh token or using default, skipping refresh")
         
         # Fetch Twitch badges
         try:
             badge_manager = get_badge_manager()
             badge_manager.fetch_twitch_badges(self.client_id, self.oauth_token)
         except Exception as e:
-            print(f"Error fetching badges: {e}")
+            logger.exception(f"Error fetching badges: {e}")
         
         # Create worker thread for async connection
         # For bot accounts, we might connect to a different channel than our username
         # Use bot_username if set (for bot accounts), otherwise use username (for streamer)
         nick_for_auth = getattr(self, 'bot_username', username)
-        print(f"[TwitchConnector] Connecting: channel={username}, nick={nick_for_auth}, has_bot_username={hasattr(self, 'bot_username')}")
+        logger.info(f"[TwitchConnector] Connecting: channel={username}, nick={nick_for_auth}, has_bot_username={hasattr(self, 'bot_username')}")
 
         # Connector-level dedupe: avoid creating multiple workers in quick succession
         try:
             now = time.time()
             if now - getattr(self, '_last_worker_created', 0) < 1.0:
-                print(f"[TwitchConnector][TRACE] Skipping worker creation; last created {now - self._last_worker_created:.3f}s ago")
+                logger.debug(f"[TwitchConnector][TRACE] Skipping worker creation; last created {now - self._last_worker_created:.3f}s ago")
                 return
         except Exception:
             pass
@@ -227,7 +233,7 @@ class TwitchConnector(BasePlatformConnector):
             existing_worker = getattr(self, 'worker', None)
             if existing_worker and not getattr(existing_worker, 'running', False):
                 try:
-                    print(f"[TwitchConnector][TRACE] Reusing existing worker object id={id(existing_worker)} for connector_id={id(self)}")
+                    logger.debug(f"[TwitchConnector][TRACE] Reusing existing worker object id={id(existing_worker)} for connector_id={id(self)}")
                 except Exception:
                     pass
                 # Ensure connector reference and nick are up-to-date
@@ -249,7 +255,7 @@ class TwitchConnector(BasePlatformConnector):
                         pass
                     existing_worker.set_deletion_callback(self.onMessageDeleted)
                 else:
-                    print(f"[TwitchConnector] Bot account: skipping incoming message wiring for {nick_for_auth}")
+                    logger.info(f"[TwitchConnector] Bot account: skipping incoming message wiring for {nick_for_auth}")
 
                 existing_worker.status_signal.connect(self.onStatusChanged)
                 existing_worker.error_signal.connect(self.onError)
@@ -259,7 +265,7 @@ class TwitchConnector(BasePlatformConnector):
 
                 try:
                     self._last_worker_created = time.time()
-                    print(f"[TwitchConnector][TRACE] Reused worker started timestamp set to {self._last_worker_created:.3f}")
+                    logger.debug(f"[TwitchConnector][TRACE] Reused worker started timestamp set to {self._last_worker_created:.3f}")
                 except Exception:
                     pass
 
@@ -279,7 +285,7 @@ class TwitchConnector(BasePlatformConnector):
             connector=self  # Pass connector reference for API calls
         )
         try:
-            print(f"[TwitchConnector][TRACE] Created worker id={id(self.worker)} for connector_id={id(self)} is_bot={self.is_bot_account}")
+            logger.debug(f"[TwitchConnector][TRACE] Created worker id={id(self.worker)} for connector_id={id(self)} is_bot={self.is_bot_account}")
         except Exception:
             pass
         # Ensure worker holds a direct reference to this connector object
@@ -297,7 +303,7 @@ class TwitchConnector(BasePlatformConnector):
                         self.worker._forward_to_streamer = True
                     except Exception:
                         pass
-                    print(f"[TwitchConnector][TRACE] bot-worker wired to streamer handler: worker_id={id(self.worker)} streamer_connector_id={id(streamer_conn)} forward_flag_set={getattr(self.worker, '_forward_to_streamer', False)}")
+                    logger.debug(f"[TwitchConnector][TRACE] bot-worker wired to streamer handler: worker_id={id(self.worker)} streamer_connector_id={id(streamer_conn)} forward_flag_set={getattr(self.worker, '_forward_to_streamer', False)}")
                 except Exception:
                     pass
             else:
@@ -307,7 +313,7 @@ class TwitchConnector(BasePlatformConnector):
                         self.worker.set_metadata_callback(self.onMessageReceivedWithMetadata)
                     except Exception:
                         pass
-            print(f"[TwitchConnector][TRACE] post-create wiring: worker_id={id(self.worker)} connector_id={id(self)}")
+            logger.debug(f"[TwitchConnector][TRACE] post-create wiring: worker_id={id(self.worker)} connector_id={id(self)}")
         except Exception:
             pass
         self.worker_thread = QThread()
@@ -323,7 +329,7 @@ class TwitchConnector(BasePlatformConnector):
             self.worker.set_deletion_callback(self.onMessageDeleted)
         else:
             # Still connect status and error signals for bot connector health
-            print(f"[TwitchConnector] Bot account: skipping incoming message wiring for {nick_for_auth}")
+            logger.info(f"[TwitchConnector] Bot account: skipping incoming message wiring for {nick_for_auth}")
         # Always connect status and error signals
         self.worker.status_signal.connect(self.onStatusChanged)
         self.worker.error_signal.connect(self.onError)
@@ -332,13 +338,13 @@ class TwitchConnector(BasePlatformConnector):
         self.worker_thread.start()
         try:
             self._last_worker_created = time.time()
-            print(f"[TwitchConnector][TRACE] Worker started timestamp set to {self._last_worker_created:.3f}")
+            logger.debug(f"[TwitchConnector][TRACE] Worker started timestamp set to {self._last_worker_created:.3f}")
         except Exception:
             pass
         
         # Only start EventSub worker for streamer account
         if not self.is_bot_account:
-            print(f"[TwitchConnector] Starting EventSub worker for channel points")
+            logger.info(f"[TwitchConnector] Starting EventSub worker for channel points")
             self.eventsub_worker = TwitchEventSubWorker(
                 self.oauth_token,
                 self.client_id,
@@ -382,7 +388,7 @@ class TwitchConnector(BasePlatformConnector):
                 pass
 
         if not self.client_id or not self.client_secret:
-            print("[TwitchConnector] Missing client_id or client_secret; cannot refresh token")
+            logger.warning("[TwitchConnector] Missing client_id or client_secret; cannot refresh token")
             return False
 
         try:
@@ -405,7 +411,7 @@ class TwitchConnector(BasePlatformConnector):
                 if new_refresh:
                     self.refresh_token = new_refresh
 
-                print("[TwitchConnector] Token refreshed successfully")
+                logger.info("[TwitchConnector] Token refreshed successfully")
 
                 # Persist rotated tokens to config for both bot and streamer keys
                 try:
@@ -420,22 +426,22 @@ class TwitchConnector(BasePlatformConnector):
 
                         # No legacy compatibility writes; persist canonical twitch platform keys only
                 except Exception as e:
-                    print(f"[TwitchConnector] Warning: failed to persist refreshed token: {e}")
+                    logger.warning(f"[TwitchConnector] Warning: failed to persist refreshed token: {e}")
 
                 return True
             elif response.status_code == 400:
                 # Invalid refresh token (common when rotation happened elsewhere)
-                print("⚠️ Token refresh failed: Invalid refresh token")
-                print(f"[DEBUG] Refresh token used: {self.refresh_token}")
-                print(f"Response: {response.text}")
+                logger.warning("⚠️ Token refresh failed: Invalid refresh token")
+                logger.debug(f"[DEBUG] Refresh token used: {self.refresh_token}")
+                logger.debug(f"Response: {response.text}")
                 return False
             else:
-                print(f"[TwitchConnector] Token refresh failed: {response.status_code}")
-                print(f"Response: {response.text}")
+                logger.error(f"[TwitchConnector] Token refresh failed: {response.status_code}")
+                logger.debug(f"Response: {response.text}")
                 return False
 
         except Exception as e:
-            print(f"[TwitchConnector] Error refreshing token: {e}")
+            logger.exception(f"[TwitchConnector] Error refreshing token: {e}")
             return False
 
     def _on_eventsub_reauth_requested(self, oauth_url: str):
@@ -461,11 +467,11 @@ class TwitchConnector(BasePlatformConnector):
             if msg.clickedButton() == reauth_btn:
                 try:
                     webbrowser.open(oauth_url)
-                    print("[EventSub] Opened browser for re-authorization")
+                    logger.info("[EventSub] Opened browser for re-authorization")
                 except Exception as e:
-                    print(f"[EventSub] Failed to open browser: {e}")
+                    logger.exception(f"[EventSub] Failed to open browser: {e}")
         except Exception as e:
-            print(f"[TwitchConnector] Error showing re-auth dialog: {e}")
+            logger.exception(f"[TwitchConnector] Error showing re-auth dialog: {e}")
         
         try:
             response = requests.post(
@@ -478,63 +484,63 @@ class TwitchConnector(BasePlatformConnector):
                 },
                 timeout=10
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 self.oauth_token = data.get('access_token', self.oauth_token)
                 new_refresh = data.get('refresh_token')
                 if new_refresh:
                     self.refresh_token = new_refresh
-                print(f"Twitch token refreshed successfully")
+                logger.info(f"Twitch token refreshed successfully")
                 return True
             elif response.status_code == 400:
-                print(f"⚠️ Token refresh failed: Invalid refresh token")
-                print(f"[DEBUG] Refresh token used: {self.refresh_token}")
-                print(f"Response: {response.text}")
+                logger.warning(f"⚠️ Token refresh failed: Invalid refresh token")
+                logger.debug(f"[DEBUG] Refresh token used: {self.refresh_token}")
+                logger.debug(f"Response: {response.text}")
                 return False
             else:
-                print(f"Token refresh failed: {response.status_code}")
-                print(f"Response: {response.text}")
+                logger.error(f"Token refresh failed: {response.status_code}")
+                logger.debug(f"Response: {response.text}")
                 return False
-                
+
         except Exception as e:
-            print(f"Error refreshing token: {e}")
+            logger.exception(f"Error refreshing token: {e}")
     
     def disconnect(self):
         """Disconnect from Twitch"""
         try:
-            print(f"[TwitchConnector][TRACE] disconnect called: connector_id={id(self)} worker_id={id(self.worker) if getattr(self, 'worker', None) is not None else None} connected={getattr(self, 'connected', False)} is_bot={getattr(self, 'is_bot_account', False)}")
+            logger.debug(f"[TwitchConnector][TRACE] disconnect called: connector_id={id(self)} worker_id={id(self.worker) if getattr(self, 'worker', None) is not None else None} connected={getattr(self, 'connected', False)} is_bot={getattr(self, 'is_bot_account', False)}")
         except Exception:
             pass
         if self.worker:
             try:
                 self.worker.stop()
             except Exception as e:
-                print(f"[TwitchConnector] Error stopping worker: {e}")
+                logger.exception(f"[TwitchConnector] Error stopping worker: {e}")
         if self.worker_thread:
             try:
                 if self.worker_thread.isRunning():
                     self.worker_thread.quit()
                     self.worker_thread.wait(5000)  # Wait up to 5 seconds
                     if self.worker_thread.isRunning():
-                        print(f"[TwitchConnector] Warning: Worker thread did not stop in time. Forcing terminate()")
+                        logger.warning(f"[TwitchConnector] Warning: Worker thread did not stop in time. Forcing terminate()")
                         self.worker_thread.terminate()
                         self.worker_thread.wait(2000)  # Wait up to 2 seconds after terminate
                         if self.worker_thread.isRunning():
-                            print(f"[TwitchConnector] Error: Worker thread still running after terminate()")
+                            logger.error(f"[TwitchConnector] Error: Worker thread still running after terminate()")
             except Exception as e:
-                print(f"[TwitchConnector] Error stopping worker thread: {e}")
+                logger.exception(f"[TwitchConnector] Error stopping worker thread: {e}")
         if self.eventsub_worker:
             try:
                 self.eventsub_worker.stop()
             except Exception as e:
-                print(f"[TwitchConnector] Error stopping eventsub worker: {e}")
+                logger.exception(f"[TwitchConnector] Error stopping eventsub worker: {e}")
         if self.eventsub_worker_thread:
             try:
                 self.eventsub_worker_thread.quit()
                 self.eventsub_worker_thread.wait()
             except Exception as e:
-                print(f"[TwitchConnector] Error stopping eventsub worker thread: {e}")
+                logger.exception(f"[TwitchConnector] Error stopping eventsub worker thread: {e}")
         self.connected = False
         self.connection_status.emit(False)
         self.worker = None
@@ -542,19 +548,19 @@ class TwitchConnector(BasePlatformConnector):
         self.eventsub_worker = None
         self.eventsub_worker_thread = None
         try:
-            print(f"[TwitchConnector][TRACE] disconnected: connector_id={id(self)}")
+            logger.debug(f"[TwitchConnector][TRACE] disconnected: connector_id={id(self)}")
         except Exception:
             pass
     
     def send_message(self, message: str):
         """Send a message to Twitch chat"""
-        print(f"[TwitchConnector] send_message called: worker={self.worker is not None}, connected={self.connected}, message={message[:50]}")
+        logger.debug(f"[TwitchConnector] send_message called: worker={self.worker is not None}, connected={self.connected}, message={message[:50]}")
         if self.worker and self.connected:
-            print(f"[TwitchConnector] Calling worker.send_message()")
+            logger.debug(f"[TwitchConnector] Calling worker.send_message()")
             result = self.worker.send_message(message)
             return result
         else:
-            print(f"[TwitchConnector] ⚠ Cannot send: worker={self.worker is not None}, connected={self.connected}")
+            logger.warning(f"[TwitchConnector] ⚠ Cannot send: worker={self.worker is not None}, connected={self.connected}")
             return False
     
     def delete_message(self, message_id: str):
@@ -581,12 +587,12 @@ class TwitchConnector(BasePlatformConnector):
                     users = user_response.json().get('data', [])
                     if users:
                         self.broadcaster_id = users[0]['id']
-                        print(f"[Twitch] Cached broadcaster_id: {self.broadcaster_id}")
+                        logger.info(f"[Twitch] Cached broadcaster_id: {self.broadcaster_id}")
                     else:
-                        print(f"[Twitch] Could not find user ID for {self.username}")
+                        logger.warning(f"[Twitch] Could not find user ID for {self.username}")
                         return
                 else:
-                    print(f"[Twitch] Failed to get broadcaster ID: {user_response.status_code}")
+                    logger.error(f"[Twitch] Failed to get broadcaster ID: {user_response.status_code}")
                     return
             
             # Delete message via Twitch API
@@ -601,15 +607,15 @@ class TwitchConnector(BasePlatformConnector):
             )
             
             if response.status_code == 204:
-                print(f"[Twitch] Message deleted: {message_id}")
+                logger.info(f"[Twitch] Message deleted: {message_id}")
                 return True
             else:
-                print(f"[Twitch] Failed to delete message: {response.status_code}")
-                print(f"[Twitch] Response body: {response.text}")
-                print(f"[Twitch] Broadcaster ID: {self.broadcaster_id}")
+                logger.error(f"[Twitch] Failed to delete message: {response.status_code}")
+                logger.debug(f"[Twitch] Response body: {response.text}")
+                logger.debug(f"[Twitch] Broadcaster ID: {self.broadcaster_id}")
                 return False
         except Exception as e:
-            print(f"[Twitch] Error deleting message: {e}")
+            logger.exception(f"[Twitch] Error deleting message: {e}")
             return False
     
     def get_custom_reward(self, reward_id: str):
@@ -619,24 +625,27 @@ class TwitchConnector(BasePlatformConnector):
                 'Client-ID': self.client_id,
                 'Authorization': f'Bearer {self.oauth_token}'
             }
-            
+
             # Get broadcaster ID if not cached
-            if not hasattr(self, 'broadcaster_id') or not self.broadcaster_id:
+            if not getattr(self, 'broadcaster_id', None):
                 # Fetch broadcaster ID from username
                 user_response = requests.get(
                     'https://api.twitch.tv/helix/users',
                     headers=headers,
                     params={'login': self.username}
                 )
-                
+
                 if user_response.status_code == 200:
                     users = user_response.json().get('data', [])
                     if users:
                         self.broadcaster_id = users[0]['id']
+                    else:
+                        logger.warning(f"[Twitch] No user found for login: {self.username}")
+                        return None
                 else:
-                    print(f"[Twitch] Failed to get broadcaster ID: {user_response.status_code}")
+                    logger.error(f"[Twitch] Failed to get broadcaster ID: {user_response.status_code}")
                     return None
-            
+
             # Fetch custom reward details
             response = requests.get(
                 'https://api.twitch.tv/helix/channel_points/custom_rewards',
@@ -646,7 +655,7 @@ class TwitchConnector(BasePlatformConnector):
                     'id': reward_id
                 }
             )
-            
+
             if response.status_code == 200:
                 rewards = response.json().get('data', [])
                 if rewards:
@@ -656,14 +665,14 @@ class TwitchConnector(BasePlatformConnector):
                         'cost': reward.get('cost', 0)
                     }
                 else:
-                    print(f"[Twitch] No reward found for ID: {reward_id}")
+                    logger.warning(f"[Twitch] No reward found for ID: {reward_id}")
                     return None
             else:
-                print(f"[Twitch] Failed to fetch reward: {response.status_code} - {response.text}")
+                logger.error(f"[Twitch] Failed to fetch reward: {response.status_code} - {response.text}")
                 return None
-                
+
         except Exception as e:
-            print(f"[Twitch] Error fetching custom reward: {e}")
+            logger.exception(f"[Twitch] Error fetching custom reward: {e}")
             return None
     
     def ban_user(self, username: str, user_id: Optional[str] = None):
@@ -686,12 +695,12 @@ class TwitchConnector(BasePlatformConnector):
                     params={'login': username}
                 )
                 if user_response.status_code == 200:
-                    users = user_response.json().get('data', [])
-                    if users:
-                        user_id = users[0]['id']
+                        users = user_response.json().get('data', [])
+                        if users:
+                            user_id = users[0]['id']
             
             if not user_id:
-                print(f"[Twitch] Could not find user ID for {username}")
+                logger.warning(f"[Twitch] Could not find user ID for {username}")
                 return
             
             # Get broadcaster ID if not cached
@@ -707,12 +716,12 @@ class TwitchConnector(BasePlatformConnector):
                     users = broadcaster_response.json().get('data', [])
                     if users:
                         self.broadcaster_id = users[0]['id']
-                        print(f"[Twitch] Cached broadcaster_id: {self.broadcaster_id}")
+                        logger.info(f"[Twitch] Cached broadcaster_id: {self.broadcaster_id}")
                     else:
-                        print(f"[Twitch] Could not find broadcaster ID for {self.username}")
+                        logger.warning(f"[Twitch] Could not find broadcaster ID for {self.username}")
                         return
                 else:
-                    print(f"[Twitch] Failed to get broadcaster ID: {broadcaster_response.status_code}")
+                    logger.error(f"[Twitch] Failed to get broadcaster ID: {broadcaster_response.status_code}")
                     return
             
             # Ban user via Twitch API
@@ -729,11 +738,11 @@ class TwitchConnector(BasePlatformConnector):
             )
             
             if response.status_code == 200:
-                print(f"[Twitch] User banned: {username}")
+                logger.info(f"[Twitch] User banned: {username}")
             else:
-                print(f"[Twitch] Failed to ban user: {response.status_code}")
+                logger.error(f"[Twitch] Failed to ban user: {response.status_code}")
         except Exception as e:
-            print(f"[Twitch] Error banning user: {e}")
+            logger.exception(f"[Twitch] Error banning user: {e}")
     
     def onMessageReceived(self, username: str, message: str):
         """Handle received message"""
@@ -747,7 +756,7 @@ class TwitchConnector(BasePlatformConnector):
             msg_l = message.strip().lower() if message else ''
             for m, ts in list(self._recent_local_echoes):
                 if m == msg_l and (now - ts) < 5.0:
-                    print(f"[TwitchConnector][TRACE] Suppressing incoming IRC echo matching local echo: {message}")
+                    logger.debug(f"[TwitchConnector][TRACE] Suppressing incoming IRC echo matching local echo: {message}")
                     try:
                         self._recent_local_echoes.remove((m, ts))
                     except Exception:
@@ -763,7 +772,7 @@ class TwitchConnector(BasePlatformConnector):
                 if msg_id:
                     prev_ts = self._recent_message_ids.get(msg_id)
                     if prev_ts and (now - prev_ts) < self._recent_message_window:
-                        print(f"[TwitchConnector][TRACE] Suppressing duplicate message_id={msg_id} age={now-prev_ts:.3f}s")
+                        logger.debug(f"[TwitchConnector][TRACE] Suppressing duplicate message_id={msg_id} age={now-prev_ts:.3f}s")
                         return
                     # record this id
                     try:
@@ -783,15 +792,15 @@ class TwitchConnector(BasePlatformConnector):
                 pass
         except Exception:
             pass
-        print(f"[TwitchConnector] onMessageReceivedWithMetadata: {username}, {message}, {metadata}")
+        logger.debug(f"[TwitchConnector] onMessageReceivedWithMetadata: {username}, {message}, {metadata}")
         # TRACE: explicit incoming trace for debugging send vs receive timing
         try:
-            print(f"[TwitchConnector][TRACE][INCOMING] username={username} message_preview={message[:120]} metadata_keys={list(metadata.keys())}")
+            logger.debug(f"[TwitchConnector][TRACE][INCOMING] username={username} message_preview={message[:120]} metadata_keys={list(metadata.keys())}")
         except Exception:
-            print("[TwitchConnector][TRACE][INCOMING] failed to print metadata preview")
+            logger.debug("[TwitchConnector][TRACE][INCOMING] failed to print metadata preview")
         # Diagnostic: emitter instance id
         try:
-            print(f"[TwitchConnector][TRACE][EMITTER] id={id(self)} username_attr={getattr(self, 'username', None)} is_bot={getattr(self, 'is_bot_account', False)}")
+            logger.debug(f"[TwitchConnector][TRACE][EMITTER] id={id(self)} username_attr={getattr(self, 'username', None)} is_bot={getattr(self, 'is_bot_account', False)}")
         except Exception:
             pass
         # Persistent diagnostic log to ensure messages are recorded even if stdout is lost
@@ -808,13 +817,13 @@ class TwitchConnector(BasePlatformConnector):
     
     def onMessageDeleted(self, message_id: str):
         """Handle message deletion event from platform"""
-        print(f"[TwitchConnector] Message deleted by platform/moderator: {message_id}")
+        logger.info(f"[TwitchConnector] Message deleted by platform/moderator: {message_id}")
         self.message_deleted.emit('twitch', message_id)
     
     def onRedemption(self, username: str, reward_title: str, reward_cost: int, user_input: str):
         """Handle channel points redemption from EventSub"""
         import datetime
-        print(f"[TwitchConnector] Redemption: {username} redeemed {reward_title} ({reward_cost} points)")
+        logger.info(f"[TwitchConnector] Redemption: {username} redeemed {reward_title} ({reward_cost} points)")
         
         # Format message
         if user_input:
@@ -838,7 +847,7 @@ class TwitchConnector(BasePlatformConnector):
     def onEvent(self, event_type: str, username: str, event_data: dict):
         """Handle general EventSub events"""
         import datetime
-        print(f"[TwitchConnector] Event: {event_type} - {username}")
+        logger.info(f"[TwitchConnector] Event: {event_type} - {username}")
         
         # Format message based on event type
         if event_type == 'stream.online':
@@ -889,7 +898,7 @@ class TwitchConnector(BasePlatformConnector):
     
     def onEventSubStatus(self, connected: bool):
         """Handle EventSub connection status"""
-        print(f"[TwitchConnector] EventSub connected: {connected}")
+        logger.info(f"[TwitchConnector] EventSub connected: {connected}")
     
     def onStatusChanged(self, connected: bool):
         """Handle connection status change"""
@@ -911,7 +920,7 @@ class TwitchWorker(QThread):
     def set_metadata_callback(self, callback):
         self._metadata_callback = callback
         try:
-            print(f"[TwitchWorker][TRACE] set_metadata_callback: worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))} callback_set={callback is not None}")
+            logger.debug(f"[TwitchWorker][TRACE] set_metadata_callback: worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))} callback_set={callback is not None}")
         except Exception:
             pass
     
@@ -943,7 +952,7 @@ class TwitchWorker(QThread):
         try:
             if self.connector and hasattr(self.connector, 'onMessageReceivedWithMetadata') and not getattr(self.connector, 'is_bot_account', False):
                 self._metadata_callback = getattr(self.connector, 'onMessageReceivedWithMetadata')
-                print(f"[TwitchWorker][TRACE] __init__: worker_id={id(self)} auto-attached metadata_callback to connector_id={id(self.connector)}")
+                logger.debug(f"[TwitchWorker][TRACE] __init__: worker_id={id(self)} auto-attached metadata_callback to connector_id={id(self.connector)}")
         except Exception:
             pass
         self.running = False
@@ -999,7 +1008,7 @@ class TwitchWorker(QThread):
                     await websocket.send(f'JOIN #{self.channel}')
                     
                     self.status_signal.emit(True)
-                    print(f"Connected to Twitch channel: {self.channel}")
+                    logger.info(f"Connected to Twitch channel: {self.channel}")
                     
                     # Start health monitoring
                     health_task = asyncio.create_task(self.health_check_loop(websocket))
@@ -1048,12 +1057,12 @@ class TwitchWorker(QThread):
                             
                             # Log stats periodically
                             if messages_received % 100 == 0:
-                                print(f"[Twitch Stats] Received: {messages_received}, Parsed: {messages_parsed}, Buffer size: {len(message_buffer)}")
+                                logger.debug(f"[Twitch Stats] Received: {messages_received}, Parsed: {messages_parsed}, Buffer size: {len(message_buffer)}")
                             
                         except asyncio.TimeoutError:
                             continue
                         except websockets.ConnectionClosed:
-                            print(f"[Twitch] Connection closed. Stats - Received: {messages_received}, Parsed: {messages_parsed}")
+                            logger.info(f"[Twitch] Connection closed. Stats - Received: {messages_received}, Parsed: {messages_parsed}")
                             break
                     
                     # Cancel health monitoring
@@ -1072,7 +1081,7 @@ class TwitchWorker(QThread):
                 wait_time = min(2 ** retry_count, 300)  # Cap at 5 minutes
                 self.error_signal.emit(f"WebSocket error (attempt {retry_count}): {str(e)}")
                 if self.running:
-                    print(f"Retrying Twitch connection in {wait_time}s...")
+                    logger.info(f"Retrying Twitch connection in {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else:
                     break
@@ -1103,9 +1112,9 @@ class TwitchWorker(QThread):
                 new_refresh = data.get('refresh_token')
                 if new_refresh:
                     self.refresh_token = new_refresh
-                print("Token refreshed during connection")
+                logger.info("Token refreshed during connection")
         except Exception as e:
-            print(f"Error refreshing token: {e}")
+            logger.exception(f"Error refreshing token: {e}")
     
     async def health_check_loop(self, websocket):
         """Monitor connection health and force reconnect if dead"""
@@ -1117,8 +1126,8 @@ class TwitchWorker(QThread):
                     time_since_last = time.time() - self.last_message_time
                     
                     if time_since_last > self.connection_timeout:
-                        print(f"[Twitch] Connection appears dead ({int(time_since_last)}s since last message)")
-                        print(f"[Twitch] Forcing reconnection...")
+                        logger.warning(f"[Twitch] Connection appears dead ({int(time_since_last)}s since last message)")
+                        logger.info(f"[Twitch] Forcing reconnection...")
                         # If we parsed a message very recently, give a short grace
                         try:
                             grace = 1.5
@@ -1126,7 +1135,7 @@ class TwitchWorker(QThread):
                                 since_parsed = time.time() - self._last_parsed_time
                                 if since_parsed < grace:
                                     wait = grace - since_parsed
-                                    print(f"[Twitch] Recent parsed message (\n{since_parsed:.3f}s ago); waiting {wait:.3f}s to flush before reconnect")
+                                    logger.debug(f"[Twitch] Recent parsed message (\n{since_parsed:.3f}s ago); waiting {wait:.3f}s to flush before reconnect")
                                     await asyncio.sleep(wait)
                         except Exception:
                             pass
@@ -1135,7 +1144,7 @@ class TwitchWorker(QThread):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"[Twitch] Health check error: {e}")
+                logger.exception(f"[Twitch] Health check error: {e}")
     
     async def authenticate(self):
         """Authenticate with Twitch IRC"""
@@ -1148,7 +1157,7 @@ class TwitchWorker(QThread):
             token = token[6:]
         
         token_prefix = token[:20] if token else "None"
-        print(f"[TwitchWorker] Authenticating with token: {token_prefix}... as {self.bot_nick}")
+        logger.debug(f"[TwitchWorker] Authenticating with token: {token_prefix}... as {self.bot_nick}")
         
         # Send authentication
         await self.ws.send(f'PASS oauth:{token}')
@@ -1157,7 +1166,7 @@ class TwitchWorker(QThread):
         # Request capabilities for better message parsing
         await self.ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership')
         
-        print(f"Authenticated with Twitch as {self.bot_nick}")
+        logger.info(f"Authenticated with Twitch as {self.bot_nick}")
     
     async def handle_message(self, raw_message: str):
         """Parse and handle IRC message"""
@@ -1173,20 +1182,20 @@ class TwitchWorker(QThread):
             # Print exactly once per worker instance to avoid duplicate stdout lines
             if not getattr(self, '_auth_printed', False):
                 try:
-                    print(f"Twitch authentication successful for {self.bot_nick}")
+                    logger.info(f"Twitch authentication successful for {self.bot_nick}")
                 except Exception:
-                    print("Twitch authentication successful!")
+                    logger.info("Twitch authentication successful!")
                 self._auth_printed = True
             return
         
         # Log join confirmation
         if f'JOIN #{self.channel}' in raw_message:
-            print(f"Successfully joined #{self.channel}")
+            logger.info(f"Successfully joined #{self.channel}")
             return
         
         # Check for error messages (NOTICE, msg_banned, msg_suspended, etc.)
         if 'NOTICE' in raw_message or 'msg_banned' in raw_message or 'msg_suspended' in raw_message:
-            print(f"⚠️ Twitch IRC Notice/Error: {raw_message}")
+            logger.warning(f"⚠️ Twitch IRC Notice/Error: {raw_message}")
             # Detect login/authentication failure and auto-refresh token
             if (
                 'Login authentication failed' in raw_message
@@ -1195,7 +1204,7 @@ class TwitchWorker(QThread):
                 or 'Error logging in' in raw_message
                 or 'Improperly formatted auth' in raw_message
             ):
-                print("[TwitchWorker] Detected authentication failure. Attempting token refresh and reconnect...")
+                logger.warning("[TwitchWorker] Detected authentication failure. Attempting token refresh and reconnect...")
                 if self.connector and hasattr(self.connector, 'refresh_access_token'):
                     refresh_result = self.connector.refresh_access_token()
                     if refresh_result:
@@ -1212,8 +1221,8 @@ class TwitchWorker(QThread):
                                 self.connector.config.set_platform_config('twitch', 'streamer_refresh_token', self.connector.refresh_token)
                                 if getattr(self.connector, 'username', None):
                                     self.connector.config.set_platform_config('twitch', 'username', self.connector.username)
-                            print("[TwitchWorker] Saved refreshed tokens and username to config.")
-                        print("[TwitchWorker] Token refreshed. Reconnecting...")
+                            logger.info("[TwitchWorker] Saved refreshed tokens and username to config.")
+                        logger.info("[TwitchWorker] Token refreshed. Reconnecting...")
                         # Give a small grace window to flush any recently parsed messages
                         try:
                             grace = 1.5
@@ -1221,7 +1230,7 @@ class TwitchWorker(QThread):
                                 since_parsed = time.time() - self._last_parsed_time
                                 if since_parsed < grace:
                                     wait = grace - since_parsed
-                                    print(f"[TwitchWorker] Waiting {wait:.3f}s to flush parsed messages before reconnect")
+                                    logger.debug(f"[TwitchWorker] Waiting {wait:.3f}s to flush parsed messages before reconnect")
                                     await asyncio.sleep(wait)
                         except Exception:
                             pass
@@ -1230,7 +1239,7 @@ class TwitchWorker(QThread):
                         # Optionally, emit error or status signal here
                         # self.error_signal.emit('Twitch token refreshed, reconnecting...')
                     else:
-                        print("[TwitchWorker] Token refresh failed. Manual re-authentication required.")
+                        logger.warning("[TwitchWorker] Token refresh failed. Manual re-authentication required.")
                 return
             return
         
@@ -1239,7 +1248,7 @@ class TwitchWorker(QThread):
             result = self.parse_clearmsg(raw_message)
             if result:
                 message_id = result
-                print(f"[Twitch] Message deleted by moderator: {message_id}")
+                logger.info(f"[Twitch] Message deleted by moderator: {message_id}")
                 if hasattr(self, '_deletion_callback') and self._deletion_callback:
                     self._deletion_callback(message_id)
             return
@@ -1249,8 +1258,8 @@ class TwitchWorker(QThread):
             result = self.parse_usernotice(raw_message)
             if result:
                 username, message, metadata = result
-                print(f"[Twitch] Event: {username}: {message}")
-                print(f"[Twitch Event Metadata] {metadata.get('event_type', 'unknown')}")
+                logger.info(f"[Twitch] Event: {username}: {message}")
+                logger.debug(f"[Twitch Event Metadata] {metadata.get('event_type', 'unknown')}")
                 self.message_signal.emit(username, message)
                 if hasattr(self, '_metadata_callback') and self._metadata_callback:
                     self._metadata_callback(username, message, metadata)
@@ -1273,10 +1282,10 @@ class TwitchWorker(QThread):
                     metadata['event_type'] = 'bits'
                     metadata['amount'] = bits
                     message = f"💎 cheered {bits} bits: {message}"
-                    print(f"[Twitch] Bits: {username} - {bits}")
+                    logger.info(f"[Twitch] Bits: {username} - {bits}")
                 
-                print(f"[Twitch] {username}: {message}")  # Debug log
-                print(f"[Twitch Metadata] Color: {metadata.get('color')}, Badges: {metadata.get('badges')}")  # Debug metadata
+                logger.debug(f"[Twitch] {username}: {message}")  # Debug log
+                logger.debug(f"[Twitch Metadata] Color: {metadata.get('color')}, Badges: {metadata.get('badges')}")  # Debug metadata
                 
                 # Emit signal with error handling
                 try:
@@ -1284,9 +1293,10 @@ class TwitchWorker(QThread):
                     # Diagnostic: show which worker/connector will call metadata callback
                     try:
                         has_cb = hasattr(self, '_metadata_callback') and self._metadata_callback
-                        print(f"[TwitchWorker][TRACE] handle_message: worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))} has_metadata_callback={bool(has_cb)}")
+                        logger.debug(f"[TwitchWorker][TRACE] handle_message: worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))} has_metadata_callback={bool(has_cb)}")
                     except Exception:
                         pass
+
                     if has_cb:
                         try:
                             # Normally we skip invoking metadata callbacks for bot
@@ -1298,7 +1308,7 @@ class TwitchWorker(QThread):
                             forward_allowed = getattr(self, '_forward_to_streamer', False)
                             if is_bot and not forward_allowed:
                                 try:
-                                    print(f"[TwitchWorker][TRACE] Skipping metadata callback for bot worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))}")
+                                    logger.debug(f"[TwitchWorker][TRACE] Skipping metadata callback for bot worker_id={id(self)} connector_id={id(getattr(self, 'connector', None))}")
                                 except Exception:
                                     pass
                             else:
@@ -1311,9 +1321,14 @@ class TwitchWorker(QThread):
                                         f.write(f"{time.time():.3f} worker={id(self)} connector_id={id(getattr(self, 'connector', None))} username={username} preview={repr(message)[:200]} metadata_keys={list(metadata.keys())}\n")
                                 except Exception:
                                     pass
-                                self._metadata_callback(username, message, metadata)
+                                try:
+                                    self._metadata_callback(username, message, metadata)
+                                except Exception as e:
+                                    logger.exception(f"[TwitchWorker] [ERROR] Error calling metadata callback: {e}")
+                                    import traceback
+                                    traceback.print_exc()
                         except Exception as e:
-                            print(f"[TwitchWorker] [ERROR] Error calling metadata callback: {e}")
+                            logger.exception(f"[TwitchWorker] [ERROR] Error in metadata handling: {e}")
                             import traceback
                             traceback.print_exc()
                     else:
@@ -1325,7 +1340,7 @@ class TwitchWorker(QThread):
                             if conn:
                                 # If connector is a streamer connector, call it directly
                                 if hasattr(conn, 'onMessageReceivedWithMetadata') and not getattr(conn, 'is_bot_account', False):
-                                    print(f"[TwitchWorker][TRACE] Fallback: invoking connector.onMessageReceivedWithMetadata for connector_id={id(conn)}")
+                                    logger.debug(f"[TwitchWorker][TRACE] Fallback: invoking connector.onMessageReceivedWithMetadata for connector_id={id(conn)}")
                                     try:
                                         # Durable log for fallback invocation
                                         try:
@@ -1336,15 +1351,18 @@ class TwitchWorker(QThread):
                                                 f.write(f"{time.time():.3f} worker={id(self)} fallback_connector_id={id(conn)} username={username} preview={repr(message)[:200]} metadata_keys={list(metadata.keys())}\n")
                                         except Exception:
                                             pass
-                                        conn.onMessageReceivedWithMetadata(username, message, metadata)
-                                    except Exception as e:
-                                        print(f"[TwitchWorker] ✗ Error in fallback connector callback: {e}")
+                                        try:
+                                            conn.onMessageReceivedWithMetadata(username, message, metadata)
+                                        except Exception as e:
+                                            logger.exception(f"[TwitchWorker] ✗ Error in fallback connector callback: {e}")
+                                    except Exception:
+                                        pass
                                 else:
                                     # Do NOT forward messages from bot connectors to streamer handlers.
                                     try:
                                         if getattr(conn, 'is_bot_account', False):
                                             try:
-                                                print(f"[TwitchWorker][TRACE] Fallback: bot connector detected, not forwarding message from worker_id={id(self)}")
+                                                logger.debug(f"[TwitchWorker][TRACE] Fallback: bot connector detected, not forwarding message from worker_id={id(self)}")
                                             except Exception:
                                                 pass
                                     except Exception:
@@ -1352,13 +1370,13 @@ class TwitchWorker(QThread):
                         except Exception:
                             pass
                 except Exception as e:
-                    print(f"[Twitch] ✗ Error emitting message signal: {e}")
+                    logger.exception(f"[Twitch] ✗ Error emitting message signal: {e}")
                     import traceback
                     traceback.print_exc()
             else:
                 # CRITICAL: Parse failure - don't silently drop the message!
-                print(f"[Twitch] ⚠️ PARSE FAILURE - Message will be dropped!")
-                print(f"[Twitch] Raw IRC (first 500 chars): {raw_message[:500]}")
+                logger.warning(f"[Twitch] ⚠️ PARSE FAILURE - Message will be dropped!")
+                logger.debug(f"[Twitch] Raw IRC (first 500 chars): {raw_message[:500]}")
     
     def parse_clearmsg(self, raw_message: str):
         """Parse CLEARMSG to extract deleted message ID
@@ -1374,7 +1392,7 @@ class TwitchWorker(QThread):
                         message_id = tag.split('=', 1)[1]
                         return message_id
         except Exception as e:
-            print(f"[Twitch] Error parsing CLEARMSG: {e}")
+            logger.exception(f"[Twitch] Error parsing CLEARMSG: {e}")
         return None
     
     def parse_usernotice(self, raw_message: str):
@@ -1528,8 +1546,8 @@ class TwitchWorker(QThread):
             return username, message, metadata
             
         except Exception as e:
-            print(f"[Twitch] Error parsing USERNOTICE: {e}")
-            print(f"[Twitch] Raw message: {raw_message}")
+            logger.exception(f"[Twitch] Error parsing USERNOTICE: {e}")
+            logger.debug(f"[Twitch] Raw message: {raw_message}")
         
         return None
     
@@ -1592,7 +1610,7 @@ class TwitchWorker(QThread):
                 username = match.group(1)
                 # group(2) is the channel, group(3) is the message
                 message = match.group(3).strip()
-                print(f"[Twitch Parser] [OK] Parsed: {username}: {message[:50]}")
+                logger.debug(f"[Twitch Parser] [OK] Parsed: {username}: {message[:50]}")
                 try:
                     import time, os
                     log_dir = os.path.join(os.getcwd(), 'logs')
@@ -1613,7 +1631,7 @@ class TwitchWorker(QThread):
                     if m and username_match:
                         username = username_match.group(1)
                         message = m.group(2).strip()
-                        print(f"[Twitch Parser] [OK] Parsed (alt): {username}: {message[:50]}")
+                        logger.debug(f"[Twitch Parser] [OK] Parsed (alt): {username}: {message[:50]}")
                         try:
                             import time, os
                             log_dir = os.path.join(os.getcwd(), 'logs')
@@ -1628,8 +1646,8 @@ class TwitchWorker(QThread):
                     pass
             
             # If we get here, parsing failed - dump diagnostics (always persist parse failures)
-            print(f"[Twitch Parser] [FAIL] Failed to parse PRIVMSG")
-            print(f"[Twitch Parser] Raw: {raw_message[:200]}")
+            logger.warning(f"[Twitch Parser] [FAIL] Failed to parse PRIVMSG")
+            logger.debug(f"[Twitch Parser] Raw: {raw_message[:200]}")
             try:
                 log_dir = os.path.join(os.getcwd(), 'logs')
                 os.makedirs(log_dir, exist_ok=True)
@@ -1640,8 +1658,8 @@ class TwitchWorker(QThread):
                 pass
                 
         except Exception as e:
-            print(f"[Twitch Parser] [ERROR] Exception parsing message: {e}")
-            print(f"[Twitch Parser] Raw message: {raw_message[:200]}")
+            logger.exception(f"[Twitch Parser] [ERROR] Exception parsing message: {e}")
+            logger.debug(f"[Twitch Parser] Raw message: {raw_message[:200]}")
             import traceback
             traceback.print_exc()
         
@@ -1656,24 +1674,24 @@ class TwitchWorker(QThread):
     async def send_message_async(self, message: str):
         """Send message to Twitch chat (async)"""
         if self.ws and self.running:
-            print(f"[TwitchWorker] Sending PRIVMSG to #{self.channel}: {message[:50]}")
+            logger.debug(f"[TwitchWorker] Sending PRIVMSG to #{self.channel}: {message[:50]}")
             await self.ws.send(f'PRIVMSG #{self.channel} :{message}')
-            print(f"[TwitchWorker] Message sent to Twitch IRC")
+            logger.debug(f"[TwitchWorker] Message sent to Twitch IRC")
         else:
-            print(f"[TwitchWorker] [WARN] Cannot send: ws={self.ws is not None}, running={self.running}")
+            logger.warning(f"[TwitchWorker] [WARN] Cannot send: ws={self.ws is not None}, running={self.running}")
     
     def send_message(self, message: str):
         """Send message to Twitch chat"""
-        print(f"[TwitchWorker] send_message called: loop={self.loop is not None}, ws={self.ws is not None}")
+        logger.debug(f"[TwitchWorker] send_message called: loop={self.loop is not None}, ws={self.ws is not None}")
         if self.loop and self.ws:
             asyncio.run_coroutine_threadsafe(
                 self.send_message_async(message), 
                 self.loop
             )
-            print(f"[TwitchWorker] Message queued to event loop")
+            logger.debug(f"[TwitchWorker] Message queued to event loop")
             return True
         else:
-            print(f"[TwitchWorker] [WARN] Cannot queue message: loop={self.loop is not None}, ws={self.ws is not None}")
+            logger.warning(f"[TwitchWorker] [WARN] Cannot queue message: loop={self.loop is not None}, ws={self.ws is not None}")
             return False
 
 
@@ -1705,7 +1723,7 @@ class TwitchEventSubWorker(QThread):
     
     def run(self):
         """Main event loop"""
-        print(f"[EventSub] Worker starting...")
+        logger.info(f"[EventSub] Worker starting...")
         self.running = True
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -1713,11 +1731,11 @@ class TwitchEventSubWorker(QThread):
         try:
             self.loop.run_until_complete(self.connect_and_listen())
         except Exception as e:
-            print(f"[EventSub] Error in event loop: {e}")
+            logger.exception(f"[EventSub] Error in event loop: {e}")
             self.error_signal.emit(f"EventSub error: {e}")
         finally:
             self.loop.close()
-            print(f"[EventSub] Worker stopped")
+            logger.info(f"[EventSub] Worker stopped")
     
     async def validate_token(self):
         """Validate OAuth token and show granted scopes"""
@@ -1733,9 +1751,9 @@ class TwitchEventSubWorker(QThread):
                 scopes = data.get('scopes', [])
                 # remember scopes for later diagnostic logging
                 self.validated_scopes = scopes
-                print(f"[EventSub] Token validated. Granted scopes:")
+                logger.info(f"[EventSub] Token validated. Granted scopes:")
                 for scope in scopes:
-                    print(f"[EventSub]    [OK] {scope}")
+                    logger.info(f"[EventSub]    [OK] {scope}")
 
                 # Check for required scopes
                 required_scopes = {
@@ -1751,16 +1769,10 @@ class TwitchEventSubWorker(QThread):
                         missing.append(f"{scope} ({name})")
 
                 if missing:
-                    print(f"[EventSub] [WARN] Missing scopes:")
+                    logger.warning(f"[EventSub] [WARN] Missing scopes:")
                     for scope in missing:
-                        print(f"[EventSub]    [MISSING] {scope}")
-                    print(f"[EventSub]")
-                    print(f"[EventSub] To fix this:")
-                    print(f"[EventSub] 1. Go to: https://twitch.tv/settings/connections")
-                    print(f"[EventSub] 2. Find 'AudibleZenBot' and click 'Disconnect'")
-                    print(f"[EventSub] 3. In the app, log out of Twitch")
-                    print(f"[EventSub] 4. Log back in - Twitch will ask for NEW permissions")
-                    print(f"[EventSub] 5. Click 'Authorize' to grant the required scopes")
+                        logger.warning(f"[EventSub]    [MISSING] {scope}")
+                    logger.warning(f"[EventSub] To fix this: visit Twitch connections and re-authorize the app with required scopes")
                     try:
                         import webbrowser
                         # Construct an OAuth URL to help the user re-authorize with required scopes
@@ -1792,22 +1804,22 @@ class TwitchEventSubWorker(QThread):
                             'force_verify': 'true'
                         }
                         oauth_url = f"https://id.twitch.tv/oauth2/authorize?{urlencode(params)}"
-                        print(f"[EventSub] Requesting re-authorize with required scopes")
+                        logger.info(f"[EventSub] Requesting re-authorize with required scopes")
                         try:
                             # Emit a signal to request reauthorization UI in the main thread
                             self.reauth_signal.emit(oauth_url)
                         except Exception as e:
-                            print(f"[EventSub] Could not emit reauth signal: {e}")
+                            logger.exception(f"[EventSub] Could not emit reauth signal: {e}")
                     except Exception as e:
-                        print(f"[EventSub] Could not open browser for re-auth: {e}")
+                        logger.exception(f"[EventSub] Could not open browser for re-auth: {e}")
                 else:
-                    print(f"[EventSub] [OK] All required scopes present")
+                    logger.info(f"[EventSub] [OK] All required scopes present")
             else:
                 # Print full response body to aid triage
                 body = response.text
-                print(f"[EventSub] [WARN] Token validation failed: {response.status_code} - {body}")
+                logger.warning(f"[EventSub] [WARN] Token validation failed: {response.status_code} - {body}")
         except Exception as e:
-            print(f"[EventSub] Error validating token: {e}")
+            logger.exception(f"[EventSub] Error validating token: {e}")
     
     async def connect_and_listen(self):
         """Connect to EventSub and listen for events"""
@@ -1816,12 +1828,12 @@ class TwitchEventSubWorker(QThread):
         
         while self.running and retry_count < max_retries:
             try:
-                print(f"[EventSub] Connecting to {self.EVENTSUB_URL}...")
+                logger.info(f"[EventSub] Connecting to {self.EVENTSUB_URL}...")
                 
                 async with websockets.connect(self.EVENTSUB_URL) as ws:
                     self.ws = ws
                     self.status_signal.emit(True)
-                    print(f"[EventSub] Connected!")
+                    logger.info(f"[EventSub] Connected!")
                     
                     # Wait for welcome message
                     welcome_msg = await ws.recv()
@@ -1829,7 +1841,7 @@ class TwitchEventSubWorker(QThread):
                     
                     if welcome_data.get('metadata', {}).get('message_type') == 'session_welcome':
                         self.session_id = welcome_data['payload']['session']['id']
-                        print(f"[EventSub] Session ID: {self.session_id}")
+                        logger.info(f"[EventSub] Session ID: {self.session_id}")
                         
                         # Validate token and show granted scopes
                         await self.validate_token()
@@ -1841,7 +1853,7 @@ class TwitchEventSubWorker(QThread):
                             # Subscribe to channel points redemptions
                             await self.subscribe_to_redemptions()
                         else:
-                            print(f"[EventSub] ⚠ Could not get broadcaster ID")
+                            logger.warning(f"[EventSub] ⚠ Could not get broadcaster ID")
                     
                     # Listen for messages
                     while self.running:
@@ -1852,20 +1864,20 @@ class TwitchEventSubWorker(QThread):
                             # Send keepalive ping
                             continue
                         except websockets.exceptions.ConnectionClosed:
-                            print(f"[EventSub] Connection closed")
+                            logger.info(f"[EventSub] Connection closed")
                             break
                     
             except Exception as e:
-                print(f"[EventSub] Connection error: {e}")
+                logger.exception(f"[EventSub] Connection error: {e}")
                 retry_count += 1
                 if self.running and retry_count < max_retries:
-                    print(f"[EventSub] Retrying in 5 seconds... ({retry_count}/{max_retries})")
+                    logger.info(f"[EventSub] Retrying in 5 seconds... ({retry_count}/{max_retries})")
                     await asyncio.sleep(5)
             finally:
                 self.ws = None
                 self.status_signal.emit(False)
         
-        print(f"[EventSub] Connection loop ended")
+        logger.debug(f"[EventSub] Connection loop ended")
     
     async def get_broadcaster_id(self):
         """Get broadcaster user ID from username"""
@@ -1886,13 +1898,13 @@ class TwitchEventSubWorker(QThread):
                 users = response.json().get('data', [])
                 if users:
                     self.broadcaster_id = users[0]['id']
-                    print(f"[EventSub] Broadcaster ID: {self.broadcaster_id}")
+                    logger.info(f"[EventSub] Broadcaster ID: {self.broadcaster_id}")
                 else:
-                    print(f"[EventSub] No user found for login: {self.broadcaster_login}")
+                    logger.warning(f"[EventSub] No user found for login: {self.broadcaster_login}")
             else:
-                print(f"[EventSub] Failed to get user ID: {response.status_code}")
+                logger.error(f"[EventSub] Failed to get user ID: {response.status_code}")
         except Exception as e:
-            print(f"[EventSub] Error getting broadcaster ID: {e}")
+            logger.exception(f"[EventSub] Error getting broadcaster ID: {e}")
     
     async def subscribe_to_redemptions(self):
         """Subscribe to EventSub events"""
@@ -1958,7 +1970,7 @@ class TwitchEventSubWorker(QThread):
                     }
                 }
                 
-                print(f"[EventSub] Subscribing to {sub['name']}...")
+                logger.info(f"[EventSub] Subscribing to {sub['name']}...")
                 response = requests.post(
                     'https://api.twitch.tv/helix/eventsub/subscriptions',
                     headers=headers,
@@ -1969,7 +1981,7 @@ class TwitchEventSubWorker(QThread):
                 if response.status_code == 202:
                     result = response.json()
                     sub_id = result['data'][0]['id']
-                    print(f"[EventSub] [OK] Subscribed to {sub['name']}! ID: {sub_id}")
+                    logger.info(f"[EventSub] [OK] Subscribed to {sub['name']}! ID: {sub_id}")
                 else:
                     # Log full response body and masked token + current validated scopes (if available)
                     body = response.text
@@ -1982,11 +1994,11 @@ class TwitchEventSubWorker(QThread):
 
                     masked = _mask_token(self.oauth_token)
                     scopes = self.validated_scopes if self.validated_scopes is not None else []
-                    print(f"[EventSub] [WARN] {sub['name']} subscription failed: {response.status_code} - {body}")
-                    print(f"[EventSub]    Masked token: {masked}")
-                    print(f"[EventSub]    Validated scopes: {scopes}")
+                    logger.warning(f"[EventSub] [WARN] {sub['name']} subscription failed: {response.status_code} - {body}")
+                    logger.debug(f"[EventSub]    Masked token: {masked}")
+                    logger.debug(f"[EventSub]    Validated scopes: {scopes}")
             except Exception as e:
-                print(f"[EventSub] Error subscribing to {sub['name']}: {e}")
+                logger.exception(f"[EventSub] Error subscribing to {sub['name']}: {e}")
     
     async def handle_message(self, message: str):
         """Handle incoming EventSub message"""
@@ -2011,20 +2023,20 @@ class TwitchEventSubWorker(QThread):
                     reward_cost = reward.get('cost', 0)
                     user_input = event.get('user_input', '')
                     
-                    print(f"[EventSub] Redemption: {username} -> {reward_title} ({reward_cost})")
+                    logger.info(f"[EventSub] Redemption: {username} -> {reward_title} ({reward_cost})")
                     self.redemption_signal.emit(username, reward_title, reward_cost, user_input)
                 
                 elif subscription_type == 'stream.online':
                     # Stream went online
                     broadcaster_name = event.get('broadcaster_user_name', event.get('broadcaster_user_login', 'Broadcaster'))
                     stream_type = event.get('type', 'live')
-                    print(f"[EventSub] Stream online: {broadcaster_name} ({stream_type})")
+                    logger.info(f"[EventSub] Stream online: {broadcaster_name} ({stream_type})")
                     self.event_signal.emit('stream.online', broadcaster_name, {'type': stream_type})
                 
                 elif subscription_type == 'channel.follow':
                     # New follower
                     username = event.get('user_name', event.get('user_login', 'Unknown'))
-                    print(f"[EventSub] New follower: {username}")
+                    logger.info(f"[EventSub] New follower: {username}")
                     self.event_signal.emit('follow', username, {})
                 
                 elif subscription_type == 'channel.subscribe':
@@ -2032,7 +2044,7 @@ class TwitchEventSubWorker(QThread):
                     username = event.get('user_name', event.get('user_login', 'Unknown'))
                     tier = event.get('tier', '1000')
                     is_gift = event.get('is_gift', False)
-                    print(f"[EventSub] New subscriber: {username} (Tier: {tier}, Gift: {is_gift})")
+                    logger.info(f"[EventSub] New subscriber: {username} (Tier: {tier}, Gift: {is_gift})")
                     self.event_signal.emit('subscribe', username, {'tier': tier, 'is_gift': is_gift})
                 
                 elif subscription_type == 'channel.subscription.gift':
@@ -2043,7 +2055,7 @@ class TwitchEventSubWorker(QThread):
                     tier = event.get('tier', '1000')
                     total = event.get('total', 1)
                     cumulative_total = event.get('cumulative_total')
-                    print(f"[EventSub] Gift subs: {username} gifted {total} (Tier: {tier})")
+                    logger.info(f"[EventSub] Gift subs: {username} gifted {total} (Tier: {tier})")
                     self.event_signal.emit('gift', username, {'tier': tier, 'total': total, 'cumulative_total': cumulative_total})
                 
                 elif subscription_type == 'channel.cheer':
@@ -2053,20 +2065,20 @@ class TwitchEventSubWorker(QThread):
                         username = 'Anonymous'
                     bits = event.get('bits', 0)
                     cheer_message = event.get('message', '')
-                    print(f"[EventSub] Cheer: {username} - {bits} bits")
+                    logger.info(f"[EventSub] Cheer: {username} - {bits} bits")
                     self.event_signal.emit('cheer', username, {'bits': bits, 'message': cheer_message})
             
             elif message_type == 'session_reconnect':
                 # Server requesting reconnect
                 reconnect_url = data.get('payload', {}).get('session', {}).get('reconnect_url')
-                print(f"[EventSub] Server requested reconnect to: {reconnect_url}")
+                logger.info(f"[EventSub] Server requested reconnect to: {reconnect_url}")
             
         except Exception as e:
-            print(f"[EventSub] Error handling message: {e}")
+            logger.exception(f"[EventSub] Error handling message: {e}")
     
     def stop(self):
         """Stop the EventSub worker"""
-        print(f"[EventSub] Stopping worker...")
+        logger.info(f"[EventSub] Stopping worker...")
         self.running = False
         if self.ws and self.loop is not None:
             asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)

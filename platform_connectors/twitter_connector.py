@@ -7,6 +7,9 @@ import time
 import requests
 from platform_connectors.base_connector import BasePlatformConnector
 from PyQt6.QtCore import QThread, pyqtSignal
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class TwitterConnector(BasePlatformConnector):
@@ -35,21 +38,21 @@ class TwitterConnector(BasePlatformConnector):
         self.access_token_secret = None
         if self.config:
             twitter_config = self.config.get_platform_config('twitter')
-            print(f"[TwitterConnector] Twitter config: {twitter_config}")
+            logger.debug(f"[TwitterConnector] Twitter config: {twitter_config}")
             token = twitter_config.get('oauth_token', '')
             if token:
                 self.oauth_token = token
-                print(f"[TwitterConnector] Loaded OAuth token from config")
+                logger.debug(f"[TwitterConnector] Loaded OAuth token from config")
             refresh = twitter_config.get('refresh_token', '')
             if refresh:
                 self.refresh_token = refresh
             # Load OAuth 1.0a credentials
             self.access_token = twitter_config.get('access_token', '')
             self.access_token_secret = twitter_config.get('access_token_secret', '')
-            print(f"[TwitterConnector] Access token from config: {self.access_token[:20] if self.access_token else 'None'}...")
-            print(f"[TwitterConnector] Access secret from config: {self.access_token_secret[:20] if self.access_token_secret else 'None'}...")
+            logger.debug(f"[TwitterConnector] Access token from config: {self.access_token[:20] if self.access_token else 'None'}...")
+            logger.debug(f"[TwitterConnector] Access secret from config: {self.access_token_secret[:20] if self.access_token_secret else 'None'}...")
             if self.access_token and self.access_token_secret:
-                print(f"[TwitterConnector] Loaded OAuth 1.0a credentials")
+                logger.debug(f"[TwitterConnector] Loaded OAuth 1.0a credentials")
             # Load client credentials from config if present
             try:
                 cid = twitter_config.get('client_id', '')
@@ -96,14 +99,14 @@ class TwitterConnector(BasePlatformConnector):
                     self.refresh_token = new_refresh
                     if self.config:
                         self.config.set_platform_config('twitter', 'refresh_token', new_refresh)
-                print("Twitter token refreshed successfully")
+                logger.info("Twitter token refreshed successfully")
                 return True
             else:
-                print(f"Twitter token refresh failed: {response.status_code}")
+                logger.error(f"Twitter token refresh failed: {response.status_code}")
                 return False
                 
         except Exception as e:
-            print(f"Error refreshing Twitter token: {e}")
+            logger.exception(f"Error refreshing Twitter token: {e}")
             return False
     
     def connect(self, username: str):
@@ -111,8 +114,8 @@ class TwitterConnector(BasePlatformConnector):
         # DISABLED: Twitter chat API does not support live broadcast chat rooms
         # The /chat feature is not accessible via Twitter's public API
         # Implementation kept for future use if API becomes available
-        print(f"[TwitterConnector] Twitter/X integration is currently disabled")
-        print(f"[TwitterConnector] Live broadcast chat is not available via Twitter API")
+        logger.info(f"[TwitterConnector] Twitter/X integration is currently disabled")
+        logger.info(f"[TwitterConnector] Live broadcast chat is not available via Twitter API")
         self.error_occurred.emit("Twitter/X chat integration is currently disabled. Live broadcast chat not supported by API.")
         return
         
@@ -161,7 +164,7 @@ class TwitterConnector(BasePlatformConnector):
     
     def onMessageReceived(self, username: str, message: str, metadata: dict):
         """Handle received message"""
-        print(f"[TwitterConnector] onMessageReceived: {username}, {message}")
+        logger.debug(f"[TwitterConnector] onMessageReceived: {username}, {message}")
         self.message_received_with_metadata.emit('twitter', username, message, metadata)
     
     def onStatusChanged(self, connected: bool):
@@ -208,12 +211,12 @@ class TwitterWorker(QThread):
     
     def run(self):
         """Run the Twitter connection"""
-        print(f"[TwitterWorker] Starting worker for user: {self.username}")
-        print(f"[TwitterWorker] OAuth Token: {'Set' if self.oauth_token else 'Not set'}")
-        print(f"[TwitterWorker] Access Token: {'Set' if self.access_token else 'Not set'}")
-        print(f"[TwitterWorker] Access Token Secret: {'Set' if self.access_token_secret else 'Not set'}")
-        print(f"[TwitterWorker] API Key: {'Set' if self.api_key else 'Not set'}")
-        print(f"[TwitterWorker] API Secret: {'Set' if self.api_secret else 'Not set'}")
+        logger.info(f"[TwitterWorker] Starting worker for user: {self.username}")
+        logger.debug(f"[TwitterWorker] OAuth Token: {'Set' if self.oauth_token else 'Not set'}")
+        logger.debug(f"[TwitterWorker] Access Token: {'Set' if self.access_token else 'Not set'}")
+        logger.debug(f"[TwitterWorker] Access Token Secret: {'Set' if self.access_token_secret else 'Not set'}")
+        logger.debug(f"[TwitterWorker] API Key: {'Set' if self.api_key else 'Not set'}")
+        logger.debug(f"[TwitterWorker] API Secret: {'Set' if self.api_secret else 'Not set'}")
         
         self.running = True
         
@@ -286,15 +289,15 @@ class TwitterWorker(QThread):
             if response.status_code == 200:
                 data = response.json()
                 self.user_id = data.get('data', {}).get('id')
-                print(f"[TwitterWorker] Found user ID: {self.user_id}")
+                logger.info(f"[TwitterWorker] Found user ID: {self.user_id}")
                 return self.user_id is not None
             else:
-                print(f"[TwitterWorker] Error getting user ID: {response.status_code}")
-                print(f"[TwitterWorker] Response: {response.text}")
+                logger.error(f"[TwitterWorker] Error getting user ID: {response.status_code}")
+                logger.debug(f"[TwitterWorker] Response: {response.text}")
                 return False
                 
         except Exception as e:
-            print(f"[TwitterWorker] Exception getting user ID: {e}")
+            logger.exception(f"[TwitterWorker] Exception getting user ID: {e}")
             return False
     
     def search_broadcast_tweets(self):
@@ -354,22 +357,22 @@ class TwitterWorker(QThread):
                 # Process tweets in chronological order
                 for tweet in reversed(tweets):
                     tweet_id = tweet['id']
-                    
+
                     # Skip if already processed
                     if tweet_id in self.processed_tweets:
                         continue
-                    
+
                     self.processed_tweets.add(tweet_id)
-                    
+
                     # Get author info
                     author_id = tweet.get('author_id')
                     author = users.get(author_id, {})
                     author_username = author.get('username', 'unknown')
                     author_name = author.get('name', author_username)
-                    
+
                     # Get tweet text
                     text = tweet.get('text', '')
-                    
+
                     # Prepare metadata
                     metadata = {
                         'tweet_id': tweet_id,
@@ -379,9 +382,9 @@ class TwitterWorker(QThread):
                         'verified': author.get('verified', False),
                         'badges': []
                     }
-                    
+
                     # Emit the message
-                    print(f"[TwitterWorker] Broadcasting tweet from {author_name}: {text[:50]}...")
+                    logger.info(f"[TwitterWorker] Broadcasting tweet from {author_name}: {text[:50]}...")
                     self.message_signal.emit(author_name, text, metadata)
                 
                 # Keep only last 1000 tweet IDs to avoid memory issues
@@ -389,14 +392,14 @@ class TwitterWorker(QThread):
                     self.processed_tweets = set(list(self.processed_tweets)[-1000:])
             
             elif response.status_code == 429:
-                print("[TwitterWorker] Rate limit hit on search, waiting longer...")
+                logger.warning("[TwitterWorker] Rate limit hit on search, waiting longer...")
                 time.sleep(60)
             else:
-                print(f"[TwitterWorker] Error searching broadcasts: {response.status_code}")
-                print(f"[TwitterWorker] Response: {response.text}")
+                logger.error(f"[TwitterWorker] Error searching broadcasts: {response.status_code}")
+                logger.debug(f"[TwitterWorker] Response: {response.text}")
                 
         except Exception as e:
-            print(f"[TwitterWorker] Exception searching broadcasts: {e}")
+            logger.exception(f"[TwitterWorker] Exception searching broadcasts: {e}")
     
     def fetch_mentions(self):
         """Fetch mentions for the user"""

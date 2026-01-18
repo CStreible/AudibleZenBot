@@ -11,6 +11,10 @@ from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 import os
 import sys
+from core.logger import get_logger
+
+# Structured logger for this module
+logger = get_logger('Settings')
 
 
 class SettingsPage(QWidget):
@@ -355,6 +359,42 @@ class SettingsPage(QWidget):
             ngrok_config = self.config.get('ngrok', {})
             self.auto_start_checkbox.setChecked(ngrok_config.get('auto_start', True))
         layout.addWidget(self.auto_start_checkbox)
+
+        # Shared callback port
+        port_layout = QHBoxLayout()
+        port_label = QLabel("Callback Port:")
+        port_label.setStyleSheet("color: #ffffff; min-width: 100px;")
+        port_label.setMinimumWidth(100)
+
+        self.callback_port_input = QLineEdit()
+        self.callback_port_input.setPlaceholderText("8889")
+        self.callback_port_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #2b2b2b;
+                color: #ffffff;
+                border: 1px solid #3d3d3d;
+                border-radius: 4px;
+                padding: 8px;
+                font-size: 12px;
+            }
+        """)
+        # Load existing value
+        try:
+            if self.config:
+                ngcfg = self.config.get('ngrok', {})
+                port_val = str(ngcfg.get('callback_port', 8889))
+                self.callback_port_input.setText(port_val)
+        except Exception:
+            pass
+
+        self.save_port_btn = QPushButton("Save Port")
+        self.save_port_btn.setStyleSheet("background-color: #4a90e2; color: white; padding: 8px 12px; border-radius: 5px;")
+        self.save_port_btn.clicked.connect(self.save_callback_port)
+
+        port_layout.addWidget(port_label)
+        port_layout.addWidget(self.callback_port_input)
+        port_layout.addWidget(self.save_port_btn)
+        layout.addLayout(port_layout)
         
         group.setLayout(layout)
         return group
@@ -698,7 +738,7 @@ class SettingsPage(QWidget):
         
         # Emit signal to update chat page
         self.colors_updated.emit(colors)
-        print(f"[Settings] Saved {len(colors)} username colors")
+        logger.info(f"Saved {len(colors)} username colors")
     
     def reset_colors_to_default(self):
         """Reset all colors to default palette"""
@@ -778,6 +818,57 @@ class SettingsPage(QWidget):
         else:
             QMessageBox.warning(self, "Error", 
                               "Ngrok manager not available.")
+
+    def save_callback_port(self):
+        """Save the shared callback port to config and optionally restart tunnel"""
+        port_text = self.callback_port_input.text().strip()
+        if not port_text:
+            QMessageBox.warning(self, "Missing Port", "Please enter a callback port.")
+            return
+
+        try:
+            port = int(port_text)
+            if port < 1 or port > 65535:
+                raise ValueError("Port out of range")
+        except Exception:
+            QMessageBox.warning(self, "Invalid Port", "Please enter a valid port number (1-65535).")
+            return
+
+        if not self.config:
+            QMessageBox.warning(self, "Error", "Config manager not available to save port.")
+            return
+
+        try:
+            # Read previous port before changing
+            try:
+                prev_port = int(self.config.get('ngrok.callback_port', 8889))
+            except Exception:
+                prev_port = None
+
+            # Save main callback port
+            self.config.set('ngrok.callback_port', port)
+            # Also update default kick tunnel mapping if present
+            try:
+                self.config.set('ngrok.tunnels.kick.port', port)
+            except Exception:
+                pass
+
+            # If ngrok is running on the previous port, offer to restart
+            if self.ngrok_manager and prev_port and self.ngrok_manager.is_tunnel_active(prev_port) and prev_port != port:
+                reply = QMessageBox.question(self, "Restart Tunnel",
+                                             f"A tunnel is active on port {prev_port}. Restart it on port {port}?",
+                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                if reply == QMessageBox.StandardButton.Yes:
+                    try:
+                        self.ngrok_manager.stop_tunnel(prev_port)
+                        self.ngrok_manager.start_tunnel(port, name='kick')
+                    except Exception as e:
+                            logger.error(f"Error restarting tunnel: {e}")
+
+            QMessageBox.information(self, "Saved", f"Callback port saved: {port}")
+            self.update_tunnel_info()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to save callback port: {e}")
     
     def test_token(self):
         """Test ngrok connection"""
@@ -834,7 +925,7 @@ class SettingsPage(QWidget):
             self.ngrok_manager.stop_tunnel(port)
             self.update_tunnel_info()
         except Exception as e:
-            print(f"Error stopping test tunnel: {e}")
+            logger.exception(f"Error stopping test tunnel: {e}")
     
     def toggle_token_visibility(self):
         """Toggle token visibility"""
@@ -949,7 +1040,7 @@ class SettingsPage(QWidget):
             result = self.log_manager.toggle_logging(True)
             if result:
                 self.update_log_file_info()
-                print("[Settings] Debug logging enabled")
+                logger.info("Debug logging enabled")
             else:
                 QMessageBox.warning(
                     self, 
@@ -961,7 +1052,7 @@ class SettingsPage(QWidget):
             # Disable logging
             self.log_manager.toggle_logging(False)
             self.update_log_file_info()
-            print("[Settings] Debug logging disabled")
+            logger.info("Debug logging disabled")
     
     def browse_log_folder(self):
         """Open folder browser to select log folder"""
@@ -992,7 +1083,7 @@ class SettingsPage(QWidget):
             if self.log_manager:
                 self.log_manager.set_log_folder(folder)
                 self.update_log_file_info()
-                print(f"[Settings] Log folder set to: {folder}")
+                logger.info(f"Log folder set to: {folder}")
             
             # If logging is enabled, it will automatically restart with new folder
             if self.log_manager and self.log_manager.is_enabled():
@@ -1049,18 +1140,18 @@ class SettingsPage(QWidget):
             return
         
         # Open file with default application
-        try:
-            if sys.platform == 'win32':
-                os.startfile(log_path)
-            elif sys.platform == 'darwin':
-                os.system(f'open "{log_path}"')
-            else:
-                os.system(f'xdg-open "{log_path}"')
-            print(f"[Settings] Opened log file: {log_path}")
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                "Error",
-                f"Failed to open log file:\n{e}"
-            )
-            print(f"[Settings] Error opening log file: {e}")
+            try:
+                if sys.platform == 'win32':
+                    os.startfile(log_path)
+                elif sys.platform == 'darwin':
+                    os.system(f'open "{log_path}"')
+                else:
+                    os.system(f'xdg-open "{log_path}"')
+                logger.info(f"Opened log file: {log_path}")
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"Failed to open log file:\n{e}"
+                )
+                logger.error(f"Error opening log file: {e}")

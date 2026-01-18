@@ -1,6 +1,11 @@
 # Platform icon utilities for chat UI
 
+from core.logger import get_logger
+
 # Placeholder for get_platform_icon_html and PLATFORM_COLORS
+
+# Structured logger for this module
+logger = get_logger('PlatformIcons')
 
 def get_platform_icon_html(platform: str, size: int = 18) -> str:
     """Return HTML for platform icon image."""
@@ -45,7 +50,7 @@ def get_platform_icon_html(platform: str, size: int = 18) -> str:
             data_uri = f'data:{mime_type};base64,{b64}'
             return f'<img src="{data_uri}" width="{size}" height="{size}" style="vertical-align: middle; margin-right: 2px;" />'
         except Exception as e:
-            print(f"Error loading icon for {platform}: {e}")
+            logger.exception(f"Error loading icon for {platform}: {e}")
     
     # Fallback to external URL
     icon_url = PLATFORM_COLORS.get(platform, '')

@@ -12,6 +12,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from platform_connectors.base_connector import BasePlatformConnector
 from PyQt6.QtCore import QThread, pyqtSignal
+from core.logger import get_logger
+
+# Structured logger for this module
+logger = get_logger('KickOldPusher')
 
 
 class KickConnector(BasePlatformConnector):
@@ -44,7 +48,7 @@ class KickConnector(BasePlatformConnector):
                 if csec:
                     self.client_secret = csec
                 if cid or csec:
-                    print(f"[KickOldPusher] Loaded client creds from config: client_id={'set' if cid else 'not set'}")
+                    logger.debug(f"[KickOldPusher] Loaded client creds from config: client_id={'set' if cid else 'not set'}")
         except Exception:
             pass
 
@@ -73,7 +77,7 @@ class KickConnector(BasePlatformConnector):
                 if not self.client_secret:
                     self.client_secret = kc.get('client_secret', '')
                 if self.client_id or self.client_secret:
-                    print("[KickOldPusher] Fallback: loaded client creds from config for refresh")
+                    logger.debug("[KickOldPusher] Fallback: loaded client creds from config for refresh")
             except Exception:
                 pass
 
@@ -92,10 +96,10 @@ class KickConnector(BasePlatformConnector):
             if response.status_code == 200:
                 data = response.json()
                 self.oauth_token = data.get('access_token')
-                print("Kick token refreshed successfully")
+                logger.info("Kick token refreshed successfully")
                 return True
             else:
-                print(f"Kick token refresh failed: {response.status_code}")
+                logger.warning(f"Kick token refresh failed: {response.status_code}")
                 return False
                 
         except Exception as e:
@@ -199,7 +203,7 @@ class KickWorker(QThread):
                 self.status_signal.emit(False)
                 return
             
-            print(f"Got Kick chatroom ID: {self.chatroom_id}")
+            logger.info(f"Got Kick chatroom ID: {self.chatroom_id}")
             
             # NOTE: Kick integration is currently experimental
             # Kick uses Pusher for WebSocket but frequently changes cluster configuration
@@ -214,8 +218,8 @@ class KickWorker(QThread):
             
             # Connect to Kick WebSocket - trying mt1 cluster (most common for Pusher)
             ws_url = 'wss://ws-mt1.pusher.com/app/eb1d5f283081a78b932c?protocol=7&client=js&version=8.4.0-rc2'
-            print(f"Connecting to Kick WebSocket: {ws_url}")
-            print(f"NOTE: Kick WebSocket may fail due to cluster mismatch - this is a known issue")
+            logger.info(f"Connecting to Kick WebSocket: {ws_url}")
+            logger.warning("NOTE: Kick WebSocket may fail due to cluster mismatch - this is a known issue")
             
             async with websockets.connect(ws_url) as websocket:
                 self.ws = websocket
@@ -229,25 +233,25 @@ class KickWorker(QThread):
                     }
                 }
                 await websocket.send(json.dumps(subscribe_msg))
-                print(f"Sent subscription request for chatrooms.{self.chatroom_id}.v2")
-                
-                print(f"Connected to Kick channel: {self.channel}")
+                logger.debug(f"Sent subscription request for chatrooms.{self.chatroom_id}.v2")
+
+                logger.info(f"Connected to Kick channel: {self.channel}")
                 self.status_signal.emit(True)
                 
                 # Listen for messages
                 while self.running:
                     try:
                         message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
-                        print(f"[Kick Raw] {message[:200]}")  # Print first 200 chars
+                        logger.debug(f"[Kick Raw] {message[:200]}")  # Print first 200 chars
                         await self.handle_message(message)
                     except asyncio.TimeoutError:
                         continue
                     except Exception as e:
-                        print(f"Error receiving message: {e}")
+                        logger.error(f"Error receiving message: {e}")
                         break
                         
         except Exception as e:
-            print(f"Kick connection error: {str(e)}")
+            logger.error(f"Kick connection error: {str(e)}")
             import traceback
             traceback.print_exc()
             self.error_signal.emit(f"Connection error: {str(e)}")
@@ -257,7 +261,7 @@ class KickWorker(QThread):
         """Get chatroom ID from channel name using cloudscraper to bypass Cloudflare"""
         try:
             url = f'https://kick.com/api/v2/channels/{self.channel}'
-            print(f"Fetching from: {url}")
+            logger.debug(f"Fetching from: {url}")
             
             # Use cloudscraper in a thread to avoid blocking
             scraper = cloudscraper.create_scraper(
@@ -272,17 +276,17 @@ class KickWorker(QThread):
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(None, lambda: scraper.get(url))
             
-            print(f"Kick API response status: {response.status_code}")
+            logger.debug(f"Kick API response status: {response.status_code}")
             if response.status_code == 200:
                 data = response.json()
                 chatroom_id = data.get('chatroom', {}).get('id')
-                print(f"Successfully got chatroom ID: {chatroom_id}")
+                logger.info(f"Successfully got chatroom ID: {chatroom_id}")
                 return chatroom_id
             else:
-                print(f"Kick API error: {response.status_code} - {response.text[:200]}")
+                logger.warning(f"Kick API error: {response.status_code} - {response.text[:200]}")
                 return None
         except Exception as e:
-            print(f"Error getting chatroom ID: {e}")
+            logger.error(f"Error getting chatroom ID: {e}")
             import traceback
             traceback.print_exc()
         return None
@@ -306,12 +310,12 @@ class KickWorker(QThread):
                     'badges': sender.get('identity', {}).get('badges', [])
                 }
                 
-                print(f"[Kick] {username}: {content}")
+                logger.info(f"[Kick] {username}: {content}")
                 self.message_signal.emit(username, content)
                 self.message_signal_with_metadata.emit(username, content, metadata)
                 
         except Exception as e:
-            print(f"Error handling Kick message: {e}")
+            logger.error(f"Error handling Kick message: {e}")
     
     def send_message(self, message: str):
         """Send a message to Kick chat"""

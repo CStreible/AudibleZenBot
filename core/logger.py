@@ -11,16 +11,29 @@ from typing import Optional
 class TeeOutput:
     """Redirects output to both console and file"""
     
-    def __init__(self, original_stream, log_file=None):
+    def __init__(self, original_stream, log_file=None, manager=None):
         self.original_stream = original_stream
         self.log_file = log_file
         self.enabled = False
+        # Optional LogManager instance to consult for filtering
+        self.manager = manager
     
     def write(self, message):
         """Write to both console and log file"""
+        # Allow LogManager to filter verbose/trace messages
+        try:
+            allow = True
+            if self.manager and hasattr(self.manager, 'should_emit'):
+                allow = self.manager.should_emit(message)
+        except Exception:
+            allow = True
+
+        if not allow:
+            return
+
         # Always write to console
         self.original_stream.write(message)
-        
+
         # Write to file if enabled
         if self.enabled and self.log_file and not self.log_file.closed:
             try:
@@ -28,7 +41,10 @@ class TeeOutput:
                 self.log_file.flush()  # Ensure immediate write
             except Exception as e:
                 # Prevent infinite loop by writing error only to console
-                self.original_stream.write(f"[Logger] Error writing to log file: {e}\n")
+                try:
+                    self.original_stream.write(f"[Logger] Error writing to log file: {e}\n")
+                except Exception:
+                    pass
     
     def flush(self):
         """Flush both streams"""
@@ -66,8 +82,8 @@ class LogManager:
         self.original_stderr = sys.stderr
         
         # Create Tee objects
-        self.tee_stdout = TeeOutput(self.original_stdout)
-        self.tee_stderr = TeeOutput(self.original_stderr)
+        self.tee_stdout = TeeOutput(self.original_stdout, manager=self)
+        self.tee_stderr = TeeOutput(self.original_stderr, manager=self)
         
         # Replace stdout/stderr with Tee objects
         sys.stdout = self.tee_stdout
@@ -77,9 +93,60 @@ class LogManager:
         if self.config:
             self.enabled = self.config.get('logging.enabled', False)
             self.log_folder = self.config.get('logging.folder', None)
+            # Debug map controls whether verbose messages (TRACE/DIAG/DEBUG)
+            # are emitted for given components. Example config:
+            # "debug": {"chatmanager": true, "all": false}
+            try:
+                self.debug_map = self.config.get('debug', {}) or {}
+            except Exception:
+                self.debug_map = {}
             
             if self.enabled and self.log_folder:
                 self.start_logging()
+        else:
+            self.debug_map = {}
+
+    def should_emit(self, message: str) -> bool:
+        """Decide whether a message should be emitted to console/log based on
+        debug settings. Suppresses verbose tags like [TRACE], [DIAG], [DEBUG]
+        unless enabled globally or for the originating component.
+        """
+        try:
+            if not message:
+                return True
+            # Always allow errors and critical runtime markers
+            lowered = message.lower()
+            if any(tag in lowered for tag in ['unhandled exception', '[error]', '[✗', 'traceback']):
+                return True
+
+            # If global debug is enabled, allow everything
+            if self.debug_map.get('all') or self.debug_map.get('global'):
+                return True
+
+            # If message contains verbose tags, consult per-component flags
+            verbose_tags = ['[trace]', '[diag]', '[debug]']
+            if not any(t in lowered for t in verbose_tags):
+                # Not a verbose message; allow by default
+                return True
+
+            # Extract first bracketed token as component, e.g. [ChatManager][TRACE]
+            comp = None
+            try:
+                # Find first occurrence like [Name]
+                start = message.find('[')
+                end = message.find(']', start + 1)
+                if start != -1 and end != -1:
+                    comp = message[start+1:end].strip().lower()
+            except Exception:
+                comp = None
+
+            if comp and self.debug_map.get(comp):
+                return True
+
+            # No explicit enable for this component; suppress verbose line
+            return False
+        except Exception:
+            return True
     
     def start_logging(self):
         """Start logging to file"""
@@ -212,3 +279,61 @@ def get_log_manager(config=None):
     if _log_manager is None:
         _log_manager = LogManager(config)
     return _log_manager
+
+
+# Simple logger facade used by modules. This is intentionally lightweight and
+# writes formatted lines to stdout/stderr so the TeeOutput/LogManager can
+# filter or capture them. Examples in code call `get_logger('ModuleName')`.
+_loggers = {}
+
+
+class SimpleLogger:
+    def __init__(self, name: str):
+        self.name = name
+
+    def _format(self, level: str, msg: str) -> str:
+        # Format: [Component][LEVEL] message
+        return f"[{self.name}][{level}] {msg}\n"
+
+    def debug(self, msg: str):
+        try:
+            sys.stdout.write(self._format('DEBUG', str(msg)))
+        except Exception:
+            pass
+
+    def info(self, msg: str):
+        try:
+            sys.stdout.write(self._format('INFO', str(msg)))
+        except Exception:
+            pass
+
+    def warning(self, msg: str):
+        try:
+            sys.stderr.write(self._format('WARN', str(msg)))
+        except Exception:
+            pass
+
+    def error(self, msg: str):
+        try:
+            sys.stderr.write(self._format('ERROR', str(msg)))
+        except Exception:
+            pass
+
+    def critical(self, msg: str):
+        try:
+            sys.stderr.write(self._format('CRITICAL', str(msg)))
+        except Exception:
+            pass
+
+
+def get_logger(name: str):
+    """Return a SimpleLogger instance for `name`.
+
+    The returned logger writes messages to stdout/stderr with a predictable
+    prefix so `LogManager.should_emit` can apply per-component filtering.
+    """
+    global _loggers
+    key = str(name)
+    if key not in _loggers:
+        _loggers[key] = SimpleLogger(key)
+    return _loggers[key]

@@ -7,6 +7,9 @@ import time
 from platform_connectors.base_connector import BasePlatformConnector
 from PyQt6.QtCore import QThread, pyqtSignal
 import requests
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class YouTubeConnector(BasePlatformConnector):
@@ -38,15 +41,15 @@ class YouTubeConnector(BasePlatformConnector):
             token = youtube_config.get('oauth_token', '')
             if token:
                 self.oauth_token = token
-                print(f"[YouTubeConnector] Loaded OAuth token from config: {token[:10]}...")
+                logger.debug(f"[YouTubeConnector] Loaded OAuth token from config: {token[:10]}...")
             api_key = youtube_config.get('api_key', '')
             if api_key:
                 self.api_key = api_key
-                print(f"[YouTubeConnector] Loaded API key from config: {api_key[:10]}...")
+                logger.debug(f"[YouTubeConnector] Loaded API key from config: {api_key[:10]}...")
             refresh = youtube_config.get('refresh_token', '')
             if refresh:
                 self.refresh_token = refresh
-                print(f"[YouTubeConnector] Loaded refresh token from config")
+                logger.debug(f"[YouTubeConnector] Loaded refresh token from config")
             # Load client credentials from config if present
             try:
                 cid = youtube_config.get('client_id', '')
@@ -93,21 +96,21 @@ class YouTubeConnector(BasePlatformConnector):
             if response.status_code == 200:
                 data = response.json()
                 self.oauth_token = data.get('access_token')
-                print("YouTube token refreshed successfully")
+                logger.info("YouTube token refreshed successfully")
                 return True
             else:
-                print(f"YouTube token refresh failed: {response.status_code}")
+                logger.error(f"YouTube token refresh failed: {response.status_code}")
                 return False
                 
         except Exception as e:
-            print(f"Error refreshing YouTube token: {e}")
+            logger.exception(f"Error refreshing YouTube token: {e}")
             return False
     
     def connect(self, username: str):
         """Connect to YouTube Live Chat, ensuring no duplicate worker threads."""
-        print(f"[YouTubeConnector] Connecting to YouTube for channel: {username}")
-        print(f"[YouTubeConnector] API Key: {'Set' if self.api_key else 'Not set'}")
-        print(f"[YouTubeConnector] OAuth Token: {'Set' if self.oauth_token else 'Not set'}")
+        logger.info(f"[YouTubeConnector] Connecting to YouTube for channel: {username}")
+        logger.debug(f"[YouTubeConnector] API Key: {'Set' if self.api_key else 'Not set'}")
+        logger.debug(f"[YouTubeConnector] OAuth Token: {'Set' if self.oauth_token else 'Not set'}")
 
         self.username = username
 
@@ -116,22 +119,22 @@ class YouTubeConnector(BasePlatformConnector):
             try:
                 self.worker.stop()
             except Exception as e:
-                print(f"[YouTubeConnector] Error stopping previous worker: {e}")
+                logger.exception(f"[YouTubeConnector] Error stopping previous worker: {e}")
         if self.worker_thread:
             try:
                 if self.worker_thread.isRunning():
                     self.worker_thread.quit()
                     self.worker_thread.wait(5000)
                     if self.worker_thread.isRunning():
-                        print("[YouTubeConnector] WARNING: Previous worker thread did not stop in time!")
+                        logger.warning("[YouTubeConnector] WARNING: Previous worker thread did not stop in time!")
             except Exception as e:
-                print(f"[YouTubeConnector] Error quitting previous worker thread: {e}")
+                logger.exception(f"[YouTubeConnector] Error quitting previous worker thread: {e}")
         self.worker = None
         self.worker_thread = None
 
         # Try to refresh token if we have a refresh token
         if self.refresh_token and not self.oauth_token:
-            print("[YouTubeConnector] Attempting to refresh OAuth token...")
+            logger.info("[YouTubeConnector] Attempting to refresh OAuth token...")
             self.refresh_access_token()
 
         # Check which account is authenticated
@@ -141,23 +144,23 @@ class YouTubeConnector(BasePlatformConnector):
         # Determine the channel identifier to use
         if username.startswith('UC') and len(username) == 24:
             channel_identifier = username
-            print(f"[YouTubeConnector] Using provided channel ID: {channel_identifier}")
+            logger.debug(f"[YouTubeConnector] Using provided channel ID: {channel_identifier}")
         elif self.channel_id and not username.startswith('UC'):
             if username != self.username:
                 platform_config = self.config.get_platform_config('youtube') if self.config else {}
                 streamer_channel_id = platform_config.get('channel_id', '')
                 if streamer_channel_id and streamer_channel_id != self.channel_id:
                     channel_identifier = streamer_channel_id
-                    print(f"[YouTubeConnector] Bot connecting to streamer's channel ID: {channel_identifier}")
+                    logger.debug(f"[YouTubeConnector] Bot connecting to streamer's channel ID: {channel_identifier}")
                 else:
                     channel_identifier = username
-                    print(f"[YouTubeConnector] Using provided username (may not find stream): {channel_identifier}")
+                    logger.debug(f"[YouTubeConnector] Using provided username (may not find stream): {channel_identifier}")
             else:
                 channel_identifier = self.channel_id
-                print(f"[YouTubeConnector] Using authenticated channel ID: {channel_identifier}")
+                logger.debug(f"[YouTubeConnector] Using authenticated channel ID: {channel_identifier}")
         else:
             channel_identifier = username
-            print(f"[YouTubeConnector] Using username: {channel_identifier}")
+            logger.debug(f"[YouTubeConnector] Using username: {channel_identifier}")
 
         # Create new worker and thread
         self.worker = YouTubeWorker(
@@ -192,19 +195,19 @@ class YouTubeConnector(BasePlatformConnector):
                 if data.get('items'):
                     channel = data['items'][0]['snippet']
                     self.channel_id = data['items'][0]['id']
-                    print(f"[YouTube] ✓ Authenticated as: {channel.get('title')}")
-                    print(f"[YouTube] Channel ID: {self.channel_id}")
-                    print(f"[YouTube] Note: Can only delete messages if this is the channel owner or moderator")
+                    logger.info(f"[YouTube] ✓ Authenticated as: {channel.get('title')}")
+                    logger.debug(f"[YouTube] Channel ID: {self.channel_id}")
+                    logger.debug("[YouTube] Note: Can only delete messages if this is the channel owner or moderator")
                 else:
-                    print(f"[YouTube] ⚠ Warning: Could not determine authenticated channel")
+                    logger.warning(f"[YouTube] ⚠ Warning: Could not determine authenticated channel")
             elif response.status_code == 401:
-                print(f"[YouTube] ⚠ Authentication Error: OAuth token is invalid or expired")
-                print(f"[YouTube] ⚠ Please re-authenticate YouTube in the Connections page")
-                print(f"[YouTube] ⚠ Make sure to log in as the CHANNEL OWNER (not a viewer account)")
+                logger.warning(f"[YouTube] ⚠ Authentication Error: OAuth token is invalid or expired")
+                logger.info(f"[YouTube] ⚠ Please re-authenticate YouTube in the Connections page")
+                logger.info(f"[YouTube] ⚠ Make sure to log in as the CHANNEL OWNER (not a viewer account)")
             else:
-                print(f"[YouTube] ⚠ Warning: Could not verify authentication ({response.status_code})")
+                logger.warning(f"[YouTube] ⚠ Warning: Could not verify authentication ({response.status_code})")
         except Exception as e:
-            print(f"[YouTube] ⚠ Warning: Error checking authenticated user: {e}")
+            logger.exception(f"[YouTube] ⚠ Warning: Error checking authenticated user: {e}")
     
     def disconnect(self):
         """Disconnect from YouTube and ensure worker thread is fully stopped."""
@@ -212,20 +215,20 @@ class YouTubeConnector(BasePlatformConnector):
             try:
                 self.worker.stop()
             except Exception as e:
-                print(f"[YouTubeConnector] Error stopping worker: {e}")
+                logger.exception(f"[YouTubeConnector] Error stopping worker: {e}")
         if self.worker_thread:
             try:
-                if self.worker_thread.isRunning():
-                    self.worker_thread.quit()
-                    self.worker_thread.wait(5000)  # Wait up to 5 seconds
                     if self.worker_thread.isRunning():
-                        print("[YouTubeConnector] WARNING: Worker thread did not stop in time! Forcing terminate().")
-                        self.worker_thread.terminate()
-                        self.worker_thread.wait(2000)
+                        self.worker_thread.quit()
+                        self.worker_thread.wait(5000)  # Wait up to 5 seconds
                         if self.worker_thread.isRunning():
-                            print("[YouTubeConnector] ERROR: Worker thread STILL running after terminate().")
+                            logger.warning("[YouTubeConnector] Worker thread did not stop in time! Forcing terminate().")
+                            self.worker_thread.terminate()
+                            self.worker_thread.wait(2000)
+                            if self.worker_thread.isRunning():
+                                logger.error("[YouTubeConnector] Worker thread STILL running after terminate().")
             except Exception as e:
-                print(f"[YouTubeConnector] Error quitting worker thread: {e}")
+                logger.exception(f"[YouTubeConnector] Error quitting worker thread: {e}")
         self.worker = None
         self.worker_thread = None
         self.connected = False
@@ -243,7 +246,7 @@ class YouTubeConnector(BasePlatformConnector):
         The authenticated user must have permission to moderate the chat.
         """
         if not message_id or not self.oauth_token:
-            print(f"[YouTube] Cannot delete message: missing message_id or oauth_token")
+            logger.warning(f"[YouTube] Cannot delete message: missing message_id or oauth_token")
             return
         
         try:
@@ -252,7 +255,7 @@ class YouTubeConnector(BasePlatformConnector):
                 'Content-Type': 'application/json'
             }
             
-            print(f"[YouTube] Attempting to delete message: {message_id}")
+            logger.info(f"[YouTube] Attempting to delete message: {message_id}")
             response = requests.delete(
                 f'{YouTubeWorker.API_BASE}/liveChat/messages',
                 headers=headers,
@@ -261,7 +264,7 @@ class YouTubeConnector(BasePlatformConnector):
             
             # Check for token expiration
             if response.status_code == 401:
-                print(f"[YouTube] Token expired during delete, refreshing...")
+                logger.info(f"[YouTube] Token expired during delete, refreshing...")
                 if self.worker and hasattr(self.worker, 'refresh_access_token'):
                     if self.worker.refresh_access_token():
                         self.oauth_token = self.worker.oauth_token
@@ -274,33 +277,33 @@ class YouTubeConnector(BasePlatformConnector):
                         )
             
             if response.status_code == 204:
-                print(f"[YouTube] ✓ Message deleted successfully from YouTube's servers")
+                logger.info(f"[YouTube] ✓ Message deleted successfully from YouTube's servers")
             elif response.status_code == 403:
                 error_data = response.json() if response.text else {}
                 error_msg = error_data.get('error', {}).get('message', 'Permission denied')
-                print(f"[YouTube] ✗ Permission denied to delete message")
-                print(f"[YouTube] Error: {error_msg}")
-                print(f"[YouTube] Note: You must authenticate as the channel owner or a moderator")
-                print(f"[YouTube] Current auth may be for a viewer account")
+                logger.warning(f"[YouTube] ✗ Permission denied to delete message")
+                logger.debug(f"[YouTube] Error: {error_msg}")
+                logger.info(f"[YouTube] Note: You must authenticate as the channel owner or a moderator")
+                logger.debug(f"[YouTube] Current auth may be for a viewer account")
             elif response.status_code == 400:
                 error_data = response.json() if response.text else {}
                 error_msg = error_data.get('error', {}).get('message', 'Bad request')
-                print(f"[YouTube] ✗ Bad request: {error_msg}")
-                print(f"[YouTube] Message ID may be invalid or already deleted")
+                logger.warning(f"[YouTube] ✗ Bad request: {error_msg}")
+                logger.debug(f"[YouTube] Message ID may be invalid or already deleted")
             else:
-                print(f"[YouTube] ✗ Failed to delete message: HTTP {response.status_code}")
+                logger.error(f"[YouTube] ✗ Failed to delete message: HTTP {response.status_code}")
                 try:
                     error_data = response.json()
-                    print(f"[YouTube] Error details: {error_data}")
+                    logger.debug(f"[YouTube] Error details: {error_data}")
                 except:
-                    print(f"[YouTube] Response: {response.text}")
+                    logger.debug(f"[YouTube] Response: {response.text}")
         except Exception as e:
-            print(f"[YouTube] Error deleting message: {e}")
+            logger.exception(f"[YouTube] Error deleting message: {e}")
     
     def ban_user(self, username: str, user_id: str = None):
         """Ban a user from YouTube chat"""
         if not user_id or not self.oauth_token or not self.worker:
-            print(f"[YouTube] Cannot ban user: missing requirements")
+            logger.warning(f"[YouTube] Cannot ban user: missing requirements")
             return
         
         try:
@@ -326,15 +329,15 @@ class YouTubeConnector(BasePlatformConnector):
             )
             
             if response.status_code == 200:
-                print(f"[YouTube] User banned: {username}")
+                logger.info(f"[YouTube] User banned: {username}")
             else:
-                print(f"[YouTube] Failed to ban user: {response.status_code}")
+                logger.error(f"[YouTube] Failed to ban user: {response.status_code}")
         except Exception as e:
-            print(f"[YouTube] Error banning user: {e}")
+            logger.exception(f"[YouTube] Error banning user: {e}")
     
     def onMessageReceived(self, username: str, message: str, metadata: dict):
         """Handle received message"""
-        print(f"[YouTubeConnector] onMessageReceived: {username}, {message}, badges: {metadata.get('badges', [])}")
+        logger.debug(f"[YouTubeConnector] onMessageReceived: {username}, {message}, badges: {metadata.get('badges', [])}")
         self.message_received_with_metadata.emit('youtube', username, message, metadata)
     
     def onMessageDeleted(self, message_id: str):
@@ -349,7 +352,7 @@ class YouTubeConnector(BasePlatformConnector):
         the delete API call succeeds. Detecting deletions by OTHER moderators
         is not reliably supported by YouTube's API.
         """
-        print(f"[YouTubeConnector] Message deleted by platform: {message_id}")
+        logger.debug(f"[YouTubeConnector] Message deleted by platform: {message_id}")
         self.message_deleted.emit('youtube', message_id)
     
     def onStatusChanged(self, connected: bool):
@@ -398,16 +401,16 @@ class YouTubeWorker(QThread):
     def run(self):
         # Prevent worker from running if disabled in config
         if hasattr(self, 'config') and self.config and self.config.get('platforms', {}).get('youtube', {}).get('disabled', False):
-            print("[YouTubeWorker] Skipping run: platform is disabled")
+            logger.info("[YouTubeWorker] Skipping run: platform is disabled")
             return
         """Run the YouTube Live Chat connection"""
-        print(f"[YouTubeWorker] Starting worker for channel: {self.channel}")
-        print(f"[YouTubeWorker] API Key: {'Set' if self.api_key else 'Not set'}")
-        print(f"[YouTubeWorker] OAuth Token: {'Set' if self.oauth_token else 'Not set'}")
+        logger.info(f"[YouTubeWorker] Starting worker for channel: {self.channel}")
+        logger.debug(f"[YouTubeWorker] API Key: {'Set' if self.api_key else 'Not set'}")
+        logger.debug(f"[YouTubeWorker] OAuth Token: {'Set' if self.oauth_token else 'Not set'}")
         self.running = True
         if not self.api_key and not self.oauth_token:
             error_msg = "No API key or OAuth token provided. Cannot connect to YouTube."
-            print(f"[YouTubeWorker] ERROR: {error_msg}")
+            logger.error(f"[YouTubeWorker] ERROR: {error_msg}")
             self.error_signal.emit(error_msg)
             self.status_signal.emit(False)
             return
@@ -428,7 +431,7 @@ class YouTubeWorker(QThread):
                     retry_count = 0
                     self.status_signal.emit(True)
                     
-                    print(f"[YouTubeWorker] Starting message polling loop...")
+                    logger.debug(f"[YouTubeWorker] Starting message polling loop...")
                     
                     # Poll for messages
                     poll_count = 0
@@ -436,7 +439,7 @@ class YouTubeWorker(QThread):
                         try:
                             poll_count += 1
                             if poll_count % 10 == 1:  # Log every 10th poll
-                                print(f"[YouTubeWorker] Poll #{poll_count} (live_chat_id: {self.live_chat_id[:20]}...)")
+                                logger.debug(f"[YouTubeWorker] Poll #{poll_count} (live_chat_id: {self.live_chat_id[:20]}...)")
                             
                             # Refresh token if needed (every 50 minutes)
                             if time.time() - self.last_token_refresh > 3000:
@@ -447,7 +450,7 @@ class YouTubeWorker(QThread):
                             self.last_successful_poll = time.time()
                             time.sleep(2)  # Poll every 2 seconds
                         except Exception as e:
-                            print(f"[YouTubeWorker] ❌ Error in polling loop: {e}")
+                            logger.exception(f"[YouTubeWorker] Error in polling loop: {e}")
                             import traceback
                             traceback.print_exc()
                             self.error_signal.emit(f"Error fetching messages: {str(e)}")
@@ -466,7 +469,7 @@ class YouTubeWorker(QThread):
     
     def find_live_broadcast(self) -> bool:
         """Find the active live broadcast for the channel"""
-        print(f"[YouTubeWorker] Searching for live broadcast on channel: {self.channel}")
+        logger.debug(f"[YouTubeWorker] Searching for live broadcast on channel: {self.channel}")
         try:
             headers = {}
             params = {
@@ -487,7 +490,7 @@ class YouTubeWorker(QThread):
                 params=params
             )
             
-            print(f"[YouTubeWorker] Search response status: {response.status_code}")
+            logger.debug(f"[YouTubeWorker] Search response status: {response.status_code}")
             
             # Check for quota exceeded error
             if response.status_code == 403:
@@ -497,7 +500,7 @@ class YouTubeWorker(QThread):
                         error_code = error_data['error'].get('errors', [{}])[0].get('reason', '')
                         if error_code == 'quotaExceeded':
                             error_msg = "YouTube API quota exceeded. The daily limit has been reached. Please try again tomorrow or use a different API key."
-                            print(f"[YouTubeWorker] ⚠️ QUOTA EXCEEDED: {error_msg}")
+                            logger.warning(f"[YouTubeWorker] QUOTA EXCEEDED: {error_msg}")
                             self.error_signal.emit(error_msg)
                             self.is_active = False
                             return False
@@ -506,9 +509,9 @@ class YouTubeWorker(QThread):
             
             # Try to refresh token if unauthorized
             if response.status_code == 401 and self.oauth_token and self.refresh_token:
-                print(f"[YouTubeWorker] Token expired, attempting refresh...")
+                logger.info(f"[YouTubeWorker] Token expired, attempting refresh...")
                 if self.refresh_access_token():
-                    print(f"[YouTubeWorker] Token refreshed, retrying search...")
+                    logger.info(f"[YouTubeWorker] Token refreshed, retrying search...")
                     # Retry with new token
                     headers['Authorization'] = f'Bearer {self.oauth_token}'
                     response = requests.get(
@@ -516,23 +519,23 @@ class YouTubeWorker(QThread):
                         headers=headers,
                         params=params
                     )
-                    print(f"[YouTubeWorker] Retry response status: {response.status_code}")
+                    logger.debug(f"[YouTubeWorker] Retry response status: {response.status_code}")
             
             if response.status_code != 200:
-                print(f"[YouTubeWorker] Search failed: {response.text}")
+                logger.error(f"[YouTubeWorker] Search failed: {response.text}")
                 response.raise_for_status()
             
             data = response.json()
-            print(f"[YouTubeWorker] Search response: {data}")
+            logger.debug(f"[YouTubeWorker] Search response: {data}")
             
             if 'items' in data and len(data['items']) > 0:
                 video_id = data['items'][0]['id']['videoId']
-                print(f"[YouTubeWorker] ✓ Found live video: {video_id}")
+                logger.info(f"[YouTubeWorker] ✓ Found live video: {video_id}")
                 return self.get_live_chat_id(video_id)
             else:
-                print(f"[YouTubeWorker] ⚠ No live broadcasts found for channel {self.channel}")
+                logger.info(f"[YouTubeWorker] No live broadcasts found for channel {self.channel}")
                 if 'error' in data:
-                    print(f"[YouTubeWorker] ❌ API Error: {data['error']}")
+                    logger.error(f"[YouTubeWorker] API Error: {data['error']}")
             
             return False
             
@@ -542,7 +545,7 @@ class YouTubeWorker(QThread):
     
     def get_live_chat_id(self, video_id: str) -> bool:
         """Get the live chat ID for a video"""
-        print(f"[YouTubeWorker] Getting live chat ID for video: {video_id}")
+        logger.debug(f"[YouTubeWorker] Getting live chat ID for video: {video_id}")
         try:
             headers = {}
             params = {
@@ -562,23 +565,23 @@ class YouTubeWorker(QThread):
             )
             
             if response.status_code != 200:
-                print(f"[YouTubeWorker] Get chat ID failed: {response.status_code} - {response.text}")
+                logger.error(f"[YouTubeWorker] Get chat ID failed: {response.status_code} - {response.text}")
                 response.raise_for_status()
             
             data = response.json()
-            print(f"[YouTubeWorker] Video details response: {data}")
+            logger.debug(f"[YouTubeWorker] Video details response: {data}")
             
             if 'items' in data and len(data['items']) > 0:
                 live_details = data['items'][0].get('liveStreamingDetails', {})
                 self.live_chat_id = live_details.get('activeLiveChatId')
                 
                 if self.live_chat_id:
-                    print(f"[YouTubeWorker] ✓ Got live chat ID: {self.live_chat_id}")
+                    logger.info(f"[YouTubeWorker] ✓ Got live chat ID: {self.live_chat_id}")
                     return True
                 else:
-                    print(f"[YouTubeWorker] ⚠ No activeLiveChatId in liveStreamingDetails: {live_details}")
+                    logger.warning(f"[YouTubeWorker] ⚠ No activeLiveChatId in liveStreamingDetails: {live_details}")
             else:
-                print(f"[YouTubeWorker] ⚠ No items in video details response")
+                logger.warning(f"[YouTubeWorker] ⚠ No items in video details response")
             
             return False
             
@@ -605,20 +608,20 @@ class YouTubeWorker(QThread):
             if response.status_code == 200:
                 data = response.json()
                 self.oauth_token = data.get('access_token')
-                print("YouTube worker token refreshed successfully")
+                logger.info("YouTube worker token refreshed successfully")
                 return True
             else:
-                print(f"YouTube worker token refresh failed: {response.status_code}")
+                logger.error(f"YouTube worker token refresh failed: {response.status_code}")
                 return False
                 
         except Exception as e:
-            print(f"Error refreshing YouTube worker token: {e}")
+            logger.exception(f"Error refreshing YouTube worker token: {e}")
             return False
     
     def fetch_messages(self):
         """Fetch new chat messages"""
         if not self.live_chat_id:
-            print("[YouTubeWorker] No live chat ID, skipping fetch")
+            logger.debug("[YouTubeWorker] No live chat ID, skipping fetch")
             return
         
         try:
@@ -651,7 +654,7 @@ class YouTubeWorker(QThread):
                         error_code = error_data['error'].get('errors', [{}])[0].get('reason', '')
                         if error_code == 'quotaExceeded':
                             error_msg = "YouTube API quota exceeded. Stopping message polling."
-                            print(f"[YouTubeWorker] ⚠️ QUOTA EXCEEDED: {error_msg}")
+                            logger.warning(f"[YouTubeWorker] QUOTA EXCEEDED: {error_msg}")
                             self.error_signal.emit(error_msg)
                             self.is_active = False
                             return
@@ -659,7 +662,7 @@ class YouTubeWorker(QThread):
                     pass
             
             if response.status_code != 200:
-                print(f"[YouTubeWorker] Fetch messages failed: {response.status_code} - {response.text}")
+                logger.error(f"[YouTubeWorker] Fetch messages failed: {response.status_code} - {response.text}")
                 response.raise_for_status()
             
             data = response.json()
@@ -668,14 +671,14 @@ class YouTubeWorker(QThread):
             items = data.get('items', [])
             event_types = [item.get('snippet', {}).get('type') for item in items]
             if event_types and any(t != 'textMessageEvent' for t in event_types):
-                print(f"[YouTubeWorker] Event types in response: {set(event_types)}")
+                logger.debug(f"[YouTubeWorker] Event types in response: {set(event_types)}")
             
             # Update next page token
             self.next_page_token = data.get('nextPageToken')
             polling_interval = data.get('pollingIntervalMillis', 2000) / 1000
             
             items = data.get('items', [])
-            print(f"[YouTubeWorker] Fetched {len(items)} messages")
+            logger.debug(f"[YouTubeWorker] Fetched {len(items)} messages")
             
             # Track current batch of message IDs to detect deletions
             current_message_ids = set()
@@ -688,8 +691,8 @@ class YouTubeWorker(QThread):
                 
                 # Log ALL non-text events for debugging
                 if message_type and message_type != 'textMessageEvent':
-                    print(f"[YouTubeWorker] ⚠ Non-text event detected: type={message_type}")
-                    print(f"[YouTubeWorker] Full snippet: {snippet}")
+                    logger.debug(f"[YouTubeWorker] Non-text event detected: type={message_type}")
+                    logger.debug(f"[YouTubeWorker] Full snippet: {snippet}")
                 
                 # Message deduplication
                 msg_id = item.get('id')
@@ -715,7 +718,7 @@ class YouTubeWorker(QThread):
                 if message_type == 'messageDeletedEvent':
                     deleted_msg_id = snippet.get('messageDeletedDetails', {}).get('deletedMessageId')
                     if deleted_msg_id:
-                        print(f"[YouTubeWorker] Message deleted by moderator: {deleted_msg_id}")
+                        logger.info(f"[YouTubeWorker] Message deleted by moderator: {deleted_msg_id}")
                         self.deletion_signal.emit(deleted_msg_id)
                         # Remove from active set
                         self.active_message_ids.discard(deleted_msg_id)
@@ -739,11 +742,8 @@ class YouTubeWorker(QThread):
                 
                 # Validate essential data
                 if not username or not message:
-                    print(f"[YouTubeWorker] Skipping message with missing data: username={username}, message={message}")
+                    logger.debug(f"[YouTubeWorker] Skipping message with missing data: username={username}, message={message}")
                     continue
-                
-                self.last_message_time = time.time()  # Update health timestamp
-                
                 # Parse badges from authorDetails
                 badges = []
                 if author_details.get('isChatOwner'):
@@ -765,7 +765,8 @@ class YouTubeWorker(QThread):
                     'avatar': author_details.get('profileImageUrl')
                 }
                 
-                print(f"[YouTubeWorker] Chat: {username}: {message}")
+                self.last_message_time = time.time()  # Update health timestamp
+                logger.debug(f"[YouTubeWorker] Chat: {username}: {message}")
                 self.message_signal.emit(username, message, metadata)
                 
         except Exception as e:
@@ -778,13 +779,13 @@ class YouTubeWorker(QThread):
     def send_message(self, message: str):
         """Send a message to YouTube chat"""
         if not self.live_chat_id or not self.oauth_token:
-            print("[YouTubeWorker] Cannot send message: missing live_chat_id or oauth_token")
+            logger.warning("[YouTubeWorker] Cannot send message: missing live_chat_id or oauth_token")
             return
         
         try:
             # Debug: Show which token is being used
             token_prefix = self.oauth_token[:12] if self.oauth_token else "None"
-            print(f"[YouTubeWorker] send_message: Using token (first 12 chars): {token_prefix}...")
+            logger.debug(f"[YouTubeWorker] send_message: Using token (first 12 chars): {token_prefix}...")
             
             headers = {
                 'Authorization': f'Bearer {self.oauth_token}',

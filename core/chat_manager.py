@@ -8,6 +8,10 @@ import os
 from typing import Dict, Optional
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from PyQt6.QtCore import pyqtSlot
+from core.logger import get_logger
+
+# Structured logger for this module
+logger = get_logger('ChatManager')
 
 from core.config import ConfigManager
 from platform_connectors.twitch_connector import TwitchConnector
@@ -86,20 +90,20 @@ class ChatManager(QObject):
             if hasattr(connector, 'message_received_with_metadata'):
                 connector.message_received_with_metadata.connect(self._onConnectorMessageWithMetadata)
                 try:
-                    print(f"[ChatManager] Connected message_received_with_metadata for {platform_id} -> ChatManager._onConnectorMessageWithMetadata")
+                    logger.info(f"Connected message_received_with_metadata for {platform_id} -> ChatManager._onConnectorMessageWithMetadata")
                 except Exception:
-                    print(f"[ChatManager] Connected message_received_with_metadata for {platform_id} -> ChatManager._onConnectorMessageWithMetadata")
+                    logger.info(f"Connected message_received_with_metadata for {platform_id} -> ChatManager._onConnectorMessageWithMetadata")
             # Always connect legacy message_received as well if present
             if hasattr(connector, 'message_received'):
                 connector.message_received.connect(self._onConnectorMessageLegacy)
                 try:
-                    print(f"[ChatManager] Connected legacy message_received for {platform_id} -> ChatManager._onConnectorMessageLegacy")
+                    logger.info(f"Connected legacy message_received for {platform_id} -> ChatManager._onConnectorMessageLegacy")
                 except Exception:
-                    print(f"[ChatManager] Connected legacy message_received for {platform_id} -> ChatManager._onConnectorMessageLegacy")
+                    logger.info(f"Connected legacy message_received for {platform_id} -> ChatManager._onConnectorMessageLegacy")
             # Connect deletion signal if supported
             if hasattr(connector, 'message_deleted'):
                 connector.message_deleted.connect(self.onMessageDeleted)
-                print(f"[ChatManager] Connected message_deleted for {platform_id}")
+                logger.info(f"Connected message_deleted for {platform_id}")
 
     @pyqtSlot(str, str, str, dict)
     def _onConnectorMessageWithMetadata(self, platform, username, message, metadata):
@@ -113,9 +117,9 @@ class ChatManager(QObject):
         except Exception:
             preview = ''
         try:
-            print(f"[ChatManager][TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username} preview={preview}")
+            logger.debug(f"[TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username} preview={preview}")
         except Exception:
-            print(f"[ChatManager][TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username}")
+            logger.debug(f"[TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username}")
         self.onMessageReceivedWithMetadata(platform, username, message, metadata)
 
     @pyqtSlot(str, str, str, dict)
@@ -130,9 +134,9 @@ class ChatManager(QObject):
         except Exception:
             preview = ''
         try:
-            print(f"[ChatManager][TRACE] _onConnectorMessageLegacy: platform={platform} username={username} preview={preview}")
+            logger.debug(f"[TRACE] _onConnectorMessageLegacy: platform={platform} username={username} preview={preview}")
         except Exception:
-            print(f"[ChatManager][TRACE] _onConnectorMessageLegacy: platform={platform} username={username}")
+            logger.debug(f"[TRACE] _onConnectorMessageLegacy: platform={platform} username={username}")
         # Call the legacy handler which will emit message_received after checks
         self.onMessageReceived(platform, username, message)
 
@@ -141,9 +145,9 @@ class ChatManager(QObject):
             if disabled_pid in self.connectors:
                 try:
                     self.connectors[disabled_pid].disconnect()
-                    print(f"[ChatManager] Disconnected disabled platform: {disabled_pid}")
+                    logger.info(f"Disconnected disabled platform: {disabled_pid}")
                 except Exception as e:
-                    print(f"[ChatManager] Error disconnecting disabled platform {disabled_pid}: {e}")
+                    logger.error(f"Error disconnecting disabled platform {disabled_pid}: {e}")
     
     def connectPlatform(self, platform_id: str, username: str, token: str = "") -> bool:
         """
@@ -157,11 +161,11 @@ class ChatManager(QObject):
         Returns:
             True if connection initiated successfully
         """
-        print(f"[ChatManager] connectPlatform: platform_id={platform_id}, username={username}, has_token={bool(token)}")
+        logger.info(f"connectPlatform: platform_id={platform_id}, username={username}, has_token={bool(token)}")
         
         connector = self.connectors.get(platform_id)
         if not connector:
-            print(f"[ChatManager] [WARN] No connector found for {platform_id}")
+            logger.warning(f"No connector found for {platform_id}")
             return False
         
         try:
@@ -180,19 +184,19 @@ class ChatManager(QObject):
                     try:
                         cookies = json.loads(cookies_json)
                         connector.set_cookies(cookies)
-                        print(f"[ChatManager] Loaded {len(cookies)} cookies for Kick")
+                        logger.info(f"Loaded {len(cookies)} cookies for Kick")
                     except Exception as e:
-                        print(f"[ChatManager] Failed to load Kick cookies: {e}")
+                        logger.error(f"Failed to load Kick cookies: {e}")
             
             # Set token if provided and connector supports it
             if token and hasattr(connector, 'set_token'):
-                print(f"[ChatManager] Setting token for {platform_id} (length: {len(token)})")
+                logger.debug(f"Setting token for {platform_id} (length: {len(token)})")
                 connector.set_token(token)
             elif token and hasattr(connector, 'set_api_key'):
                 connector.set_api_key(token)
             
             # Start connection in background
-            print(f"[ChatManager] Calling connect() for {platform_id}")
+            logger.info(f"Calling connect() for {platform_id}")
             connector.connect(username)
 
             # Wait briefly for the connector to report its actual connected state.
@@ -212,7 +216,7 @@ class ChatManager(QObject):
             self.streamer_connection_changed.emit(platform_id, connected_state, username)
             return True
         except Exception as e:
-            print(f"[ChatManager] [ERROR] Error connecting to {platform_id}: {e}")
+            logger.error(f"Error connecting to {platform_id}: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -242,7 +246,7 @@ class ChatManager(QObject):
     def connectBotAccount(self, platform_id: str, username: str, token: str, refresh_token: str = None):
         """Connect bot account for sending messages (doesn't listen for incoming messages)"""
         try:
-            print(f"[ChatManager] Connecting bot account for {platform_id}: {username}")
+            logger.info(f"Connecting bot account for {platform_id}: {username}")
             
             # Update config with bot credentials to ensure they're in memory
             if self.config:
@@ -250,7 +254,7 @@ class ChatManager(QObject):
                 self.config.set_platform_config(platform_id, 'bot_token', token)
                 if refresh_token:
                     self.config.set_platform_config(platform_id, 'bot_refresh_token', refresh_token)
-                print(f"[ChatManager] Bot credentials loaded into config memory")
+                logger.debug(f"Bot credentials loaded into config memory")
             
             # For Twitch, Kick, DLive, and YouTube, we need to get the streamer's channel name
             # Bots should send to streamer's chat, not their own channel
@@ -261,9 +265,9 @@ class ChatManager(QObject):
                 streamer_username = platform_config.get('streamer_username', '') or platform_config.get('username', '')
                 if streamer_username:
                     channel_to_join = streamer_username
-                    print(f"[ChatManager] Bot will join streamer's channel: {channel_to_join}")
+                    logger.debug(f"Bot will join streamer's channel: {channel_to_join}")
                 else:
-                    print(f"[ChatManager] [WARN] No streamer username found, bot will join its own channel")
+                    logger.warning(f"No streamer username found, bot will join its own channel")
             
             # Create new connector instance for bot
             if platform_id == 'twitch':
@@ -279,29 +283,29 @@ class ChatManager(QObject):
             elif platform_id == 'twitter':
                 bot_connector = TwitterConnector(self.config)
             else:
-                print(f"[ChatManager] Unknown platform: {platform_id}")
+                logger.error(f"Unknown platform: {platform_id}")
                 return False
             
-            print(f"[ChatManager] Bot connector created for {platform_id}")
+            logger.info(f"Bot connector created for {platform_id}")
 
             # Connect bot connector signals to ChatManager so webhook-driven bot instances
             # also route incoming messages into the central message pipeline.
             try:
                 if hasattr(bot_connector, 'message_received_with_metadata'):
                     bot_connector.message_received_with_metadata.connect(self._onConnectorMessageWithMetadata)
-                    print(f"[ChatManager] Connected bot message_received_with_metadata for {platform_id} -> ChatManager._onConnectorMessageWithMetadata")
+                    logger.info(f"Connected bot message_received_with_metadata for {platform_id} -> ChatManager._onConnectorMessageWithMetadata")
                 if hasattr(bot_connector, 'message_received'):
                     bot_connector.message_received.connect(self._onConnectorMessageLegacy)
-                    print(f"[ChatManager] Connected bot legacy message_received for {platform_id} -> ChatManager._onConnectorMessageLegacy")
+                    logger.info(f"Connected bot legacy message_received for {platform_id} -> ChatManager._onConnectorMessageLegacy")
                 if hasattr(bot_connector, 'message_deleted'):
                     bot_connector.message_deleted.connect(self.onMessageDeleted)
-                    print(f"[ChatManager] Connected bot message_deleted for {platform_id} -> ChatManager.onMessageDeleted")
+                    logger.info(f"Connected bot message_deleted for {platform_id} -> ChatManager.onMessageDeleted")
             except Exception as e:
-                print(f"[ChatManager] Warning: failed to connect bot signals for {platform_id}: {e}")
+                logger.warning(f"Warning: failed to connect bot signals for {platform_id}: {e}")
             
             # Debug: show token prefix to verify it's different from streamer
             token_prefix = token[:20] if token else "None"
-            print(f"[ChatManager] Bot token (first 20 chars): {token_prefix}...")
+            logger.debug(f"Bot token (first 20 chars): {token_prefix}...")
             
             # For Twitch bot, use provided refresh token or get from config
             if platform_id == 'twitch':
@@ -310,40 +314,40 @@ class ChatManager(QObject):
                     refresh_token = platform_config.get('bot_refresh_token', '')
                 
                 if refresh_token:
-                    print(f"[ChatManager] Bot has refresh token: {refresh_token[:20]}...")
+                    logger.debug(f"Bot has refresh token: {refresh_token[:20]}...")
                 else:
-                    print(f"[ChatManager] ⚠ No bot refresh token found")
+                    logger.warning(f"No bot refresh token found")
             
             # Set bot credentials
             if platform_id in ['twitch', 'youtube', 'trovo', 'dlive']:
                 # For Trovo, pass refresh token as well
                 if platform_id == 'trovo':
                     bot_connector.set_token(token, refresh_token=refresh_token, is_bot=True)
-                    print(f"[ChatManager] Token and refresh token set for Trovo bot")
+                    logger.debug(f"Token and refresh token set for Trovo bot")
                 else:
                     bot_connector.set_token(token)
-                    print(f"[ChatManager] Token set for {platform_id} bot")
+                    logger.debug(f"Token set for {platform_id} bot")
                 
                 # For Twitch, also set refresh token if available
                 if platform_id == 'twitch' and refresh_token:
                     bot_connector.refresh_token = refresh_token
-                    print(f"[ChatManager] Refresh token set for Twitch bot")
+                    logger.debug(f"Refresh token set for Twitch bot")
             elif platform_id == 'kick':
                 # Kick bot uses OAuth token with is_bot=True flag
                 if hasattr(bot_connector, 'set_token'):
                     bot_connector.set_token(token, is_bot=True)
-                    print(f"[ChatManager] Bot token set for Kick")
+                    logger.debug(f"Bot token set for Kick")
                 else:
                     bot_connector.set_api_key(token)
-                    print(f"[ChatManager] API key set for Kick bot (legacy)")
+                    logger.debug(f"API key set for Kick bot (legacy)")
             elif platform_id == 'twitter':
                 bot_connector.set_token(token)
-                print(f"[ChatManager] Token set for {platform_id} bot")
+                logger.debug(f"Token set for {platform_id} bot")
             
             # For Twitch, set the bot username BEFORE connecting
             if platform_id == 'twitch' and hasattr(bot_connector, 'set_bot_username'):
                 bot_connector.set_bot_username(username)
-                print(f"[ChatManager] Bot username set to: {username}")
+                logger.debug(f"Bot username set to: {username}")
 
             # If we have a streamer connector instance for this platform,
             # attach it to the bot connector so the bot worker can forward
@@ -352,7 +356,7 @@ class ChatManager(QObject):
                 streamer_conn = self.connectors.get(platform_id)
                 if streamer_conn:
                     bot_connector.streamer_connector = streamer_conn
-                    print(f"[ChatManager] Attached streamer connector {id(streamer_conn)} to bot connector {id(bot_connector)}")
+                    logger.debug(f"Attached streamer connector {id(streamer_conn)} to bot connector {id(bot_connector)}")
             except Exception:
                 pass
             
@@ -361,12 +365,12 @@ class ChatManager(QObject):
             
             # Connect bot account (maintains connection for sending)
             # For Twitch, pass the streamer's channel; for others, pass bot username
-            print(f"[ChatManager] Calling connect() for {platform_id} bot to channel: {channel_to_join}...")
+            logger.info(f"Calling connect() for {platform_id} bot to channel: {channel_to_join}...")
             connect_result = bot_connector.connect(channel_to_join)
             
             # Check if connection failed (e.g., invalid token)
             if connect_result is False:
-                print(f"[ChatManager] [WARN] Bot connection failed for {platform_id}. Clearing saved credentials.")
+                logger.warning(f"Bot connection failed for {platform_id}. Clearing saved credentials.")
                 # Clear bot credentials from config
                 # Clear saved bot credentials using ConfigManager
                 self.config.set_platform_config(platform_id, 'bot_token', '')
@@ -378,12 +382,12 @@ class ChatManager(QObject):
                 # Emit signal to update UI - pass username so dialog appears
                 self.bot_connection_changed.emit(platform_id, False, username)
                 
-                print(f"[ChatManager] [WARN] Bot credentials cleared. Please log out and log back in.")
+                logger.warning(f"Bot credentials cleared. Please log out and log back in.")
                 return
             
             # Store bot connector
             self.bot_connectors[platform_id] = bot_connector
-            print(f"[ChatManager] [OK] Bot account connected for {platform_id}: {username}")
+            logger.info(f"Bot account connected for {platform_id}: {username}")
             
             # Save bot connection state to config for persistence
             # CRITICAL: Reload config before saving to avoid overwriting other platforms' data
@@ -391,7 +395,7 @@ class ChatManager(QObject):
                 self.config.set_platform_config(platform_id, 'bot_connected', True)
                 # Verify the credentials were preserved
                 bot_username_check = self.config.get_platform_config(platform_id).get('bot_username', '')
-                print(f"[ChatManager] After save, bot_username in config: '{bot_username_check}'")
+                logger.debug(f"After save, bot_username in config: '{bot_username_check}'")
             
             # Emit signal to update UI
             self.bot_connection_changed.emit(platform_id, True, username)
@@ -408,10 +412,10 @@ class ChatManager(QObject):
                 time.sleep(interval)
                 waited += interval
 
-            print(f"[ChatManager] Bot connector status: connected={getattr(bot_connector, 'connected', 'N/A')}")
+            logger.info(f"Bot connector status: connected={getattr(bot_connector, 'connected', 'N/A')}")
             return True
         except Exception as e:
-            print(f"[ChatManager] [ERROR] Error connecting bot account to {platform_id}: {e}")
+            logger.error(f"Error connecting bot account to {platform_id}: {e}")
             import traceback
             traceback.print_exc()
             return False

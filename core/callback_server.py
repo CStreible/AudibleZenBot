@@ -45,11 +45,8 @@ def register_route(path: str, handler: Callable, methods: List[str] = None):
         methods = ['POST']
 
     with _lock:
-        if path in _routes:
-            # overwrite existing
-            _routes[path]['handler'] = handler
-            _routes[path]['methods'] = methods
-            return
+        # Normalize endpoint name for Flask (no leading slash)
+        endpoint = path.lstrip('/').replace('/', '_') or 'root'
 
         def _route_func(**kwargs):
             try:
@@ -63,7 +60,14 @@ def register_route(path: str, handler: Callable, methods: List[str] = None):
                 traceback.print_exc()
                 return (jsonify({'status': 'error', 'error': str(e)}), 500)
 
-        _app.add_url_rule(path, endpoint=path, view_func=_route_func, methods=methods)
+        # If endpoint already exists, replace the view function to avoid
+        # attempting to re-register the same rule (which raises an error).
+        if endpoint in _app.view_functions:
+            _app.view_functions[endpoint] = _route_func
+            _routes[path] = {'handler': handler, 'methods': methods}
+            return
+
+        _app.add_url_rule(path, endpoint=endpoint, view_func=_route_func, methods=methods)
         _routes[path] = {'handler': handler, 'methods': methods}
 
 
@@ -87,6 +91,14 @@ def start_server(port: int = 8889):
         _port = port
 
         def _run():
+            # Suppress werkzeug/flask access logs to reduce noise (127.0.0.1 GET ...)
+            try:
+                import logging
+                logging.getLogger('werkzeug').setLevel(logging.WARNING)
+                _app.logger.setLevel(logging.WARNING)
+            except Exception:
+                pass
+
             # Bind to all interfaces so ngrok can forward
             try:
                 _app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)

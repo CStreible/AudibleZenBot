@@ -5,8 +5,16 @@ Gets OAuth token for YouTube Data API v3 access
 import requests
 import webbrowser
 from urllib.parse import urlencode, parse_qs, urlparse
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler
 import threading
+from typing import Any
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+try:
+    from core import callback_server
+except Exception:
+    callback_server = None
 
 # YouTube OAuth credentials: prefer values from config if present
 YOUTUBE_REDIRECT_URI = "http://localhost:8080"
@@ -30,54 +38,26 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.force-ssl"
 ]
 
-# Global variable to store the authorization code
-auth_code_received = None
+# Compatibility: expose an event/container similar to other callback modules
+last_code_event = threading.Event()
+last_code_container: dict[str, Any] = {}
 
-class OAuthCallbackHandler(BaseHTTPRequestHandler):
-    """Handle OAuth callback from Google"""
-    
-    def do_GET(self):
-        global auth_code_received
-        
-        # Parse the query parameters
-        query_components = parse_qs(urlparse(self.path).query)
-        
-        if 'code' in query_components:
-            auth_code_received = query_components['code'][0]
-            
-            # Send success response
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            success_html = """
-                <html>
-                <head><title>Authorization Successful</title></head>
-                <body style="font-family: Arial; text-align: center; padding: 50px;">
-                    <h1 style="color: green;">&#10004; Authorization Successful!</h1>
-                    <p>You can close this window and return to the terminal.</p>
-                </body>
-                </html>
-            """
-            self.wfile.write(success_html.encode())
-        else:
-            # Send error response
-            self.send_response(400)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            error_html = """
-                <html>
-                <head><title>Authorization Failed</title></head>
-                <body style="font-family: Arial; text-align: center; padding: 50px;">
-                    <h1 style="color: red;">&#10008; Authorization Failed</h1>
-                    <p>No authorization code received.</p>
-                </body>
-                </html>
-            """
-            self.wfile.write(error_html.encode())
-    
-    def log_message(self, format, *args):
-        # Suppress HTTP logs
-        pass
+
+def _make_handler(container: dict, event: threading.Event):
+    def _handler(req):
+        try:
+            code = req.args.get('code')
+        except Exception:
+            code = None
+        if code:
+            container['code'] = code
+            try:
+                event.set()
+            except Exception:
+                pass
+            return ("Authorization code received. You may close this window.", 200)
+        return ("No authorization code found.", 400)
+    return _handler
 
 def get_authorization_url():
     """Generate YouTube OAuth authorization URL"""
@@ -107,83 +87,66 @@ def exchange_code_for_token(auth_code):
         "redirect_uri": YOUTUBE_REDIRECT_URI
     }
     
-    print(f"\n[DEBUG] Exchanging code with redirect_uri: {YOUTUBE_REDIRECT_URI}")
+    logger.debug(f"Exchanging code with redirect_uri: {YOUTUBE_REDIRECT_URI}")
     resp = requests.post(YOUTUBE_TOKEN_URL, headers=headers, data=data)
     if resp.status_code == 200:
         return resp.json()
     else:
-        print(f"[YouTube OAuth] Error: {resp.status_code} {resp.text}")
+        logger.error(f"[YouTube OAuth] Error: {resp.status_code} {resp.text}")
         return None
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("YouTube OAuth2 Authorization Flow (Automated)")
-    print("=" * 60)
-    print("\nStarting local callback server on port 8080...")
-    
-    # Start local HTTP server in background
-    server = HTTPServer(('localhost', 8080), OAuthCallbackHandler)
-    server_thread = threading.Thread(target=server.handle_request)
-    server_thread.daemon = True
-    server_thread.start()
-    
-    print("✓ Local server running")
-    print("\nOpening browser for authorization...")
-    print("After authorizing, you'll be redirected back automatically.\n")
-    
+    logger.info("YouTube OAuth2 Authorization Flow (Automated)")
+
+    # Register callback route on shared callback server if available
+    port = 8080
+    try:
+        if callback_server:
+            handler = _make_handler(last_code_container, last_code_event)
+            callback_server.register_route('/callback', handler, methods=['GET'])
+            # Start shared server on configured port if available
+            try:
+                from core.config import ConfigManager
+                cfg = ConfigManager()
+                port = int(cfg.get('ngrok.callback_port', 8080))
+            except Exception:
+                port = 8080
+            callback_server.start_server(port)
+            logger.info(f"[YouTube OAuth] Registered /callback on shared server (port {port})")
+        else:
+            # Fallback to simple HTTPServer for manual runs
+            from http.server import HTTPServer
+            server = HTTPServer(('localhost', 8080), BaseHTTPRequestHandler)
+            server_thread = threading.Thread(target=server.handle_request)
+            server_thread.daemon = True
+            server_thread.start()
+            logger.info("Local temporary server running (fallback)")
+    except Exception as e:
+        logger.exception(f"[YouTube OAuth] Failed to start callback handler: {e}")
+
+    logger.info("Opening browser for authorization...")
     url = get_authorization_url()
     webbrowser.open(url)
-    
-    print("=" * 60)
-    print("Waiting for authorization...")
-    print("(Browser should open automatically)")
-    print("=" * 60)
-    
-    # Wait for the callback (timeout after 2 minutes)
-    server_thread.join(timeout=120)
-    
-    if auth_code_received is None:
-        print("\n✗ Timeout: No authorization code received.")
-        print("Please try again and complete the authorization quickly.")
+
+    logger.info("Waiting for authorization... (120s timeout)")
+
+    got = last_code_event.wait(timeout=120)
+    if not got or 'code' not in last_code_container:
+        logger.error("Timeout: No authorization code received.")
         exit(1)
-    
-    print(f"\n✓ Authorization code received!")
-    print(f"\nExchanging code for token...")
-    token_data = exchange_code_for_token(auth_code_received)
-    
+
+    auth_code = last_code_container.get('code')
+    logger.info(f"Authorization code received: {auth_code[:20]}...")
+    logger.info("Exchanging code for token...")
+    token_data = exchange_code_for_token(auth_code)
+
     if token_data:
-        print("\n" + "=" * 60)
-        print("SUCCESS! Access Token Obtained")
-        print("=" * 60)
-        print(f"\nAccess Token: {token_data.get('access_token', 'N/A')[:50]}...")
-        print(f"Refresh Token: {token_data.get('refresh_token', 'N/A')[:50]}...")
-        print(f"Expires In: {token_data.get('expires_in', 'N/A')} seconds")
-        print(f"Token Type: {token_data.get('token_type', 'N/A')}")
-        
-        # Save to config.json
         try:
-                # Save tokens to config (ConfigManager will encrypt sensitive values)
-                config = ConfigManager()
-                config.set_platform_config('youtube', 'oauth_token', token_data.get('access_token', ''))
-                config.set_platform_config('youtube', 'refresh_token', token_data.get('refresh_token', ''))
-                print("\n✓ YouTube oauth_token and refresh_token saved to config.json!")
-            except Exception as e:
-                print(f"\n✗ Error saving tokens to config: {e}")
-                print("\nYou can manually add them to config.json:")
-                print(f'  "youtube": {{')
-                print(f'    "oauth_token": "REPLACE_WITH_YOUR_TOKEN",')
-                print(f'    "refresh_token": "REPLACE_WITH_YOUR_REFRESH_TOKEN"')
-                print(f'  }}')
-        
-        print("\n" + "=" * 60)
-        print("NEXT STEPS:")
-        print("1. Start the main app: python main.py")
-        print("2. Go to Connections → YouTube tab")
-        print("3. Enter your Channel ID")
-        print("4. Leave token field empty (uses saved token)")
-        print("5. Make sure you have an ACTIVE LIVE STREAM running")
-        print("6. Click 'Connect & Authorize'")
-        print("=" * 60)
+            config = ConfigManager()
+            config.set_platform_config('youtube', 'oauth_token', token_data.get('access_token', ''))
+            config.set_platform_config('youtube', 'refresh_token', token_data.get('refresh_token', ''))
+            logger.info("YouTube oauth_token and refresh_token saved to config.json")
+        except Exception as e:
+            logger.exception(f"Error saving tokens to config: {e}")
     else:
-        print("\n✗ Failed to obtain access token.")
-        print("Please check the authorization code and try again.")
+        logger.error("Failed to obtain access token.")

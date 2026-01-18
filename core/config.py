@@ -166,8 +166,9 @@ class ConfigManager:
             "ngrok": {
                 "auth_token": "",
                 "auto_start": True,
-                "region": "us",
-                "tunnels": {
+                    "region": "us",
+                    "callback_port": 8889,
+                    "tunnels": {
                     "kick": {"enabled": True, "port": 8889},
                     "trovo": {"enabled": False, "port": 5000}
                 }

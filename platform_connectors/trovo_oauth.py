@@ -1,6 +1,9 @@
 import requests
 import webbrowser
 from urllib.parse import urlencode
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 TROVO_CLIENT_ID = ""
 TROVO_CLIENT_SECRET = ""
@@ -56,18 +59,18 @@ def exchange_code_for_token_v2(auth_code):
     if resp.status_code == 200:
         return resp.json()
     else:
-        print(f"[Trovo OAuth] Error: {resp.status_code} {resp.text}")
+        logger.error(f"[Trovo OAuth] Error: {resp.status_code} {resp.text}")
         return None
 
 if __name__ == "__main__":
-    print("Trovo OAuth2 Authorization Flow")
+    logger.info("Trovo OAuth2 Authorization Flow")
     url = get_authorization_url()
-    print(f"Open this URL in your browser and authorize the app:\n{url}\n")
+    logger.info(f"Open this URL in your browser and authorize the app:\n{url}\n")
     webbrowser.open(url)
     auth_code = input("Paste the authorization code from the redirect URL: ").strip()
     token_data = exchange_code_for_token(auth_code)
     if token_data:
-        print("Access Token Response:")
-        print(token_data)
+        logger.info("Access Token Response:")
+        logger.debug(f"{token_data}")
     else:
-        print("Failed to obtain access token.")
+        logger.error("Failed to obtain access token.")

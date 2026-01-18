@@ -11,60 +11,19 @@ from urllib.parse import urlencode, parse_qs, urlparse
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QLineEdit
 from PyQt6.QtCore import QUrl, pyqtSignal, QObject
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 import threading
+from typing import Optional
+try:
+    from core import callback_server
+except Exception:
+    callback_server = None
 
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
-    """HTTP handler for OAuth callback"""
-    
-    auth_code = None
-    
-    def do_GET(self):
-        """Handle GET request with OAuth callback"""
-        # Parse query parameters
-        query = urlparse(self.path).query
-        params = parse_qs(query)
-        
-        # Extract authorization code
-        if 'code' in params:
-            OAuthCallbackHandler.auth_code = params['code'][0]
-            
-            # Send success response
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            
-            html = """
-            <html>
-            <head><title>Authentication Successful</title></head>
-            <body style="font-family: Arial; text-align: center; padding: 50px;">
-                <h1>✓ Authentication Successful!</h1>
-                <p>You can close this window and return to AudibleZenBot.</p>
-                <script>setTimeout(function(){ window.close(); }, 2000);</script>
-            </body>
-            </html>
-            """
-            self.wfile.write(html.encode())
-        else:
-            # Error response
-            self.send_response(400)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            
-            html = """
-            <html>
-            <head><title>Authentication Failed</title></head>
-            <body style="font-family: Arial; text-align: center; padding: 50px;">
-                <h1>✗ Authentication Failed</h1>
-                <p>Please try again.</p>
-            </body>
-            </html>
-            """
-            self.wfile.write(html.encode())
-    
+    """Compatibility placeholder - some code may still reference this class."""
+
     def log_message(self, format, *args):
-        """Suppress log messages"""
         pass
 
 
@@ -172,32 +131,83 @@ class OAuthHandler(QObject):
         # Open browser for authentication
         webbrowser.open(auth_url)
     
-    def _start_callback_server(self, platform: str, config: dict, 
+    def _start_callback_server(self, platform: str, config: dict,
                                code_verifier: str, state: str):
-        """Start local HTTP server to receive OAuth callback"""
-        
-        def run_server():
-            # Reset auth code
-            OAuthCallbackHandler.auth_code = None
-            
-            # Start server
-            server = HTTPServer(('localhost', 3000), OAuthCallbackHandler)
-            server.timeout = 120  # 2 minute timeout
-            
-            # Wait for one request
-            server.handle_request()
-            
-            # Get auth code
-            if OAuthCallbackHandler.auth_code:
-                # Exchange code for token
-                self._exchange_code_for_token(platform, config, 
-                    OAuthCallbackHandler.auth_code, code_verifier)
+        """Start or register an OAuth callback route using the shared callback server.
+
+        This registers a temporary route on the shared `core.callback_server` using
+        a path that includes the platform and the generated `state` to avoid
+        collisions when multiple flows run concurrently.
+        """
+
+        # If shared callback server isn't available, fall back to existing behavior
+        if callback_server is None:
+            # Fallback: no centralized server available; use existing HTTPServer approach
+            def run_server():
+                # Minimal blocking behavior - listen on localhost:3000 once
+                from http.server import HTTPServer
+                OAuthCallbackHandler.auth_code = None
+                try:
+                    server = HTTPServer(('localhost', 3000), OAuthCallbackHandler)
+                    server.timeout = 120
+                    server.handle_request()
+                    code = getattr(OAuthCallbackHandler, 'auth_code', None)
+                    if code:
+                        self._exchange_code_for_token(platform, config, code, code_verifier)
+                    else:
+                        self.auth_failed.emit(platform, "No authorization code received")
+                except Exception as e:
+                    self.auth_failed.emit(platform, f"Callback server error: {e}")
+
+            self.server_thread = threading.Thread(target=run_server, daemon=True)
+            self.server_thread.start()
+            return
+
+        # Use the shared callback server
+        path = f"/oauth/{platform}/{state}"
+        event = threading.Event()
+        container: dict[str, Optional[str]] = {'code': None}
+
+        def _handler(req):
+            try:
+                code = req.args.get('code')
+            except Exception:
+                code = None
+            if code:
+                container['code'] = code
+                try:
+                    event.set()
+                except Exception:
+                    pass
+                return ("Authentication successful. You may close this window.", 200)
+            return ("No code","400")
+
+        try:
+            callback_server.register_route(path, _handler, methods=['GET'])
+            # Start server on configured callback port
+            try:
+                from core.config import ConfigManager
+                cfg = ConfigManager()
+                port = int(cfg.get('ngrok.callback_port', 8889))
+            except Exception:
+                port = 8889
+
+            callback_server.start_server(port)
+
+            # Wait for code with timeout
+            got = event.wait(timeout=120)
+            # Unregister route to clean up
+            try:
+                callback_server.unregister_route(path)
+            except Exception:
+                pass
+
+            if got and container.get('code'):
+                self._exchange_code_for_token(platform, config, container['code'], code_verifier)
             else:
                 self.auth_failed.emit(platform, "No authorization code received")
-        
-        # Run server in thread
-        self.server_thread = threading.Thread(target=run_server, daemon=True)
-        self.server_thread.start()
+        except Exception as e:
+            self.auth_failed.emit(platform, f"Failed to register callback route: {e}")
     
     def _exchange_code_for_token(self, platform: str, config: dict, 
                                  code: str, code_verifier: str):

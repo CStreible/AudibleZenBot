@@ -1,4 +1,7 @@
 import requests
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 TROVO_CLIENT_ID = ""
 TROVO_CLIENT_SECRET = ""
@@ -32,14 +35,14 @@ def exchange_code_for_token(auth_code):
     if resp.status_code == 200:
         return resp.json()
     else:
-        print(f"[Trovo OAuth] Error: {resp.status_code} {resp.text}")
+        logger.error(f"[Trovo OAuth] Error: {resp.status_code} {resp.text}")
         return None
 
 if __name__ == "__main__":
     code = "6ea05778baf9b07755d84541de8dced4"  # Replace with your code if needed
     token_data = exchange_code_for_token(code)
     if token_data:
-        print("Access Token Response:")
-        print(token_data)
+        logger.info("Access Token Response:")
+        logger.debug(f"{token_data}")
     else:
-        print("Failed to obtain access token.")
+        logger.error("Failed to obtain access token.")
