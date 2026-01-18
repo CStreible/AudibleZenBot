@@ -90,7 +90,8 @@ class YouTubeConnector(BasePlatformConnector):
                     'client_secret': self.client_secret,
                     'refresh_token': self.refresh_token,
                     'grant_type': 'refresh_token'
-                }
+                },
+                timeout=10
             )
             
             if response.status_code == 200:
@@ -141,26 +142,69 @@ class YouTubeConnector(BasePlatformConnector):
         if self.oauth_token:
             self.check_authenticated_user()
 
-        # Determine the channel identifier to use
-        if username.startswith('UC') and len(username) == 24:
+        def _resolve_channel_id_from_username(name: str):
+            """Resolve a YouTube channel ID (UC...) from a human username or channel name.
+            Returns channel ID string or None.
+            """
+            try:
+                headers = {}
+                params = {'part': 'id'}
+                if self.oauth_token:
+                    headers['Authorization'] = f'Bearer {self.oauth_token}'
+                else:
+                    params['forUsername'] = name
+                # Try channels?forUsername first
+                try:
+                    resp = requests.get(f'{YouTubeWorker.API_BASE}/channels', headers=headers, params=params, timeout=5)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        items = data.get('items', [])
+                        if items:
+                            return items[0].get('id')
+                except Exception:
+                    pass
+
+                # Fallback: search for channel by query
+                sparams = {'part': 'snippet', 'type': 'channel', 'q': name}
+                if self.oauth_token:
+                    headers['Authorization'] = f'Bearer {self.oauth_token}'
+                else:
+                    sparams['key'] = self.api_key
+                try:
+                    sresp = requests.get(f'{YouTubeWorker.API_BASE}/search', headers=headers, params=sparams, timeout=5)
+                    if sresp.status_code == 200:
+                        sdata = sresp.json()
+                        sitems = sdata.get('items', [])
+                        if sitems:
+                            cid = sitems[0].get('id', {}).get('channelId')
+                            if cid:
+                                return cid
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            return None
+
+        # Prefer explicit channel ID (starts with UC...)
+        if username and isinstance(username, str) and username.startswith('UC') and len(username) == 24:
             channel_identifier = username
             logger.debug(f"[YouTubeConnector] Using provided channel ID: {channel_identifier}")
-        elif self.channel_id and not username.startswith('UC'):
-            if username != self.username:
-                platform_config = self.config.get_platform_config('youtube') if self.config else {}
-                streamer_channel_id = platform_config.get('channel_id', '')
-                if streamer_channel_id and streamer_channel_id != self.channel_id:
-                    channel_identifier = streamer_channel_id
-                    logger.debug(f"[YouTubeConnector] Bot connecting to streamer's channel ID: {channel_identifier}")
+        else:
+            # If a streamer channel_id is configured, prefer it
+            platform_config = self.config.get_platform_config('youtube') if self.config else {}
+            streamer_channel_id = platform_config.get('channel_id', '')
+            if streamer_channel_id:
+                channel_identifier = streamer_channel_id
+                logger.debug(f"[YouTubeConnector] Using configured streamer channel_id: {channel_identifier}")
+            else:
+                # Attempt to resolve username to channel ID
+                resolved = _resolve_channel_id_from_username(username)
+                if resolved:
+                    channel_identifier = resolved
+                    logger.debug(f"[YouTubeConnector] Resolved username '{username}' to channel ID: {channel_identifier}")
                 else:
                     channel_identifier = username
-                    logger.debug(f"[YouTubeConnector] Using provided username (may not find stream): {channel_identifier}")
-            else:
-                channel_identifier = self.channel_id
-                logger.debug(f"[YouTubeConnector] Using authenticated channel ID: {channel_identifier}")
-        else:
-            channel_identifier = username
-            logger.debug(f"[YouTubeConnector] Using username: {channel_identifier}")
+                    logger.debug(f"[YouTubeConnector] Using username as-is (may not resolve to channel ID): {channel_identifier}")
 
         # Create new worker and thread
         self.worker = YouTubeWorker(
@@ -188,7 +232,8 @@ class YouTubeConnector(BasePlatformConnector):
             response = requests.get(
                 'https://www.googleapis.com/youtube/v3/channels',
                 headers={'Authorization': f'Bearer {self.oauth_token}'},
-                params={'part': 'snippet', 'mine': 'true'}
+                params={'part': 'snippet', 'mine': 'true'},
+                timeout=10
             )
             if response.status_code == 200:
                 data = response.json()
@@ -220,11 +265,11 @@ class YouTubeConnector(BasePlatformConnector):
             try:
                     if self.worker_thread.isRunning():
                         self.worker_thread.quit()
-                        self.worker_thread.wait(5000)  # Wait up to 5 seconds
+                        self.worker_thread.wait(8000)  # Wait up to 8 seconds for polite stop
                         if self.worker_thread.isRunning():
                             logger.warning("[YouTubeConnector] Worker thread did not stop in time! Forcing terminate().")
                             self.worker_thread.terminate()
-                            self.worker_thread.wait(2000)
+                            self.worker_thread.wait(5000)
                             if self.worker_thread.isRunning():
                                 logger.error("[YouTubeConnector] Worker thread STILL running after terminate().")
             except Exception as e:
@@ -236,8 +281,22 @@ class YouTubeConnector(BasePlatformConnector):
     
     def send_message(self, message: str):
         """Send a message to YouTube chat"""
-        if self.worker and self.connected:
-            self.worker.send_message(message)
+        try:
+            # Prefer using the worker if available (worker handles live_chat_id and retries).
+            if self.worker:
+                try:
+                    result = self.worker.send_message(message)
+                    return bool(result)
+                except Exception as e:
+                    logger.exception(f"[YouTubeConnector] Worker send_message raised: {e}")
+                    return False
+
+            # If no worker exists but we have a token, we cannot reliably send without live_chat_id.
+            logger.warning("[YouTubeConnector] send_message called but worker missing; cannot send without live_chat_id")
+            return False
+        except Exception as e:
+            logger.exception(f"[YouTubeConnector] Exception while sending message: {e}")
+            return False
     
     def delete_message(self, message_id: str):
         """Delete a message from YouTube chat
@@ -397,6 +456,13 @@ class YouTubeWorker(QThread):
         self.last_message_time = None  # For health monitoring
         self.last_successful_poll = None  # Track polling health
         self.last_token_refresh = time.time()
+
+    def _interruptible_sleep(self, total_seconds: float, interval: float = 0.25):
+        """Sleep in short intervals checking self.running so the thread can stop promptly."""
+        waited = 0.0
+        while self.running and waited < total_seconds:
+            time.sleep(min(interval, total_seconds - waited))
+            waited += interval
     
     def run(self):
         # Prevent worker from running if disabled in config
@@ -424,7 +490,7 @@ class YouTubeWorker(QThread):
                         retry_count += 1
                         wait_time = min(2 ** retry_count, 60)  # Cap at 1 minute
                         self.error_signal.emit(f"No active live stream found (retrying in {wait_time}s)")
-                        time.sleep(wait_time)
+                        self._interruptible_sleep(wait_time)
                         continue
                     
                     # Reset retry count on success
@@ -448,20 +514,20 @@ class YouTubeWorker(QThread):
                             
                             self.fetch_messages()
                             self.last_successful_poll = time.time()
-                            time.sleep(2)  # Poll every 2 seconds
+                            self._interruptible_sleep(2)
                         except Exception as e:
                             logger.exception(f"[YouTubeWorker] Error in polling loop: {e}")
                             import traceback
                             traceback.print_exc()
                             self.error_signal.emit(f"Error fetching messages: {str(e)}")
-                            time.sleep(5)
+                            self._interruptible_sleep(5)
                             
                 except Exception as e:
                     retry_count += 1
                     wait_time = min(2 ** retry_count, 300)  # Cap at 5 minutes
                     self.error_signal.emit(f"Connection error (attempt {retry_count}): {str(e)}")
                     if self.running:
-                        time.sleep(wait_time)
+                        self._interruptible_sleep(wait_time)
                     else:
                         break
                     
@@ -487,7 +553,8 @@ class YouTubeWorker(QThread):
             response = requests.get(
                 f'{self.API_BASE}/search',
                 headers=headers,
-                params=params
+                params=params,
+                timeout=5
             )
             
             logger.debug(f"[YouTubeWorker] Search response status: {response.status_code}")
@@ -517,7 +584,8 @@ class YouTubeWorker(QThread):
                     response = requests.get(
                         f'{self.API_BASE}/search',
                         headers=headers,
-                        params=params
+                        params=params,
+                        timeout=5
                     )
                     logger.debug(f"[YouTubeWorker] Retry response status: {response.status_code}")
             
@@ -561,7 +629,8 @@ class YouTubeWorker(QThread):
             response = requests.get(
                 f'{self.API_BASE}/videos',
                 headers=headers,
-                params=params
+                params=params,
+                timeout=5
             )
             
             if response.status_code != 200:
@@ -602,7 +671,8 @@ class YouTubeWorker(QThread):
                     'client_secret': self.client_secret,
                     'refresh_token': self.refresh_token,
                     'grant_type': 'refresh_token'
-                }
+                },
+                timeout=5
             )
             
             if response.status_code == 200:
@@ -643,7 +713,8 @@ class YouTubeWorker(QThread):
             response = requests.get(
                 f'{self.API_BASE}/liveChat/messages',
                 headers=headers,
-                params=params
+                params=params,
+                timeout=2
             )
             
             # Check for quota exceeded error
@@ -780,18 +851,18 @@ class YouTubeWorker(QThread):
         """Send a message to YouTube chat"""
         if not self.live_chat_id or not self.oauth_token:
             logger.warning("[YouTubeWorker] Cannot send message: missing live_chat_id or oauth_token")
-            return
-        
+            return False
+
         try:
             # Debug: Show which token is being used
             token_prefix = self.oauth_token[:12] if self.oauth_token else "None"
             logger.debug(f"[YouTubeWorker] send_message: Using token (first 12 chars): {token_prefix}...")
-            
+
             headers = {
                 'Authorization': f'Bearer {self.oauth_token}',
                 'Content-Type': 'application/json'
             }
-            
+
             data = {
                 'snippet': {
                     'liveChatId': self.live_chat_id,
@@ -801,13 +872,16 @@ class YouTubeWorker(QThread):
                     }
                 }
             }
-            
+
             response = requests.post(
                 f'{self.API_BASE}/liveChat/messages?part=snippet',
                 headers=headers,
-                json=data
+                json=data,
+                timeout=10
             )
             response.raise_for_status()
-            
+            return True
+
         except Exception as e:
             self.error_signal.emit(f"Failed to send message: {str(e)}")
+            return False

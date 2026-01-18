@@ -15,3 +15,4 @@ opencv-python==4.9.0.80
 numpy<2
 WMI==1.5.1
 pywin32==311
+psutil>=5.9.0

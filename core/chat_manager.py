@@ -454,6 +454,15 @@ class ChatManager(QObject):
                 worker_connected = True
 
             logger.info(f"Bot connector found for {platform_id}, connected={getattr(bot_connector, 'connected', False)}, has_worker={has_worker}, worker_connected={worker_connected}")
+            # Extra diagnostics: if worker exists, log live_chat_id and last poll time
+            try:
+                worker = getattr(bot_connector, 'worker', None)
+                if worker is not None:
+                    lc = getattr(worker, 'live_chat_id', None)
+                    lpoll = getattr(worker, 'last_successful_poll', None)
+                    logger.debug(f"Bot worker diagnostics for {platform_id}: live_chat_id={lc} last_successful_poll={lpoll}")
+            except Exception:
+                pass
 
             try:
                 # Determine if bot can send messages

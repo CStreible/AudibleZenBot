@@ -170,6 +170,7 @@ class ConfigManager:
                 "auth_token": "",
                 "auto_start": True,
                     "region": "us",
+                    "kill_existing_on_startup": False,
                     "callback_port": 8889,
                     "tunnels": {
                     "kick": {"enabled": True, "port": 8889},

@@ -44,6 +44,16 @@ class NgrokManager(QObject):
     def __init__(self, config=None):
         super().__init__()
         self.config = config
+        # Optionally kill lingering ngrok processes from previous crashes
+        try:
+            if self.config and isinstance(self.config.get('ngrok', {}), dict):
+                if self.config.get('ngrok', {}).get('kill_existing_on_startup', False):
+                    try:
+                        self.kill_existing_processes()
+                    except Exception:
+                        logger.exception("Error attempting to kill existing ngrok processes")
+        except Exception:
+            pass
         self.tunnels: Dict[int, Dict[str, Any]] = {}  # port -> tunnel_info
         self.ngrok_process = None
         self.lock = Lock()
@@ -297,6 +307,97 @@ class NgrokManager(QObject):
         
         self.tunnels.clear()
         self.status_changed.emit("All tunnels stopped")
+
+    def kill_existing_processes(self):
+        """Terminate lingering ngrok processes on the host.
+
+        This prefers `psutil` if available; otherwise falls back to platform
+        specific commands (`taskkill` on Windows, `pkill` on POSIX).
+        """
+        logger.info("Attempting to terminate lingering ngrok processes...")
+        try:
+            try:
+                import psutil
+                killed = 0
+                targets = []
+                for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        name = (p.info.get('name') or '').lower()
+                        cmd = ' '.join(p.info.get('cmdline') or []).lower()
+                        if 'ngrok' in name or 'ngrok' in cmd:
+                            targets.append(p)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+
+                if not targets:
+                    logger.info("No lingering ngrok processes found via psutil")
+                    return
+
+                logger.info(f"Found {len(targets)} ngrok processes, attempting graceful terminate")
+                # Try polite termination first
+                for p in targets:
+                    try:
+                        logger.info(f"Terminating ngrok process PID={p.pid} CMD={' '.join(p.info.get('cmdline') or [])}")
+                        p.terminate()
+                        killed += 1
+                    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                        logger.debug(f"Could not terminate process PID={getattr(p, 'pid', 'unknown')}: {e}")
+                    except Exception as e:
+                        logger.warning(f"Failed to terminate ngrok PID={getattr(p, 'pid', 'unknown')}: {e}")
+
+                # Wait for processes to exit using psutil.wait_procs
+                try:
+                    gone, alive = psutil.wait_procs(targets, timeout=8)
+                    if alive:
+                        logger.info(f"Some ngrok processes still alive after terminate, forcing kill ({len(alive)})")
+                        for p in alive:
+                            try:
+                                p.kill()
+                            except Exception as e:
+                                logger.warning(f"Failed to kill ngrok PID={getattr(p, 'pid', 'unknown')}: {e}")
+                        # wait a short time for killed processes
+                        psutil.wait_procs(alive, timeout=5)
+                except Exception as e:
+                    logger.debug(f"psutil.wait_procs failed: {e}")
+
+                logger.info(f"Ngrok cleanup complete (psutil), attempted terminations: {killed}")
+                return
+            except ImportError:
+                logger.debug("psutil not available; falling back to platform commands for ngrok cleanup. Install psutil for more reliable cleanup: pip install psutil")
+
+            import subprocess, sys
+            try:
+                if sys.platform == 'win32':
+                    # Force kill ngrok.exe instances
+                    subprocess.call(['taskkill', '/f', '/im', 'ngrok.exe'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    # pkill will target processes with 'ngrok' in their name/command
+                    subprocess.call(['pkill', '-f', 'ngrok'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                # Wait for processes to disappear (poll)
+                timeout = 10.0
+                start = time.time()
+                while time.time() - start < timeout:
+                    # Check via platform process listing
+                    try:
+                        if sys.platform == 'win32':
+                            out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq ngrok.exe'], capture_output=True, text=True)
+                            if 'ngrok.exe' not in out.stdout:
+                                break
+                        else:
+                            out = subprocess.run(['pgrep', '-f', 'ngrok'], capture_output=True, text=True)
+                            if not out.stdout.strip():
+                                break
+                    except Exception:
+                        # If listing commands fail, just break to avoid infinite loop
+                        break
+                    time.sleep(0.5)
+
+                logger.info("Ngrok cleanup (fallback) executed")
+            except Exception:
+                logger.debug("Fallback ngrok kill attempted")
+        except Exception as e:
+            logger.exception(f"Error during ngrok cleanup: {e}")
     
     def get_tunnel_url(self, port: int) -> Optional[str]:
         """Get the public URL for a specific port (non-blocking)"""

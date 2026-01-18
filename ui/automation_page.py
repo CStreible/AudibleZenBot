@@ -1494,19 +1494,6 @@ QTabBar::tab:hover {
                     if connector and hasattr(connector, 'send_message') and getattr(connector, 'connected', False):
                         connector.send_message(message)
                         logger.info(f"[TimerMessages] ✓ YouTube: Sent via persistent streamer connection ({username})")
-                        
-                        # Echo the message to chat log
-                        from datetime import datetime
-                        metadata = {
-                            'timestamp': datetime.now(),
-                            'color': '#22B2B2',
-                            'badges': [],
-                            'emotes': ''
-                        }
-                        try:
-                            self.chat_manager.onMessageReceivedWithMetadata('youtube', username, message, metadata)
-                        except Exception:
-                            self.chat_manager.message_received.emit('youtube', username, message, metadata)
                         return True
                     else:
                         logger.warning(f"[TimerMessages] ✗ YouTube: Streamer connector not available")
@@ -1529,19 +1516,6 @@ QTabBar::tab:hover {
                     if connector and hasattr(connector, 'send_message') and getattr(connector, 'connected', False):
                         connector.send_message(message)
                         logger.info(f"[TimerMessages] ✓ Trovo: Sent via persistent streamer connection ({username})")
-                        
-                        # Echo the message to chat log
-                        from datetime import datetime
-                        metadata = {
-                            'timestamp': datetime.now(),
-                            'color': '#22B2B2',
-                            'badges': [],
-                            'emotes': ''
-                        }
-                        try:
-                            self.chat_manager.onMessageReceivedWithMetadata('trovo', username, message, metadata)
-                        except Exception:
-                            self.chat_manager.message_received.emit('trovo', username, message, metadata)
                         return True
                     else:
                         logger.warning(f"[TimerMessages] ✗ Trovo: Streamer connector not available")

@@ -458,6 +458,18 @@ class SettingsPage(QWidget):
             self.auto_start_checkbox.setChecked(ngrok_config.get('auto_start', True))
         layout.addWidget(self.auto_start_checkbox)
 
+        # Option: kill lingering ngrok processes on startup
+        self.kill_existing_checkbox = QCheckBox("Kill lingering ngrok processes on startup")
+        self.kill_existing_checkbox.setStyleSheet("color: #ffffff; font-size: 12px;")
+        try:
+            if self.config:
+                ngrok_config = self.config.get('ngrok', {})
+                self.kill_existing_checkbox.setChecked(bool(ngrok_config.get('kill_existing_on_startup', False)))
+        except Exception:
+            self.kill_existing_checkbox.setChecked(False)
+        self.kill_existing_checkbox.stateChanged.connect(lambda s: self.save_kill_existing_setting(bool(self.kill_existing_checkbox.isChecked())))
+        layout.addWidget(self.kill_existing_checkbox)
+
         # Shared callback port
         port_layout = QHBoxLayout()
         port_label = QLabel("Callback Port:")
@@ -1166,6 +1178,22 @@ class SettingsPage(QWidget):
             self.update_tunnel_info()
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to save callback port: {e}")
+
+    def save_kill_existing_setting(self, enabled: bool):
+        """Persist the 'kill existing ngrok processes on startup' setting."""
+        try:
+            if not self.config:
+                return
+            # Write the boolean flag into ngrok config
+            try:
+                self.config.set('ngrok.kill_existing_on_startup', bool(enabled))
+            except Exception:
+                logger.exception("Failed to persist ngrok.kill_existing_on_startup")
+
+            # Do not run cleanup now; it will be performed at next program startup
+            QMessageBox.information(self, "Saved", "Setting saved. If enabled, lingering ngrok processes will be terminated on next program start.")
+        except Exception:
+            pass
     
     def test_token(self):
         """Test ngrok connection"""

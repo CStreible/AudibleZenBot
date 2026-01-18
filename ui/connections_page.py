@@ -2206,6 +2206,54 @@ class PlatformConnectionWidget(QWidget):
                 import webbrowser
                 webbrowser.open(oauth_url)
                 logger.debug("[Twitch] Waiting for OAuth callback...")
+            elif self.platform_id == 'youtube':
+                # Use configured shared callback port for YouTube
+                try:
+                    from core.config import ConfigManager
+                    cfg = ConfigManager()
+                    callback_port = cfg.get('ngrok.callback_port', 8889)
+                except Exception:
+                    callback_port = 8889
+                # If our local HTTPServer is not bound to the callback_port, restart it to listen there
+                if port != callback_port:
+                    try:
+                        server.server_close()
+                    except Exception:
+                        pass
+                    port = callback_port
+                    server = HTTPServer(('localhost', port), CallbackHandler)
+                    server_thread = threading.Thread(target=lambda: server.handle_request())
+                    server_thread.daemon = True
+                    server_thread.start()
+
+                # Build Google OAuth URL
+                try:
+                    from urllib.parse import urlencode
+                    cfg = ConfigManager()
+                    ycfg = cfg.get_platform_config('youtube') or {}
+                    client_id = ycfg.get('client_id', '')
+                    redirect_uri = f"http://localhost:{port}/oauth/youtube"
+                    scopes = [
+                        "openid",
+                        "email",
+                        "profile",
+                        "https://www.googleapis.com/auth/youtube.readonly",
+                        "https://www.googleapis.com/auth/youtube"
+                    ]
+                    params = {
+                        'client_id': client_id,
+                        'redirect_uri': redirect_uri,
+                        'response_type': 'code',
+                        'scope': ' '.join(scopes),
+                        'access_type': 'offline',
+                        'prompt': 'consent'
+                    }
+                    oauth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+                    import webbrowser
+                    webbrowser.open(oauth_url)
+                    logger.info(f"[YouTube] Opened OAuth URL (redirect -> {redirect_uri})")
+                except Exception as e:
+                    logger.exception(f"[YouTube] Failed to start OAuth flow: {e}")
             elif self.platform_id == 'kick':
                 # ...existing Kick OAuth logic...
                 # Prefer client credentials from config
@@ -2740,8 +2788,10 @@ class PlatformConnectionWidget(QWidget):
                     self.onOAuthFailed(account_type, "No access token in response")
             elif self.platform_id == 'youtube':
                 YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-                YOUTUBE_REDIRECT_URI = "http://localhost:8880/callback"
                 cfg = ConfigManager()
+                # Use the configured shared callback port and the /oauth/<platform> path
+                callback_port = cfg.get('ngrok.callback_port', 8889)
+                YOUTUBE_REDIRECT_URI = f"http://localhost:{callback_port}/oauth/youtube"
                 ycfg = cfg.get_platform_config('youtube') if cfg else {}
                 client_id = ycfg.get('client_id', "44621719812-l23h29dbhqjfm6ln6buoojenmiocv1cp.apps.googleusercontent.com")
                 client_secret = ycfg.get('client_secret', "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")

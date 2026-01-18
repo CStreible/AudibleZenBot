@@ -90,6 +90,19 @@ class OAuthHandler(QObject):
             return
         
         config = self.CONFIGS[platform].copy()
+
+        # Ensure redirect_uri uses the configured callback port (ngrok/local)
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager()
+            port = int(cfg.get('ngrok.callback_port', 8889))
+        except Exception:
+            port = 8889
+        try:
+            # Use a stable callback path so providers can be configured with a single redirect URI
+            config['redirect_uri'] = f"http://localhost:{port}/oauth/{platform}"
+        except Exception:
+            pass
         
         # Override with provided credentials
         if client_id:
@@ -165,6 +178,9 @@ class OAuthHandler(QObject):
 
         # Use the shared callback server
         path = f"/oauth/{platform}/{state}"
+        # Also register a non-state path so providers that redirect to
+        # /oauth/<platform>?code=... (without the state segment) are handled.
+        path_no_state = f"/oauth/{platform}"
         event = threading.Event()
         container: dict[str, Optional[str]] = {'code': None}
 
@@ -184,6 +200,10 @@ class OAuthHandler(QObject):
 
         try:
             callback_server.register_route(path, _handler, methods=['GET'])
+            # Register the base platform path too; some providers (Google) send
+            # callbacks to /oauth/<platform> without including our generated state
+            # in the path. Registering both ensures we receive the code in either case.
+            callback_server.register_route(path_no_state, _handler, methods=['GET'])
             # Start server on configured callback port
             try:
                 from core.config import ConfigManager
@@ -196,9 +216,13 @@ class OAuthHandler(QObject):
 
             # Wait for code with timeout
             got = event.wait(timeout=120)
-            # Unregister route to clean up
+            # Unregister routes to clean up
             try:
                 callback_server.unregister_route(path)
+            except Exception:
+                pass
+            try:
+                callback_server.unregister_route(path_no_state)
             except Exception:
                 pass
 
