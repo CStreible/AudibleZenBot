@@ -8,6 +8,10 @@ import requests
 from platform_connectors.base_connector import BasePlatformConnector
 from PyQt6.QtCore import QThread, pyqtSignal
 from core.logger import get_logger
+try:
+    from core.http_session import make_retry_session
+except Exception:
+    make_retry_session = None
 
 logger = get_logger(__name__)
 
@@ -82,13 +86,15 @@ class TwitterConnector(BasePlatformConnector):
             return False
         
         try:
-            response = requests.post(
+            session = make_retry_session() if make_retry_session else requests.Session()
+            response = session.post(
                 'https://api.twitter.com/2/oauth2/token',
                 auth=(self.client_id, self.client_secret),
                 data={
                     'grant_type': 'refresh_token',
                     'refresh_token': self.refresh_token
-                }
+                },
+                timeout=10
             )
             
             if response.status_code == 200:
@@ -273,18 +279,30 @@ class TwitterWorker(QThread):
                     self.access_token,
                     self.access_token_secret
                 )
-                response = requests.get(
-                    f'{self.API_BASE}/users/by/username/{self.username}',
-                    auth=auth
-                )
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    response = session.get(
+                        f'{self.API_BASE}/users/by/username/{self.username}',
+                        auth=auth,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TwitterWorker] Network error getting user id (OAuth1): {e}")
+                    return False
             else:
                 headers = {
                     'Authorization': f'Bearer {self.oauth_token}'
                 }
-                response = requests.get(
-                    f'{self.API_BASE}/users/by/username/{self.username}',
-                    headers=headers
-                )
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    response = session.get(
+                        f'{self.API_BASE}/users/by/username/{self.username}',
+                        headers=headers,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TwitterWorker] Network error getting user id (bearer): {e}")
+                    return False
             
             if response.status_code == 200:
                 data = response.json()
@@ -328,20 +346,32 @@ class TwitterWorker(QThread):
                     self.access_token,
                     self.access_token_secret
                 )
-                response = requests.get(
-                    f'{self.API_BASE}/tweets/search/recent',
-                    auth=auth,
-                    params=params
-                )
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    response = session.get(
+                        f'{self.API_BASE}/tweets/search/recent',
+                        auth=auth,
+                        params=params,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TwitterWorker] Network error searching broadcasts (OAuth1): {e}")
+                    return
             else:
                 headers = {
                     'Authorization': f'Bearer {self.oauth_token}'
                 }
-                response = requests.get(
-                    f'{self.API_BASE}/tweets/search/recent',
-                    headers=headers,
-                    params=params
-                )
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    response = session.get(
+                        f'{self.API_BASE}/tweets/search/recent',
+                        headers=headers,
+                        params=params,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TwitterWorker] Network error searching broadcasts: {e}")
+                    return
             
             if response.status_code == 200:
                 data = response.json()
@@ -423,11 +453,17 @@ class TwitterWorker(QThread):
                     self.access_token,
                     self.access_token_secret
                 )
-                response = requests.get(
-                    f'{self.API_BASE}/users/{self.user_id}/mentions',
-                    auth=auth,
-                    params=params
-                )
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    response = session.get(
+                        f'{self.API_BASE}/users/{self.user_id}/mentions',
+                        auth=auth,
+                        params=params,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TwitterWorker] Network error fetching mentions: {e}")
+                    return
             else:
                 return
             
@@ -491,21 +527,33 @@ class TwitterWorker(QThread):
                     self.access_token,
                     self.access_token_secret
                 )
-                # Get user's timeline (tweets from followed accounts)
-                response = requests.get(
-                    f'{self.API_BASE}/users/{self.user_id}/timelines/reverse_chronological',
-                    auth=auth,
-                    params=params
-                )
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    # Get user's timeline (tweets from followed accounts)
+                    response = session.get(
+                        f'{self.API_BASE}/users/{self.user_id}/timelines/reverse_chronological',
+                        auth=auth,
+                        params=params,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TwitterWorker] Network error fetching timeline (OAuth1): {e}")
+                    return
             else:
                 headers = {
                     'Authorization': f'Bearer {self.oauth_token}'
                 }
-                response = requests.get(
-                    f'{self.API_BASE}/users/{self.user_id}/timelines/reverse_chronological',
-                    headers=headers,
-                    params=params
-                )
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    response = session.get(
+                        f'{self.API_BASE}/users/{self.user_id}/timelines/reverse_chronological',
+                        headers=headers,
+                        params=params,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TwitterWorker] Network error fetching timeline: {e}")
+                    return
             
             if response.status_code == 200:
                 data = response.json()
@@ -582,11 +630,17 @@ class TwitterWorker(QThread):
                     self.access_token,
                     self.access_token_secret
                 )
-                response = requests.get(
-                    f'{self.API_BASE}/users/{self.user_id}/tweets',
-                    auth=auth,
-                    params=params
-                )
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    response = session.get(
+                        f'{self.API_BASE}/users/{self.user_id}/tweets',
+                        auth=auth,
+                        params=params,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TwitterWorker] Network error fetching user tweets: {e}")
+                    return
             else:
                 return
             
@@ -621,11 +675,17 @@ class TwitterWorker(QThread):
                     self.access_token,
                     self.access_token_secret
                 )
-                response = requests.get(
-                    f'{self.API_BASE}/tweets/search/recent',
-                    auth=auth,
-                    params=params
-                )
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    response = session.get(
+                        f'{self.API_BASE}/tweets/search/recent',
+                        auth=auth,
+                        params=params,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TwitterWorker] Network error fetching conversation: {e}")
+                    return
             else:
                 return
             
@@ -670,14 +730,20 @@ class TwitterWorker(QThread):
             return False
         
         try:
-            response = requests.post(
-                'https://api.twitter.com/2/oauth2/token',
-                auth=(self.client_id, self.client_secret),
-                data={
-                    'grant_type': 'refresh_token',
-                    'refresh_token': self.refresh_token
-                }
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    'https://api.twitter.com/2/oauth2/token',
+                    auth=(self.client_id, self.client_secret),
+                    data={
+                        'grant_type': 'refresh_token',
+                        'refresh_token': self.refresh_token
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[TwitterWorker] Network error refreshing token: {e}")
+                return False
             
             if response.status_code == 200:
                 data = response.json()
@@ -710,12 +776,17 @@ class TwitterWorker(QThread):
             data = {
                 'text': message
             }
-            
-            response = requests.post(
-                f'{self.API_BASE}/tweets',
-                headers=headers,
-                json=data
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    f'{self.API_BASE}/tweets',
+                    headers=headers,
+                    json=data,
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[TwitterWorker] Network error sending tweet: {e}")
+                return
             
             if response.status_code == 201:
                 logger.info("Tweet sent successfully")

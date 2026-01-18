@@ -18,6 +18,10 @@ from core.logger import get_logger
 
 # Structured logger for this module
 logger = get_logger('TrovoConnector')
+try:
+    from core.http_session import make_retry_session
+except Exception:
+    make_retry_session = None
 
 
 class TrovoConnector(BasePlatformConnector):
@@ -175,38 +179,44 @@ class TrovoConnector(BasePlatformConnector):
                 'Client-ID': self.CLIENT_ID,
                 'Content-Type': 'application/json'
             }
-            
+
             data = {
                 'client_secret': self.CLIENT_SECRET,
                 'grant_type': 'refresh_token',
                 'refresh_token': self.refresh_token
             }
-            
-            response = requests.post(
-                'https://open-api.trovo.live/openplatform/refreshtoken',
-                headers=headers,
-                json=data
-            )
-            
+
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    'https://open-api.trovo.live/openplatform/refreshtoken',
+                    headers=headers,
+                    json=data,
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[Trovo] Network error refreshing token: {e}")
+                return False
+
             if response.status_code == 200:
                 token_data = response.json()
                 self.access_token = token_data.get('access_token', '')
                 new_refresh = token_data.get('refresh_token', '')
                 if new_refresh:
                     self.refresh_token = new_refresh
-                
+
                 # Persist refreshed tokens using ConfigManager to avoid races
-                    if self.config:
-                        self.config.set_platform_config('trovo', 'access_token', self.access_token)
-                        self.config.set_platform_config('trovo', 'refresh_token', self.refresh_token)
-                        logger.info(f"[Trovo] Saved refreshed tokens via ConfigManager")
-                
+                if self.config:
+                    self.config.set_platform_config('trovo', 'access_token', self.access_token)
+                    self.config.set_platform_config('trovo', 'refresh_token', self.refresh_token)
+                    logger.info(f"[Trovo] Saved refreshed tokens via ConfigManager")
+
                 logger.info("[Trovo] Access token refreshed successfully")
                 return True
             else:
                 logger.error(f"[Trovo] Token refresh failed: {response.status_code} - {response.text}")
                 return False
-                
+
         except Exception as e:
             logger.exception(f"[Trovo] Error refreshing token: {e}")
             return False
@@ -248,11 +258,17 @@ class TrovoConnector(BasePlatformConnector):
             }
             
             # DELETE /openplatform/channels/{channelID}/messages/{messageID}/users/{uID}
-            response = requests.delete(
-                f'https://open-api.trovo.live/openplatform/channels/{channel_id}/messages/{actual_message_id}/users/{user_id}',
-                headers=headers
-            )
-            
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.delete(
+                    f'https://open-api.trovo.live/openplatform/channels/{channel_id}/messages/{actual_message_id}/users/{user_id}',
+                    headers=headers,
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[Trovo] Network error deleting message: {e}")
+                return False
+
             if response.status_code == 200:
                 logger.info(f"[Trovo] Message deleted: {message_id}")
                 # Remove from cache after successful deletion
@@ -263,7 +279,6 @@ class TrovoConnector(BasePlatformConnector):
                 logger.error(f"[Trovo] Failed to delete message: {response.status_code}")
                 logger.debug(f"[Trovo] Response: {response.text}")
                 return False
-                
         except Exception as e:
             logger.exception(f"[Trovo] Error deleting message: {e}")
             return False
@@ -311,14 +326,20 @@ class TrovoConnector(BasePlatformConnector):
             }
             
             # Ban user via Trovo API
-            response = requests.post(
-                'https://open-api.trovo.live/openplatform/chat/ban',
-                headers=headers,
-                json={
-                    'user_id': user_id,
-                    'duration': 0  # 0 = permanent ban
-                }
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    'https://open-api.trovo.live/openplatform/chat/ban',
+                    headers=headers,
+                    json={
+                        'user_id': user_id,
+                        'duration': 0  # 0 = permanent ban
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[Trovo] Network error banning user: {e}")
+                return
             
             if response.status_code == 200:
                 logger.info(f"[Trovo] User banned: {username}")
@@ -402,12 +423,25 @@ class TrovoConnector(BasePlatformConnector):
                 'channel_id': str(channel_id)
             }
 
-            response = requests.post(
-                'https://open-api.trovo.live/openplatform/chat/send',
-                headers=headers,
-                json=data,
-                timeout=10
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    'https://open-api.trovo.live/openplatform/chat/send',
+                    headers=headers,
+                    json=data,
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[Trovo] Network error sending message: {e}")
+                # Persist failure then return
+                try:
+                    log_dir = os.path.join(os.getcwd(), 'logs')
+                    os.makedirs(log_dir, exist_ok=True)
+                    with open(os.path.join(log_dir, 'chatmanager_sends.log'), 'a', encoding='utf-8', errors='replace') as sf:
+                        sf.write(f"{time.time():.3f} platform=trovo event=send_network_error err={repr(str(e))}\n")
+                except Exception:
+                    pass
+                return False
 
             # Persist the HTTP response for offline diagnosis
             try:
@@ -428,12 +462,16 @@ class TrovoConnector(BasePlatformConnector):
                     logger.info(f"[Trovo] Token refreshed, retrying send...")
                     # Update headers with new token
                     headers['Authorization'] = f'OAuth {self.access_token}'
-                    response = requests.post(
-                        'https://open-api.trovo.live/openplatform/chat/send',
-                        headers=headers,
-                        json=data,
-                        timeout=10
-                    )
+                    try:
+                        response = session.post(
+                            'https://open-api.trovo.live/openplatform/chat/send',
+                            headers=headers,
+                            json=data,
+                            timeout=10
+                        )
+                    except requests.exceptions.RequestException as e:
+                        logger.exception(f"[Trovo] Network error retrying send after refresh: {e}")
+                        return False
                     if response.status_code == 200:
                         logger.info(f"[Trovo] Message sent successfully after token refresh: {message[:50]}...")
                         try:
@@ -546,7 +584,12 @@ class TrovoWorker(QThread):
             }
             logger.debug(f"[TrovoWorker] Requesting chat token with headers: {headers}")
             try:
-                resp = requests.get(self.TROVO_CHAT_TOKEN_URL, headers=headers, timeout=10)
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    resp = session.get(self.TROVO_CHAT_TOKEN_URL, headers=headers, timeout=10)
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[TrovoWorker] Network error requesting chat token: {e}")
+                    return None
                 logger.debug(f"[TrovoWorker] Response status: {resp.status_code}")
                 logger.debug(f"[TrovoWorker] Response headers: {resp.headers}")
                 logger.debug(f"[TrovoWorker] Response body: {resp.text}")
@@ -575,12 +618,17 @@ class TrovoWorker(QThread):
                                 'grant_type': 'refresh_token',
                                 'refresh_token': refresh_token
                             }
-                            r = requests.post(
-                                'https://open-api.trovo.live/openplatform/refreshtoken',
-                                headers=refresh_headers,
-                                json=refresh_data,
-                                timeout=10
-                            )
+                            session = make_retry_session() if make_retry_session else requests.Session()
+                            try:
+                                r = session.post(
+                                    'https://open-api.trovo.live/openplatform/refreshtoken',
+                                    headers=refresh_headers,
+                                    json=refresh_data,
+                                    timeout=10
+                                )
+                            except requests.exceptions.RequestException as e:
+                                logger.exception(f"[TrovoWorker] Network error during refresh attempt: {e}")
+                                return None
                             logger.debug(f"[TrovoWorker] Refresh response: {getattr(r, 'status_code', 'err')} {getattr(r, 'text', '')}")
                             if r.status_code == 200:
                                 token_data = r.json()
@@ -599,7 +647,11 @@ class TrovoWorker(QThread):
                                     logger.info("[TrovoWorker] Saved refreshed tokens via ConfigManager")
                                 # Retry chat token request once with new access token
                                 headers['Authorization'] = f"OAuth {self.access_token}"
-                                retry = requests.get(self.TROVO_CHAT_TOKEN_URL, headers=headers, timeout=10)
+                                try:
+                                    retry = session.get(self.TROVO_CHAT_TOKEN_URL, headers=headers, timeout=10)
+                                except requests.exceptions.RequestException as e:
+                                    logger.exception(f"[TrovoWorker] Network error on retrying chat token: {e}")
+                                    return None
                                 logger.debug(f"[TrovoWorker] Retry response: {retry.status_code} {getattr(retry, 'text', '')}")
                                 if retry.status_code == 200:
                                     data = retry.json()

@@ -24,7 +24,7 @@ sys.excepthook = log_unhandled_exception
 import os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QPushButton, QStackedWidget, QLabel, QFrame
+    QPushButton, QStackedWidget, QLabel, QFrame, QScrollArea
 )
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QIcon, QFont
@@ -98,15 +98,61 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AudibleZenBot - Multi-Platform Chat Bot")
-        self.setGeometry(100, 100, 1200, 800)
+        # Initialize config manager early so we can restore window geometry before showing
+        self.config = ConfigManager()
+
+        # Try to restore saved window geometry from config; otherwise use ~50% screen size
+        try:
+            screen = QApplication.primaryScreen()
+            geom = screen.availableGeometry() if screen else None
+        except Exception:
+            geom = None
+
+        saved = self.config.get('ui.window', {}) or {}
+        try:
+            sx = saved.get('x')
+            sy = saved.get('y')
+            sw = saved.get('width')
+            sh = saved.get('height')
+        except Exception:
+            sx = sy = sw = sh = None
+
+        if sw and sh:
+            w = int(sw)
+            h = int(sh)
+        elif geom:
+            w = int(geom.width() * 0.5)
+            h = int(geom.height() * 0.5)
+        else:
+            w = 1200
+            h = 800
+
+        if sx is not None and sy is not None:
+            try:
+                self.setGeometry(int(sx), int(sy), w, h)
+            except Exception:
+                # Fallback to center on primary screen
+                if geom:
+                    x = geom.x() + (geom.width() - w) // 2
+                    y = geom.y() + (geom.height() - h) // 2
+                    self.setGeometry(x, y, w, h)
+                else:
+                    self.setGeometry(100, 100, w, h)
+        else:
+            # Center default size on primary screen if possible
+            if geom:
+                x = geom.x() + (geom.width() - w) // 2
+                y = geom.y() + (geom.height() - h) // 2
+                self.setGeometry(x, y, w, h)
+            else:
+                self.setGeometry(100, 100, w, h)
         
         # Set window icon for taskbar
         icon_path = self.get_resource_path("resources/icons/app_icon.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         
-        # Initialize config manager
-        self.config = ConfigManager()
+        # config already initialized above
         
         # Initialize ngrok manager
         self.ngrok_manager = NgrokManager(self.config)
@@ -221,16 +267,29 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage(self.ngrok_manager, self.config, self.log_manager)
         self.overlay_page = OverlayPage(self.overlay_server, self.config)
         self.automation_page = AutomationPage(self.chat_manager, self.config)
+
+        # Helper to wrap pages in scroll areas so they always support scrolling
+        def _wrap_in_scroll(widget: QWidget) -> QScrollArea:
+            sa = QScrollArea()
+            sa.setWidgetResizable(True)
+            # Ensure the widget has no parent before embedding
+            try:
+                widget.setParent(None)
+            except Exception:
+                pass
+            sa.setWidget(widget)
+            return sa
         
         # Connect settings signals to chat page
         self.settings_page.colors_updated.connect(self.on_username_colors_updated)
         
-        # Add pages to stack
+        # Add pages to stack. Keep ChatPage unwrapped so its chat area can resize
+        # independently; wrap other pages in scroll areas so their controls can scroll.
         self.content_stack.addWidget(self.chat_page)
-        self.content_stack.addWidget(self.connections_page)
-        self.content_stack.addWidget(self.settings_page)
-        self.content_stack.addWidget(self.overlay_page)
-        self.content_stack.addWidget(self.automation_page)
+        self.content_stack.addWidget(_wrap_in_scroll(self.connections_page))
+        self.content_stack.addWidget(_wrap_in_scroll(self.settings_page))
+        self.content_stack.addWidget(_wrap_in_scroll(self.overlay_page))
+        self.content_stack.addWidget(_wrap_in_scroll(self.automation_page))
         
         # Add widgets to main layout
         main_layout.addWidget(self.sidebar)
@@ -358,7 +417,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'log_manager') and self.log_manager:
             print("\n📝 Closing log file...")
             self.log_manager.cleanup()
-        
+
+        # Persist window geometry (position + size)
+        try:
+            geom = self.geometry()
+            self.config.set('ui.window.x', int(geom.x()))
+            self.config.set('ui.window.y', int(geom.y()))
+            self.config.set('ui.window.width', int(geom.width()))
+            self.config.set('ui.window.height', int(geom.height()))
+        except Exception as e:
+            print(f"[Main] Failed to persist window geometry: {e}")
+
         event.accept()
 
     def _start_trovo_support_servers(self):

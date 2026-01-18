@@ -15,9 +15,29 @@ from platform_connectors.base_connector import BasePlatformConnector
 from core.badge_manager import get_badge_manager
 import websockets
 from core.logger import get_logger
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 # Structured logger for this module
 logger = get_logger('TwitchConnector')
+
+
+def _make_retry_session(total: int = 3, backoff_factor: float = 1.0):
+    """Create a requests.Session with urllib3 Retry configured.
+
+    Returns a session configured to retry on common transient HTTP errors.
+    """
+    session = requests.Session()
+    retries = Retry(
+        total=total,
+        backoff_factor=backoff_factor,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    return session
 
 
 class TwitchConnector(BasePlatformConnector):
@@ -392,7 +412,14 @@ class TwitchConnector(BasePlatformConnector):
             return False
 
         try:
-            response = requests.post(
+            # Use a session with retries for transient network issues
+            session = requests.Session()
+            retries = Retry(total=3, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("POST",))
+            adapter = HTTPAdapter(max_retries=retries)
+            session.mount('https://', adapter)
+            session.mount('http://', adapter)
+
+            response = session.post(
                 'https://id.twitch.tv/oauth2/token',
                 data={
                     'client_id': self.client_id,
@@ -423,8 +450,6 @@ class TwitchConnector(BasePlatformConnector):
                         else:
                             self.config.set_platform_config('twitch', 'oauth_token', self.oauth_token)
                             self.config.set_platform_config('twitch', 'streamer_refresh_token', self.refresh_token)
-
-                        # No legacy compatibility writes; persist canonical twitch platform keys only
                 except Exception as e:
                     logger.warning(f"[TwitchConnector] Warning: failed to persist refreshed token: {e}")
 
@@ -438,11 +463,16 @@ class TwitchConnector(BasePlatformConnector):
             else:
                 logger.error(f"[TwitchConnector] Token refresh failed: {response.status_code}")
                 logger.debug(f"Response: {response.text}")
-                return False
+                # Treat non-400 failures as transient so caller can decide
+                return None
 
+        except requests.exceptions.RequestException as e:
+            # Network-level/transient failure - do not treat as invalid token
+            logger.exception(f"[TwitchConnector] Network error refreshing token: {e}")
+            return None
         except Exception as e:
             logger.exception(f"[TwitchConnector] Error refreshing token: {e}")
-            return False
+            return None
 
     def _on_eventsub_reauth_requested(self, oauth_url: str):
         """Handle EventSub worker request to re-authorize the app.
@@ -474,7 +504,14 @@ class TwitchConnector(BasePlatformConnector):
             logger.exception(f"[TwitchConnector] Error showing re-auth dialog: {e}")
         
         try:
-            response = requests.post(
+            # Use a session with retries to be resilient to transient network issues
+            session = requests.Session()
+            retries = Retry(total=3, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("POST",))
+            adapter = HTTPAdapter(max_retries=retries)
+            session.mount('https://', adapter)
+            session.mount('http://', adapter)
+
+            response = session.post(
                 'https://id.twitch.tv/oauth2/token',
                 data={
                     'client_id': self.client_id,
@@ -501,10 +538,14 @@ class TwitchConnector(BasePlatformConnector):
             else:
                 logger.error(f"Token refresh failed: {response.status_code}")
                 logger.debug(f"Response: {response.text}")
-                return False
+                return None
 
+        except requests.exceptions.RequestException as e:
+            logger.exception(f"Error refreshing token (network): {e}")
+            return None
         except Exception as e:
             logger.exception(f"Error refreshing token: {e}")
+            return None
     
     def disconnect(self):
         """Disconnect from Twitch"""
@@ -577,12 +618,18 @@ class TwitchConnector(BasePlatformConnector):
             # Get broadcaster ID if not cached
             if not hasattr(self, 'broadcaster_id') or not self.broadcaster_id:
                 # Fetch broadcaster ID from username
-                user_response = requests.get(
-                    'https://api.twitch.tv/helix/users',
-                    headers=headers,
-                    params={'login': self.username}
-                )
-                
+                try:
+                    session = _make_retry_session()
+                    user_response = session.get(
+                        'https://api.twitch.tv/helix/users',
+                        headers=headers,
+                        params={'login': self.username},
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[Twitch] Network error fetching broadcaster ID: {e}")
+                    return
+
                 if user_response.status_code == 200:
                     users = user_response.json().get('data', [])
                     if users:
@@ -596,15 +643,21 @@ class TwitchConnector(BasePlatformConnector):
                     return
             
             # Delete message via Twitch API
-            response = requests.delete(
-                f'https://api.twitch.tv/helix/moderation/chat',
-                headers=headers,
-                params={
-                    'broadcaster_id': self.broadcaster_id,
-                    'moderator_id': self.broadcaster_id,
-                    'message_id': message_id
-                }
-            )
+            try:
+                session = _make_retry_session()
+                response = session.delete(
+                    f'https://api.twitch.tv/helix/moderation/chat',
+                    headers=headers,
+                    params={
+                        'broadcaster_id': self.broadcaster_id,
+                        'moderator_id': self.broadcaster_id,
+                        'message_id': message_id
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[Twitch] Network error deleting message: {e}")
+                return False
             
             if response.status_code == 204:
                 logger.info(f"[Twitch] Message deleted: {message_id}")
@@ -629,11 +682,17 @@ class TwitchConnector(BasePlatformConnector):
             # Get broadcaster ID if not cached
             if not getattr(self, 'broadcaster_id', None):
                 # Fetch broadcaster ID from username
-                user_response = requests.get(
-                    'https://api.twitch.tv/helix/users',
-                    headers=headers,
-                    params={'login': self.username}
-                )
+                try:
+                    session = _make_retry_session()
+                    user_response = session.get(
+                        'https://api.twitch.tv/helix/users',
+                        headers=headers,
+                        params={'login': self.username},
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[Twitch] Network error fetching broadcaster ID: {e}")
+                    return None
 
                 if user_response.status_code == 200:
                     users = user_response.json().get('data', [])
@@ -647,14 +706,20 @@ class TwitchConnector(BasePlatformConnector):
                     return None
 
             # Fetch custom reward details
-            response = requests.get(
-                'https://api.twitch.tv/helix/channel_points/custom_rewards',
-                headers=headers,
-                params={
-                    'broadcaster_id': self.broadcaster_id,
-                    'id': reward_id
-                }
-            )
+            try:
+                session = _make_retry_session()
+                response = session.get(
+                    'https://api.twitch.tv/helix/channel_points/custom_rewards',
+                    headers=headers,
+                    params={
+                        'broadcaster_id': self.broadcaster_id,
+                        'id': reward_id
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[Twitch] Network error fetching custom reward: {e}")
+                return None
 
             if response.status_code == 200:
                 rewards = response.json().get('data', [])
@@ -689,11 +754,17 @@ class TwitchConnector(BasePlatformConnector):
             
             # Get user ID if not provided
             if not user_id:
-                user_response = requests.get(
-                    'https://api.twitch.tv/helix/users',
-                    headers=headers,
-                    params={'login': username}
-                )
+                try:
+                    session = _make_retry_session()
+                    user_response = session.get(
+                        'https://api.twitch.tv/helix/users',
+                        headers=headers,
+                        params={'login': username},
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[Twitch] Network error fetching user ID for ban: {e}")
+                    return
                 if user_response.status_code == 200:
                         users = user_response.json().get('data', [])
                         if users:
@@ -706,12 +777,17 @@ class TwitchConnector(BasePlatformConnector):
             # Get broadcaster ID if not cached
             if not hasattr(self, 'broadcaster_id') or not self.broadcaster_id:
                 # Fetch broadcaster ID from username
-                broadcaster_response = requests.get(
-                    'https://api.twitch.tv/helix/users',
-                    headers=headers,
-                    params={'login': self.username}
-                )
-                
+                try:
+                    session = _make_retry_session()
+                    broadcaster_response = session.get(
+                        'https://api.twitch.tv/helix/users',
+                        headers=headers,
+                        params={'login': self.username},
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[Twitch] Network error fetching broadcaster ID for ban: {e}")
+                    return
                 if broadcaster_response.status_code == 200:
                     users = broadcaster_response.json().get('data', [])
                     if users:
@@ -725,18 +801,23 @@ class TwitchConnector(BasePlatformConnector):
                     return
             
             # Ban user via Twitch API
-            response = requests.post(
-                'https://api.twitch.tv/helix/moderation/bans',
-                headers=headers,
-                json={
-                    'data': {
-                        'user_id': user_id,
-                        'broadcaster_id': self.broadcaster_id,
-                        'moderator_id': self.broadcaster_id
-                    }
-                }
-            )
-            
+            try:
+                session = _make_retry_session()
+                response = session.post(
+                    'https://api.twitch.tv/helix/moderation/bans',
+                    headers=headers,
+                    json={
+                        'data': {
+                            'user_id': user_id,
+                            'broadcaster_id': self.broadcaster_id,
+                            'moderator_id': self.broadcaster_id
+                        }
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[Twitch] Network error banning user: {e}")
+                return
             if response.status_code == 200:
                 logger.info(f"[Twitch] User banned: {username}")
             else:
@@ -1095,7 +1176,14 @@ class TwitchWorker(QThread):
             return
         
         try:
-            response = requests.post(
+            # Use a short-lived session with retries to avoid transient failures
+            session = requests.Session()
+            retries = Retry(total=2, backoff_factor=0.5, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("POST",))
+            adapter = HTTPAdapter(max_retries=retries)
+            session.mount('https://', adapter)
+            session.mount('http://', adapter)
+
+            response = session.post(
                 'https://id.twitch.tv/oauth2/token',
                 data={
                     'client_id': self.client_id,
@@ -1105,7 +1193,7 @@ class TwitchWorker(QThread):
                 },
                 timeout=10
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 self.oauth_token = data.get('access_token', self.oauth_token)
@@ -1740,11 +1828,16 @@ class TwitchEventSubWorker(QThread):
     async def validate_token(self):
         """Validate OAuth token and show granted scopes"""
         try:
-            response = requests.get(
-                'https://id.twitch.tv/oauth2/validate',
-                headers={'Authorization': f'OAuth {self.oauth_token}'},
-                timeout=10
-            )
+            try:
+                session = _make_retry_session()
+                response = session.get(
+                    'https://id.twitch.tv/oauth2/validate',
+                    headers={'Authorization': f'OAuth {self.oauth_token}'},
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[EventSub] Network error validating token: {e}")
+                return
 
             if response.status_code == 200:
                 data = response.json()
@@ -1887,12 +1980,17 @@ class TwitchEventSubWorker(QThread):
                 'Authorization': f'Bearer {self.oauth_token}'
             }
             
-            response = requests.get(
-                'https://api.twitch.tv/helix/users',
-                headers=headers,
-                params={'login': self.broadcaster_login},
-                timeout=10
-            )
+            try:
+                session = _make_retry_session()
+                response = session.get(
+                    'https://api.twitch.tv/helix/users',
+                    headers=headers,
+                    params={'login': self.broadcaster_login},
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[EventSub] Network error fetching broadcaster ID: {e}")
+                return
             
             if response.status_code == 200:
                 users = response.json().get('data', [])
@@ -1971,12 +2069,17 @@ class TwitchEventSubWorker(QThread):
                 }
                 
                 logger.info(f"[EventSub] Subscribing to {sub['name']}...")
-                response = requests.post(
-                    'https://api.twitch.tv/helix/eventsub/subscriptions',
-                    headers=headers,
-                    json=subscription_data,
-                    timeout=10
-                )
+                try:
+                    session = _make_retry_session()
+                    response = session.post(
+                        'https://api.twitch.tv/helix/eventsub/subscriptions',
+                        headers=headers,
+                        json=subscription_data,
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[EventSub] Network error subscribing to {sub['name']}: {e}")
+                    continue
                 
                 if response.status_code == 202:
                     result = response.json()

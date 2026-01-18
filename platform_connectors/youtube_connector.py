@@ -8,6 +8,10 @@ from platform_connectors.base_connector import BasePlatformConnector
 from PyQt6.QtCore import QThread, pyqtSignal
 import requests
 from core.logger import get_logger
+try:
+    from core.http_session import make_retry_session
+except Exception:
+    make_retry_session = None
 
 logger = get_logger(__name__)
 
@@ -83,7 +87,8 @@ class YouTubeConnector(BasePlatformConnector):
             return False
         
         try:
-            response = requests.post(
+            session = make_retry_session() if make_retry_session else requests.Session()
+            response = session.post(
                 self.DEFAULT_TOKEN_URI,
                 data={
                     'client_id': self.client_id,
@@ -155,13 +160,14 @@ class YouTubeConnector(BasePlatformConnector):
                     params['forUsername'] = name
                 # Try channels?forUsername first
                 try:
-                    resp = requests.get(f'{YouTubeWorker.API_BASE}/channels', headers=headers, params=params, timeout=5)
+                    session = make_retry_session() if make_retry_session else requests.Session()
+                    resp = session.get(f'{YouTubeWorker.API_BASE}/channels', headers=headers, params=params, timeout=5)
                     if resp.status_code == 200:
                         data = resp.json()
                         items = data.get('items', [])
                         if items:
                             return items[0].get('id')
-                except Exception:
+                except requests.exceptions.RequestException:
                     pass
 
                 # Fallback: search for channel by query
@@ -171,7 +177,8 @@ class YouTubeConnector(BasePlatformConnector):
                 else:
                     sparams['key'] = self.api_key
                 try:
-                    sresp = requests.get(f'{YouTubeWorker.API_BASE}/search', headers=headers, params=sparams, timeout=5)
+                    session = make_retry_session() if make_retry_session else requests.Session()
+                    sresp = session.get(f'{YouTubeWorker.API_BASE}/search', headers=headers, params=sparams, timeout=5)
                     if sresp.status_code == 200:
                         sdata = sresp.json()
                         sitems = sdata.get('items', [])
@@ -179,7 +186,7 @@ class YouTubeConnector(BasePlatformConnector):
                             cid = sitems[0].get('id', {}).get('channelId')
                             if cid:
                                 return cid
-                except Exception:
+                except requests.exceptions.RequestException:
                     pass
             except Exception:
                 pass
@@ -229,12 +236,18 @@ class YouTubeConnector(BasePlatformConnector):
     def check_authenticated_user(self):
         """Check which YouTube account is authenticated"""
         try:
-            response = requests.get(
-                'https://www.googleapis.com/youtube/v3/channels',
-                headers={'Authorization': f'Bearer {self.oauth_token}'},
-                params={'part': 'snippet', 'mine': 'true'},
-                timeout=10
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.get(
+                    'https://www.googleapis.com/youtube/v3/channels',
+                    headers={'Authorization': f'Bearer {self.oauth_token}'},
+                    params={'part': 'snippet', 'mine': 'true'},
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[YouTube] Network error checking authenticated user: {e}")
+                return
+
             if response.status_code == 200:
                 data = response.json()
                 if data.get('items'):
@@ -315,11 +328,17 @@ class YouTubeConnector(BasePlatformConnector):
             }
             
             logger.info(f"[YouTube] Attempting to delete message: {message_id}")
-            response = requests.delete(
-                f'{YouTubeWorker.API_BASE}/liveChat/messages',
-                headers=headers,
-                params={'id': message_id}
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.delete(
+                    f'{YouTubeWorker.API_BASE}/liveChat/messages',
+                    headers=headers,
+                    params={'id': message_id},
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[YouTube] Network error deleting message: {e}")
+                return
             
             # Check for token expiration
             if response.status_code == 401:
@@ -329,11 +348,16 @@ class YouTubeConnector(BasePlatformConnector):
                         self.oauth_token = self.worker.oauth_token
                         # Retry with new token
                         headers['Authorization'] = f'Bearer {self.oauth_token}'
-                        response = requests.delete(
-                            f'{YouTubeWorker.API_BASE}/liveChat/messages',
-                            headers=headers,
-                            params={'id': message_id}
-                        )
+                        try:
+                            response = session.delete(
+                                f'{YouTubeWorker.API_BASE}/liveChat/messages',
+                                headers=headers,
+                                params={'id': message_id},
+                                timeout=10
+                            )
+                        except requests.exceptions.RequestException as e:
+                            logger.exception(f"[YouTube] Network error retrying delete: {e}")
+                            return
             
             if response.status_code == 204:
                 logger.info(f"[YouTube] ✓ Message deleted successfully from YouTube's servers")
@@ -372,21 +396,27 @@ class YouTubeConnector(BasePlatformConnector):
             }
             
             # Ban user via YouTube API
-            response = requests.post(
-                f'{YouTubeWorker.API_BASE}/liveChat/bans',
-                headers=headers,
-                params={'part': 'snippet'},
-                json={
-                    'snippet': {
-                        'liveChatId': self.worker.live_chat_id if hasattr(self.worker, 'live_chat_id') else '',
-                        'type': 'permanent',
-                        'bannedUserDetails': {
-                            'channelId': user_id
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    f'{YouTubeWorker.API_BASE}/liveChat/bans',
+                    headers=headers,
+                    params={'part': 'snippet'},
+                    json={
+                        'snippet': {
+                            'liveChatId': self.worker.live_chat_id if hasattr(self.worker, 'live_chat_id') else '',
+                            'type': 'permanent',
+                            'bannedUserDetails': {
+                                'channelId': user_id
+                            }
                         }
-                    }
-                }
-            )
-            
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[YouTube] Network error banning user: {e}")
+                return
+
             if response.status_code == 200:
                 logger.info(f"[YouTube] User banned: {username}")
             else:
@@ -550,12 +580,18 @@ class YouTubeWorker(QThread):
             else:
                 params['key'] = self.api_key
             
-            response = requests.get(
-                f'{self.API_BASE}/search',
-                headers=headers,
-                params=params,
-                timeout=5
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.get(
+                    f'{self.API_BASE}/search',
+                    headers=headers,
+                    params=params,
+                    timeout=5
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[YouTubeWorker] Network error searching for live broadcast: {e}")
+                self.error_signal.emit(f"Network error searching for live broadcast: {e}")
+                return False
             
             logger.debug(f"[YouTubeWorker] Search response status: {response.status_code}")
             
@@ -581,13 +617,18 @@ class YouTubeWorker(QThread):
                     logger.info(f"[YouTubeWorker] Token refreshed, retrying search...")
                     # Retry with new token
                     headers['Authorization'] = f'Bearer {self.oauth_token}'
-                    response = requests.get(
-                        f'{self.API_BASE}/search',
-                        headers=headers,
-                        params=params,
-                        timeout=5
-                    )
-                    logger.debug(f"[YouTubeWorker] Retry response status: {response.status_code}")
+                    try:
+                        response = session.get(
+                            f'{self.API_BASE}/search',
+                            headers=headers,
+                            params=params,
+                            timeout=5
+                        )
+                        logger.debug(f"[YouTubeWorker] Retry response status: {response.status_code}")
+                    except requests.exceptions.RequestException as e:
+                        logger.exception(f"[YouTubeWorker] Network error retrying search: {e}")
+                        self.error_signal.emit(f"Network error retrying search: {e}")
+                        return False
             
             if response.status_code != 200:
                 logger.error(f"[YouTubeWorker] Search failed: {response.text}")
@@ -626,13 +667,19 @@ class YouTubeWorker(QThread):
             else:
                 params['key'] = self.api_key
             
-            response = requests.get(
-                f'{self.API_BASE}/videos',
-                headers=headers,
-                params=params,
-                timeout=5
-            )
-            
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.get(
+                    f'{self.API_BASE}/videos',
+                    headers=headers,
+                    params=params,
+                    timeout=5
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[YouTubeWorker] Network error getting chat ID: {e}")
+                self.error_signal.emit(f"Network error getting chat ID: {e}")
+                return False
+
             if response.status_code != 200:
                 logger.error(f"[YouTubeWorker] Get chat ID failed: {response.status_code} - {response.text}")
                 response.raise_for_status()
@@ -664,17 +711,22 @@ class YouTubeWorker(QThread):
             return False
         
         try:
-            response = requests.post(
-                self.TOKEN_URI,
-                data={
-                    'client_id': self.client_id,
-                    'client_secret': self.client_secret,
-                    'refresh_token': self.refresh_token,
-                    'grant_type': 'refresh_token'
-                },
-                timeout=5
-            )
-            
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    self.TOKEN_URI,
+                    data={
+                        'client_id': self.client_id,
+                        'client_secret': self.client_secret,
+                        'refresh_token': self.refresh_token,
+                        'grant_type': 'refresh_token'
+                    },
+                    timeout=5
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[YouTubeWorker] Network error refreshing worker token: {e}")
+                return False
+
             if response.status_code == 200:
                 data = response.json()
                 self.oauth_token = data.get('access_token')
@@ -710,12 +762,18 @@ class YouTubeWorker(QThread):
             else:
                 params['key'] = self.api_key
             
-            response = requests.get(
-                f'{self.API_BASE}/liveChat/messages',
-                headers=headers,
-                params=params,
-                timeout=2
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.get(
+                    f'{self.API_BASE}/liveChat/messages',
+                    headers=headers,
+                    params=params,
+                    timeout=2
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[YouTubeWorker] Network error fetching messages: {e}")
+                self.error_signal.emit(f"Network error fetching messages: {e}")
+                return
             
             # Check for quota exceeded error
             if response.status_code == 403:
@@ -873,14 +931,23 @@ class YouTubeWorker(QThread):
                 }
             }
 
-            response = requests.post(
-                f'{self.API_BASE}/liveChat/messages?part=snippet',
-                headers=headers,
-                json=data,
-                timeout=10
-            )
-            response.raise_for_status()
-            return True
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    f'{self.API_BASE}/liveChat/messages?part=snippet',
+                    headers=headers,
+                    json=data,
+                    timeout=10
+                )
+                response.raise_for_status()
+                return True
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[YouTubeWorker] Network error sending message: {e}")
+                self.error_signal.emit(f"Failed to send message due to network error: {e}")
+                return False
+            except Exception as e:
+                self.error_signal.emit(f"Failed to send message: {str(e)}")
+                return False
 
         except Exception as e:
             self.error_signal.emit(f"Failed to send message: {str(e)}")

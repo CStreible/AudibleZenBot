@@ -18,6 +18,24 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _make_retry_session(total: int = 3, backoff_factor: float = 1.0):
+    """Create a requests.Session with urllib3 Retry configured for transient errors."""
+    from requests.adapters import HTTPAdapter
+    from urllib3.util import Retry
+
+    session = requests.Session()
+    retries = Retry(
+        total=total,
+        backoff_factor=backoff_factor,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    return session
+
+
 class DLiveConnector(BasePlatformConnector):
     """Connector for DLive chat"""
     
@@ -104,21 +122,27 @@ class DLiveConnector(BasePlatformConnector):
             }
             '''
             
-            response = requests.post(
-                'https://graphigo.prd.dlive.tv/',
-                headers={
-                    'Authorization': self.access_token,
-                    'Content-Type': 'application/json'
-                },
-                json={
-                    'query': mutation,
-                    'variables': {
-                        'streamer': self.username,
-                        'username': username
-                    }
-                }
-            )
-            
+            try:
+                session = _make_retry_session()
+                response = session.post(
+                    'https://graphigo.prd.dlive.tv/',
+                    headers={
+                        'Authorization': self.access_token,
+                        'Content-Type': 'application/json'
+                    },
+                    json={
+                        'query': mutation,
+                        'variables': {
+                            'streamer': self.username,
+                            'username': username
+                        }
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[DLive] Network error banning user: {e}")
+                return
+
             if response.status_code == 200:
                 logger.info(f"[DLive] User banned: {username}")
             else:
@@ -174,6 +198,10 @@ class DLiveWorker(QThread):
         self.last_message_time = None
         self.health_check_interval = 30  # Check every 30 seconds
         self.connection_timeout = 120  # Consider dead after 2 minutes of silence
+        # WebSocket open/connect timeout (seconds)
+        self.open_timeout = 10
+        # Ping interval for websockets (None -> library default)
+        self.ping_interval = 20
     
     def resolve_username(self):
         """Resolve display name to actual DLive username"""
@@ -202,15 +230,20 @@ class DLiveWorker(QThread):
             if token:
                 headers["Authorization"] = token
             
-            response = requests.post(
-                self.GRAPHQL_URL,
-                headers=headers,
-                json={
-                    "query": query,
-                    "variables": {"displayname": self.displayname}
-                },
-                timeout=10
-            )
+            try:
+                session = _make_retry_session()
+                response = session.post(
+                    self.GRAPHQL_URL,
+                    headers=headers,
+                    json={
+                        "query": query,
+                        "variables": {"displayname": self.displayname}
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[DLiveWorker] Network error resolving username: {e}")
+                return False
             
             if response.status_code == 200:
                 data = response.json()
@@ -272,24 +305,30 @@ class DLiveWorker(QThread):
             try:
                 logger.info(f"[DLiveWorker] Connection attempt {retry_count + 1}/{max_retries}")
                 await self.connect_and_listen()
-                # If we get here, connection ended normally (not an error)
-                logger.info("[DLiveWorker] Connection ended normally")
+                # If we get here, connect_and_listen returned without raising.
+                # Treat that as a clean exit (no retry).
+                logger.info("[DLiveWorker] connect_and_listen returned (clean exit)")
                 break
+            except asyncio.CancelledError:
+                # Treat cancellation as transient and attempt retry with backoff
+                retry_count += 1
+                logger.warning(f"[DLiveWorker] Connection cancelled (attempt {retry_count}) - will retry")
             except Exception as e:
                 retry_count += 1
                 logger.warning(f"[DLiveWorker] Connection failed: {type(e).__name__}: {e}")
-                
-                if retry_count < max_retries:
-                    # Exponential backoff with max 60 seconds
-                    wait_time = min(backoff * (2 ** (retry_count - 1)), 60)
-                    logger.info(f"[DLiveWorker] Retrying in {wait_time} seconds...")
-                    self.status_signal.emit(False)
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"[DLiveWorker] Max retries ({max_retries}) reached, giving up")
-                    self.error_signal.emit(f"Connection failed after {max_retries} attempts")
-                    self.status_signal.emit(False)
-                    break
+
+            # Common retry/backoff path for transient failures
+            if retry_count < max_retries and self.running:
+                # Exponential backoff with max 60 seconds
+                wait_time = min(backoff * (2 ** (retry_count - 1)), 60)
+                logger.info(f"[DLiveWorker] Retrying in {wait_time} seconds... (attempt {retry_count}/{max_retries})")
+                self.status_signal.emit(False)
+                await asyncio.sleep(wait_time)
+            elif retry_count >= max_retries:
+                logger.error(f"[DLiveWorker] Max retries ({max_retries}) reached, giving up")
+                self.error_signal.emit(f"Connection failed after {max_retries} attempts")
+                self.status_signal.emit(False)
+                break
     
     async def connect_and_listen(self):
         """Connect to WebSocket and listen for messages"""
@@ -314,10 +353,14 @@ class DLiveWorker(QThread):
             if token:
                 headers["Authorization"] = f"Bearer {token}"
             
+            # Use an explicit open timeout and a ping interval to surface
+            # connection problems faster and avoid long hangs in connect().
             async with websockets.connect(
                 self.WS_URL,
                 subprotocols=["graphql-ws"],
-                extra_headers=headers
+                extra_headers=headers,
+                open_timeout=self.open_timeout,
+                ping_interval=self.ping_interval,
             ) as websocket:
                 self.ws = websocket
                 logger.info("[DLiveWorker] WebSocket connected")
@@ -357,12 +400,20 @@ class DLiveWorker(QThread):
             logger.exception(f"[DLiveWorker] WebSocket error: {e}")
             self.error_signal.emit(f"WebSocket error: {e}")
             self.status_signal.emit(False)
+            # Re-raise so the retry loop can handle backoff
+            raise
+        except asyncio.CancelledError:
+            logger.warning(f"[DLiveWorker] Connection attempt cancelled")
+            self.status_signal.emit(False)
+            raise
         except Exception as e:
             import traceback
             logger.exception(f"[DLiveWorker] Connection error: {type(e).__name__}: {e}")
             logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
             self.error_signal.emit(f"Connection error: {e}")
             self.status_signal.emit(False)
+            # Re-raise to allow connect_with_retry to perform backoff
+            raise
     
     async def health_check_loop(self, websocket):
         """Monitor connection health and detect dead connections"""
@@ -830,7 +881,8 @@ class DLiveWorker(QThread):
         logger.debug(f"[DLiveWorker] Payload: {json.dumps(payload, indent=2)}")
         
         try:
-            response = requests.post(
+            session = _make_retry_session()
+            response = session.post(
                 self.GRAPHQL_URL,
                 headers=headers,
                 json=payload,

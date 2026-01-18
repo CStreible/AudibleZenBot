@@ -24,6 +24,10 @@ from core.logger import get_logger
 
 # Structured logger for this module
 logger = get_logger('Kick')
+try:
+    from core.http_session import make_retry_session
+except Exception:
+    make_retry_session = None
 
 
 class KickConnector(BasePlatformConnector):
@@ -131,16 +135,18 @@ class KickConnector(BasePlatformConnector):
         They cannot send chat messages. Use the user's OAuth token for that.
         """
         try:
-            response = requests.post(
+            session = make_retry_session() if make_retry_session else requests.Session()
+            response = session.post(
                 f"{self.OAUTH_BASE}/oauth/token",
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 data={
                     "grant_type": "client_credentials",
                     "client_id": self.client_id,
                     "client_secret": self.client_secret
-                }
+                },
+                timeout=10
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 # Store in separate variable - don't overwrite user OAuth token!
@@ -151,8 +157,11 @@ class KickConnector(BasePlatformConnector):
             else:
                 logger.error(f"✗ Kick: Failed to get token: {response.status_code} - {response.text}")
                 return False
+        except requests.exceptions.RequestException as e:
+            logger.exception(f"✗ Kick: Network error getting token: {e}")
+            return False
         except Exception as e:
-            print(f"✗ Kick: Error getting token: {e}")
+            logger.exception(f"✗ Kick: Error getting token: {e}")
             return False
     
     def get_channel_info(self, channel_slug: str):
@@ -178,7 +187,7 @@ class KickConnector(BasePlatformConnector):
                 logger.warning(f"✗ Kick: Failed to get channel info: {response.status_code}")
                 return None
         except Exception as e:
-            print(f"✗ Kick: Error getting channel info: {e}")
+            logger.exception(f"✗ Kick: Error getting channel info: {e}")
             return None
     
     def delete_message(self, message_id: str):
@@ -266,28 +275,35 @@ class KickConnector(BasePlatformConnector):
             logger.info(f"Using webhook URL: {self.webhook_url}")
             logger.debug(f"Using app access token: {auth_token[:20] if auth_token else 'None'}...")
             
-            response = requests.post(
-                f"{self.API_BASE}/events/subscriptions",
-                headers={
-                    "Authorization": f"Bearer {auth_token}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "broadcaster_user_id": self.broadcaster_user_id,
-                    "events": [
-                        {
-                            "name": "chat.message.sent",
-                            "version": 1
-                        },
-                        {
-                            "name": "chat.message.deleted",
-                            "version": 1
-                        }
-                    ],
-                    "method": "webhook",
-                    "webhook_url": self.webhook_url  # Use ngrok URL
-                }
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    f"{self.API_BASE}/events/subscriptions",
+                    headers={
+                        "Authorization": f"Bearer {auth_token}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "broadcaster_user_id": self.broadcaster_user_id,
+                        "events": [
+                            {
+                                "name": "chat.message.sent",
+                                "version": 1
+                            },
+                            {
+                                "name": "chat.message.deleted",
+                                "version": 1
+                            }
+                        ],
+                        "method": "webhook",
+                        "webhook_url": self.webhook_url  # Use ngrok URL
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"✗ Kick: Network error subscribing to events: {e}")
+                # Retry on exception using existing retry logic by returning False to allow caller to retry
+                return False
             
             if response.status_code == 200:
                 data = response.json()
@@ -732,13 +748,18 @@ class KickConnector(BasePlatformConnector):
         # Clean up subscription
         if self.subscription_id and self.access_token:
             try:
-                response = requests.delete(
-                    f"{self.API_BASE}/events/subscriptions",
-                    headers={"Authorization": f"Bearer {self.access_token}"},
-                    params={"id": self.subscription_id}
-                )
-                if response.status_code == 204:
-                    logger.info("✓ Kick: Unsubscribed from events")
+                session = make_retry_session() if make_retry_session else requests.Session()
+                try:
+                    response = session.delete(
+                        f"{self.API_BASE}/events/subscriptions",
+                        headers={"Authorization": f"Bearer {self.access_token}"},
+                        params={"id": self.subscription_id},
+                        timeout=10
+                    )
+                    if response.status_code == 204:
+                        logger.info("✓ Kick: Unsubscribed from events")
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"Error unsubscribing (network): {e}")
             except Exception as e:
                 logger.exception(f"Error unsubscribing: {e}")
         
@@ -811,12 +832,16 @@ class KickConnector(BasePlatformConnector):
             logger.info(f"Sending as {account_type} account (token: {token_preview}...) to broadcaster: {broadcaster_id}")
             logger.debug(f"Payload: {payload}")
             
-            response = requests.post(url, headers=headers, json=payload, timeout=10)
-            
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(url, headers=headers, json=payload, timeout=10)
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"✗ Kick: Network error sending message: {e}")
+                return False
+
             if response.status_code == 200:
                 result = response.json()
                 logger.info("✓ Kick: Message sent successfully!")
-                # (local echo removed)
                 return True
             elif response.status_code == 401:
                 logger.error(f"✗ Kick: Failed (HTTP 401): {response.text[:200]}")
@@ -944,23 +969,29 @@ class KickConnector(BasePlatformConnector):
             return False
         
         try:
-            response = requests.get(
-                f"{self.API_BASE}/events/subscriptions",
-                headers={"Authorization": f"Bearer {self.access_token}"},
-                params={"id": self.subscription_id}
-            )
-            
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.get(
+                    f"{self.API_BASE}/events/subscriptions",
+                    headers={"Authorization": f"Bearer {self.access_token}"},
+                    params={"id": self.subscription_id},
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"Error verifying subscription (network): {e}")
+                return False
+
             if response.status_code == 200:
                 data = response.json()
                 subscriptions = data.get("data", [])
-                
+
                 # Check if our subscription is in the list
                 for sub in subscriptions:
                     if sub.get("subscription_id") == self.subscription_id:
                         status = sub.get("status", "unknown")
                         logger.info(f"Subscription status: {status}")
                         return status == "enabled" or status == "active"
-                
+
                 logger.warning(f"Subscription {self.subscription_id} not found in active subscriptions")
                 return False
             else:

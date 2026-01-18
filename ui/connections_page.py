@@ -1000,7 +1000,6 @@ class PlatformConnectionWidget(QWidget):
                 try:
                     tags_display.updateGeometry()
                     tags_display.repaint()
-                    tags_display.adjustSize()
                 except Exception:
                     pass
                 
@@ -1553,10 +1552,6 @@ class PlatformConnectionWidget(QWidget):
 
             try:
                 tags_display.updateGeometry()
-            except Exception:
-                pass
-            try:
-                tags_display.adjustSize()
             except Exception:
                 pass
             try:

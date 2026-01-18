@@ -16,6 +16,10 @@ from core.logger import get_logger
 
 # Structured logger for this module
 logger = get_logger('KickOldPusher')
+try:
+    from core.http_session import make_retry_session
+except Exception:
+    make_retry_session = None
 
 
 class KickConnector(BasePlatformConnector):
@@ -83,15 +87,21 @@ class KickConnector(BasePlatformConnector):
 
         try:
             token_url = 'https://id.kick.com/oauth/token'
-            response = requests.post(
-                token_url,
-                data={
-                    'client_id': self.client_id,
-                    'client_secret': self.client_secret,
-                    'refresh_token': self.refresh_token,
-                    'grant_type': 'refresh_token'
-                }
-            )
+            session = make_retry_session() if make_retry_session else requests.Session()
+            try:
+                response = session.post(
+                    token_url,
+                    data={
+                        'client_id': self.client_id,
+                        'client_secret': self.client_secret,
+                        'refresh_token': self.refresh_token,
+                        'grant_type': 'refresh_token'
+                    },
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"KickOldPusher: Network error refreshing token: {e}")
+                return False
             
             if response.status_code == 200:
                 data = response.json()

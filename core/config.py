@@ -113,7 +113,14 @@ class ConfigManager:
             "ui": {
                 "show_platform_icons": True,
                 "sidebar_expanded": False,
-                "theme": "dark"
+                "theme": "dark",
+                # Window geometry saved between sessions. Keys may be absent/null.
+                "window": {
+                    "x": None,
+                    "y": None,
+                    "width": None,
+                    "height": None
+                }
             },
             "platforms": {
                 "twitch": {

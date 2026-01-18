@@ -15,6 +15,10 @@ try:
     from core import callback_server
 except Exception:
     callback_server = None
+try:
+    from core.http_session import make_retry_session
+except Exception:
+    make_retry_session = None
 
 # YouTube OAuth credentials: prefer values from config if present
 YOUTUBE_REDIRECT_URI = "http://localhost:8080"
@@ -88,7 +92,12 @@ def exchange_code_for_token(auth_code):
     }
     
     logger.debug(f"Exchanging code with redirect_uri: {YOUTUBE_REDIRECT_URI}")
-    resp = requests.post(YOUTUBE_TOKEN_URL, headers=headers, data=data)
+    try:
+        session = make_retry_session() if make_retry_session else requests.Session()
+        resp = session.post(YOUTUBE_TOKEN_URL, headers=headers, data=data, timeout=10)
+    except requests.exceptions.RequestException as e:
+        logger.exception(f"[YouTube OAuth] Network error exchanging code: {e}")
+        return None
     if resp.status_code == 200:
         return resp.json()
     else:

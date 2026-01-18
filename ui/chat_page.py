@@ -8,10 +8,11 @@ import os
 import base64
 import json
 import hashlib
+import html
 
 # PyQt6 imports
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QGroupBox, QHBoxLayout, 
-                              QCheckBox, QPushButton, QMenu, QInputDialog, QMessageBox)
+                              QCheckBox, QPushButton, QMenu, QInputDialog, QMessageBox, QSizePolicy)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineScript
 from PyQt6.QtCore import pyqtSlot, Qt, QUrl
@@ -270,12 +271,87 @@ class ChatPage(QWidget):
         Replace emote text with image tags (Twitch emotes).
         Args:
             message: Original message text
-            emotes_tag: Twitch emotes tag (e.g., "25:0-4,12-16/1902:6-10")
+            emotes_tag: Twitch emotes tag (e.g., "25:0-4,12-16/1902:6-10") or a dict mapping emote_id -> ["start-end", ...]
         Returns:
             Message with emotes replaced by <img> tags
         """
-        # TODO: Implement emote replacement logic
-        return message
+        if not message:
+            return ''
+
+        if not emotes_tag:
+            # No emote info; escape message for safe HTML
+            return html.escape(message)
+
+        try:
+            positions = []  # list of (start, end, emote_id)
+
+            if isinstance(emotes_tag, dict):
+                for eid, ranges in emotes_tag.items():
+                    try:
+                        eid_int = int(eid)
+                    except Exception:
+                        continue
+                    for r in (ranges or []):
+                        if not r:
+                            continue
+                        s, e = r.split('-')
+                        positions.append((int(s), int(e), eid_int))
+
+            elif isinstance(emotes_tag, str):
+                # Format: "25:0-4,12-16/1902:6-10"
+                for part in emotes_tag.split('/'):
+                    if not part:
+                        continue
+                    if ':' not in part:
+                        continue
+                    eid, rngs = part.split(':', 1)
+                    try:
+                        eid_int = int(eid)
+                    except Exception:
+                        continue
+                    for r in rngs.split(','):
+                        if not r:
+                            continue
+                        if '-' not in r:
+                            continue
+                        s, e = r.split('-', 1)
+                        positions.append((int(s), int(e), eid_int))
+
+            else:
+                # Unknown format - return escaped message
+                return html.escape(message)
+
+            if not positions:
+                return html.escape(message)
+
+            # Sort positions by start index
+            positions.sort(key=lambda x: x[0])
+
+            out_parts = []
+            last = 0
+            for s, e, eid in positions:
+                # Skip overlapping or invalid ranges
+                if s < last or s >= len(message):
+                    continue
+                if e < s:
+                    continue
+                # Append text before emote
+                if s > last:
+                    out_parts.append(html.escape(message[last:s]))
+
+                # Build emote image tag using Twitch CDN v2
+                emote_url = f'https://static-cdn.jtvnw.net/emoticons/v2/{eid}/default/dark/1.0'
+                out_parts.append(f'<img src="{emote_url}" alt="emote" style="width:1.2em; height:1.2em; vertical-align:middle; margin:0 2px;" />')
+                last = e + 1
+
+            # Append remaining text
+            if last < len(message):
+                out_parts.append(html.escape(message[last:]))
+
+            return ''.join(out_parts)
+        except Exception as e:
+            logger.debug(f"Failed to parse emotes tag: {e}")
+            return html.escape(message)
     
     def initUI(self):
         """Initialize the chat page UI"""
@@ -433,10 +509,35 @@ class ChatPage(QWidget):
         settings_layout.addWidget(clear_btn)
         
         settings_group.setLayout(settings_layout)
-        main_layout.addWidget(settings_group)
+        # Wrap settings in a horizontal scroll area so controls can overflow horizontally
+        from PyQt6.QtWidgets import QScrollArea
+        settings_container = QWidget()
+        sc_layout = QHBoxLayout(settings_container)
+        sc_layout.setContentsMargins(0, 0, 0, 0)
+        sc_layout.addWidget(settings_group)
+
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidget(settings_container)
+        settings_scroll.setWidgetResizable(False)  # Keep content natural size so horizontal scrollbar appears
+        settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Match the group's max height so scroll area doesn't consume extra vertical space
+        try:
+            settings_scroll.setFixedHeight(settings_group.maximumHeight() + 6)
+        except Exception:
+            pass
+
+        main_layout.addWidget(settings_scroll)
         
         # Chat messages area (QWebEngineView for animated GIF support)
         self.chat_display = QWebEngineView()
+        # Ensure the chat display expands to fill available space in the page
+        try:
+            self.chat_display.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            # A reasonable minimum height so the area is usable even when window is short
+            self.chat_display.setMinimumHeight(150)
+        except Exception:
+            pass
         
         # Set up initial HTML with dark background and styling
         initial_html = '''
@@ -456,6 +557,19 @@ class ChatPage(QWidget):
                     margin: 0;
                     padding: 0;
                     line-height: 1.4;
+                    display: block;
+                    /* Allow long messages to wrap to next line instead of forcing horizontal scroll */
+                    white-space: pre-wrap; /* Preserve newlines, allow wrapping */
+                    word-break: break-word; /* Break long words if needed */
+                    overflow-wrap: anywhere;
+                    max-width: 100%;
+                }
+
+                /* Ensure any images/emotes inside messages scale to container */
+                .message img {
+                    max-width: 100%;
+                    height: auto;
+                    vertical-align: middle;
                 }
                 
                 /* Slide in from bottom animation */
@@ -521,7 +635,8 @@ class ChatPage(QWidget):
         self.chat_display.setHtml(initial_html)
         self.chat_display.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.chat_display.customContextMenuRequested.connect(self.showContextMenu)
-        main_layout.addWidget(self.chat_display)
+        # Chat display should expand to fill remaining space and resize dynamically
+        main_layout.addWidget(self.chat_display, 1)
         
         # Setup message interaction JavaScript
         self.setup_message_interaction()
@@ -747,8 +862,15 @@ class ChatPage(QWidget):
         username_html = f'<span style="color: {user_color}; font-weight: bold;">{username}</span>'
         parts.append(username_html)
 
-        # Message
-        message_html = message
+        # Message - replace emotes where possible
+        emotes_tag = None
+        # Common metadata keys for emotes across connectors
+        for k in ('emotes', 'emotes_tag', 'emote_tags', 'emotes_raw'):
+            if k in metadata and metadata.get(k):
+                emotes_tag = metadata.get(k)
+                break
+
+        message_html = self.replace_emotes_with_images(message, emotes_tag)
         parts.append(message_html)
 
 

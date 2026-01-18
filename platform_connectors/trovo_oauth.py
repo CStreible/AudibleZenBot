@@ -4,6 +4,10 @@ from urllib.parse import urlencode
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+try:
+    from core.http_session import make_retry_session
+except Exception:
+    make_retry_session = None
 
 TROVO_CLIENT_ID = ""
 TROVO_CLIENT_SECRET = ""
@@ -55,7 +59,12 @@ def exchange_code_for_token_v2(auth_code):
         "code": auth_code,
         "redirect_uri": TROVO_REDIRECT_URI
     }
-    resp = requests.post(url, headers=headers, json=data)
+    try:
+        session = make_retry_session() if make_retry_session else requests.Session()
+        resp = session.post(url, headers=headers, json=data, timeout=10)
+    except requests.exceptions.RequestException as e:
+        logger.exception(f"[Trovo OAuth] Network error exchanging code: {e}")
+        return None
     if resp.status_code == 200:
         return resp.json()
     else:
