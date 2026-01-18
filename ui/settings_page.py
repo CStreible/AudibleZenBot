@@ -12,6 +12,7 @@ from PyQt6.QtGui import QFont, QColor
 import os
 import sys
 from core.logger import get_logger
+from ui.ui_elements import ToggleSwitch
 
 # Structured logger for this module
 logger = get_logger('Settings')
@@ -212,6 +213,49 @@ class SettingsPage(QWidget):
         info_layout.addWidget(self.log_file_info, 1)
         info_layout.addWidget(self.open_log_btn)
         layout.addLayout(info_layout)
+
+        # --- Per-component debug toggles (uses LogManager debug schema) ---
+        try:
+            if self.log_manager:
+                toggles_layout = QGridLayout()
+                toggles_layout.setHorizontalSpacing(12)
+                toggles = self.log_manager.get_debug_schema()
+                row = 0
+                # create a small grid of label + toggle for each schema entry
+                for key, label_text in toggles:
+                    lbl = QLabel(label_text)
+                    lbl.setStyleSheet("color: #ffffff; font-size: 12px;")
+                    toggle = ToggleSwitch()
+                    try:
+                        toggle.setChecked(self.log_manager.get_debug_value(key))
+                    except Exception:
+                        toggle.setChecked(False)
+                    # Bind handler
+                    toggle.stateChanged.connect(lambda state, k=key, t=toggle: self.on_debug_toggle(k, t.isChecked()))
+                    toggles_layout.addWidget(lbl, row, 0)
+                    toggles_layout.addWidget(toggle, row, 1)
+                    row += 1
+                layout.addLayout(toggles_layout)
+                # Add a separator and level toggles
+                level_layout = QGridLayout()
+                level_layout.setHorizontalSpacing(12)
+                levels = self.log_manager.get_level_schema()
+                lrow = 0
+                for key, label_text in levels:
+                    lbl = QLabel(label_text)
+                    lbl.setStyleSheet("color: #ffffff; font-size: 12px;")
+                    toggle = ToggleSwitch()
+                    try:
+                        toggle.setChecked(self.log_manager.get_level_value(key))
+                    except Exception:
+                        toggle.setChecked(False)
+                    toggle.stateChanged.connect(lambda s, k=key, t=toggle: self.on_level_toggle(k, t.isChecked()))
+                    level_layout.addWidget(lbl, lrow, 0)
+                    level_layout.addWidget(toggle, lrow, 1)
+                    lrow += 1
+                layout.addLayout(level_layout)
+        except Exception:
+            pass
         
         group.setLayout(layout)
         return group
@@ -398,6 +442,34 @@ class SettingsPage(QWidget):
         
         group.setLayout(layout)
         return group
+
+    def on_debug_toggle(self, key: str, enabled: bool):
+        """Handler when a debug ToggleSwitch is flipped."""
+        try:
+            if self.log_manager:
+                self.log_manager.set_debug_value(key, bool(enabled))
+                # Reflect immediate config persistence if available
+                if self.config:
+                    try:
+                        # save the whole debug map for consistency
+                        self.config.set('debug', self.log_manager.debug_map)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def on_level_toggle(self, key: str, enabled: bool):
+        """Handler when a level ToggleSwitch is flipped."""
+        try:
+            if self.log_manager:
+                self.log_manager.set_level_value(key, bool(enabled))
+                if self.config:
+                    try:
+                        self.config.set('logging.levels', self.log_manager.level_map)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     
     def create_status_section(self):
         """Create tunnel status section"""

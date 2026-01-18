@@ -205,11 +205,15 @@ class ChatManager(QObject):
             waited = 0.0
             timeout = 3.0
             interval = 0.1
-            while waited < timeout:
-                if getattr(connector, 'connected', False):
-                    break
-                time.sleep(interval)
-                waited += interval
+            try:
+                while waited < timeout:
+                    if getattr(connector, 'connected', False):
+                        break
+                    time.sleep(interval)
+                    waited += interval
+            except KeyboardInterrupt:
+                logger.info(f"connectPlatform interrupted while waiting for {platform_id}")
+                return False
 
             connected_state = bool(getattr(connector, 'connected', False))
             self.connection_status_changed.emit(platform_id, connected_state)

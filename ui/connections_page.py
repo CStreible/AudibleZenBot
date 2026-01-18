@@ -1046,15 +1046,13 @@ class PlatformConnectionWidget(QWidget):
     def refresh_twitch_info(self, connector):
         """Refresh Twitch stream info"""
         import requests
-        
-        logger.debug(f"[Twitch] Attempting to refresh info...")
-        
+
+        logger.debug(f"[Twitch] Attempting to refresh info (background thread)...")
+
         # Try to get credentials from config if connector doesn't have them
         twitch_config = self.config.get_platform_config('twitch') if self.config else {}
 
-        # Pre-populate UI from locally saved stream_info so local settings
-        # (like Go-Live notification) persist across restarts even when
-        # the platform API doesn't return live info immediately.
+        # Pre-populate UI from locally saved stream_info (main thread)
         try:
             stream_info = twitch_config.get('stream_info', {}) if isinstance(twitch_config, dict) else {}
             if 'twitch' in self.platform_widgets and stream_info:
@@ -1101,145 +1099,145 @@ class PlatformConnectionWidget(QWidget):
                         pass
         except Exception as e:
             logger.debug(f"[ConnectionsPage] Failed to pre-populate Twitch stream_info from config: {e}")
-        
+
         client_id = getattr(connector, 'client_id', None) if connector else None
         if not client_id:
             client_id = 'h84tx3mvvpk9jyt8rv8p8utfzupz82'  # Default client ID
-        
+
         oauth_token = getattr(connector, 'oauth_token', None) if connector else None
         if not oauth_token:
             oauth_token = twitch_config.get('oauth_token', '')
-        
+
         username = getattr(connector, 'username', None) if connector else None
         if not username:
             username = twitch_config.get('username', '')
-        
+
         logger.debug(f"[Twitch] Has oauth_token: {bool(oauth_token)}")
         logger.debug(f"[Twitch] Has client_id: {bool(client_id)}")
         logger.debug(f"[Twitch] Has username: {bool(username)}")
-        
+
         if not oauth_token or not client_id or not username:
             logger.warning(f"[Twitch] Missing required credentials (check config)")
             return
-        
-        try:
-            # Get broadcaster user info
-            headers = {
-                'Client-ID': client_id,
-                'Authorization': f'Bearer {oauth_token}'
-            }
-            
-            # Get user ID
-            user_response = requests.get(
-                'https://api.twitch.tv/helix/users',
-                headers=headers,
-                params={'login': username},
-                timeout=10
-            )
-            
-            if user_response.status_code != 200:
-                logger.error(f"[Twitch] Failed to get user info: {user_response.status_code}")
-                return
-            
-            user_data = user_response.json()
-            if not user_data.get('data'):
-                return
-            
-            broadcaster_id = user_data['data'][0]['id']
-            
-            # Get channel information
-            channel_response = requests.get(
-                'https://api.twitch.tv/helix/channels',
-                headers=headers,
-                params={'broadcaster_id': broadcaster_id}
-            )
-            
-            if channel_response.status_code == 200:
+
+        def _worker():
+            try:
+                headers = {
+                    'Client-ID': client_id,
+                    'Authorization': f'Bearer {oauth_token}'
+                }
+
+                # Get user ID (with timeout)
+                try:
+                    user_response = requests.get(
+                        'https://api.twitch.tv/helix/users',
+                        headers=headers,
+                        params={'login': username},
+                        timeout=10
+                    )
+                except requests.RequestException as e:
+                    logger.error(f"[Twitch] Network error getting user info: {e}")
+                    return
+
+                if user_response.status_code != 200:
+                    logger.error(f"[Twitch] Failed to get user info: {user_response.status_code}")
+                    return
+
+                user_data = user_response.json()
+                if not user_data.get('data'):
+                    logger.debug("[Twitch] No user data returned")
+                    return
+
+                broadcaster_id = user_data['data'][0]['id']
+
+                # Get channel information (with timeout)
+                try:
+                    channel_response = requests.get(
+                        'https://api.twitch.tv/helix/channels',
+                        headers=headers,
+                        params={'broadcaster_id': broadcaster_id},
+                        timeout=10
+                    )
+                except requests.RequestException as e:
+                    logger.error(f"[Twitch] Network error getting channel info: {e}")
+                    return
+
+                if channel_response.status_code != 200:
+                    logger.error(f"[Twitch] Channel info request failed: {channel_response.status_code}")
+                    return
+
                 channel_data = channel_response.json()
-                if channel_data.get('data'):
-                    info = channel_data['data'][0]
-                    
-                    # Update title
-                    if 'title' in info and 'twitch' in self.platform_widgets:
-                        self.platform_widgets['twitch']['title'].setText(info['title'])
-                        logger.info(f"[Twitch] Loaded title: {info['title']}")
-                    
-                    # Update category
-                    if 'game_name' in info and 'twitch' in self.platform_widgets:
-                        category_widget = self.platform_widgets['twitch'].get('category')
-                        if category_widget:
-                            try:
-                                category_widget.blockSignals(True)
-                                category_widget.setText(info['game_name'])
-                            finally:
-                                category_widget.blockSignals(False)
-                            logger.info(f"[Twitch] Loaded category: {info['game_name']}")
-                    
-                    # Update tags (tags are now in the channel info as a list of strings)
-                    if 'tags' in info and info['tags'] and 'twitch' in self.platform_widgets:
-                        tags_display = self.platform_widgets['twitch'].get('tags_display')
-                        if tags_display:
-                            # Clear existing tags
-                            layout = tags_display.layout()
-                            if layout is not None:
-                                while layout.count() > 0:
-                                    item = layout.takeAt(0)
-                                    if item and item.widget():
-                                        item.widget().deleteLater()
-                            
-                            # Add new tags
-                            for tag_name in info['tags']:
-                                self.add_tag_chip('twitch', tag_name, tags_display)
-                            try:
-                                tags_display.setVisible(True)
-                                tags_display.show()
-                            except Exception:
-                                pass
-                            logger.info(f"[Twitch] Loaded {len(info['tags'])} tags")
-                            # Diagnostic: report layout count and child widget visibilities
-                            try:
-                                l = tags_display.layout()
-                                count = l.count() if l is not None else -1
-                                td_size = tags_display.size()
-                                td_hint = tags_display.sizeHint()
-                                logger.debug(f"[ConnectionsPage][DIAG] tags_populated: layout_count={count} tags_display_size={td_size.width()}x{td_size.height()} hint={td_hint.width()}x{td_hint.height()} visible={tags_display.isVisible()}")
-                                # enumerate children
-                                if l is not None:
-                                    for i in range(l.count()):
-                                        item = l.itemAt(i)
-                                        w = item.widget() if item is not None else None
-                                        if w is not None:
-                                            text = ''
-                                            try:
-                                                sub = w.layout().itemAt(0).widget()
-                                                text = sub.text() if hasattr(sub, 'text') else ''
-                                            except Exception:
-                                                pass
-                                            logger.debug(f"[ConnectionsPage][DIAG] child[{i}]: class={w.__class__.__name__} visible={w.isVisible()} text={text}")
-                                # Parent chain visibility
+                if not channel_data.get('data'):
+                    logger.debug("[Twitch] No channel data returned")
+                    return
+
+                info = channel_data['data'][0]
+
+                # Post UI updates back to main thread
+                def _update_ui():
+                    try:
+                        # Update title
+                        if 'title' in info and 'twitch' in self.platform_widgets:
+                            self.platform_widgets['twitch']['title'].setText(info['title'])
+                            logger.info(f"[Twitch] Loaded title: {info['title']}")
+
+                        # Update category
+                        if 'game_name' in info and 'twitch' in self.platform_widgets:
+                            category_widget = self.platform_widgets['twitch'].get('category')
+                            if category_widget:
                                 try:
-                                    chain = []
-                                    p = tags_display
-                                    while p is not None:
-                                        try:
-                                            chain.append((p.__class__.__name__, p.isVisible()))
-                                        except Exception:
-                                            chain.append((p.__class__.__name__, 'N/A'))
-                                        p = getattr(p, 'parent', lambda: None)() if not hasattr(p, 'parentWidget') else p.parentWidget()
-                                    logger.debug(f"[ConnectionsPage][DIAG] parent_chain: {chain}")
-                                except Exception as e:
-                                    logger.debug(f"[ConnectionsPage][DIAG] parent_chain diagnostic failed: {e}")
-                            except Exception as e:
-                                logger.debug(f"[ConnectionsPage][DIAG] tags_populated diagnostic failed: {e}")
-                            else:
-                                logger.debug(f"[Twitch] tags_display widget not found")
-                        else:
-                            logger.debug(f"[Twitch] No tags in channel info or widget missing")
-            else:
-                logger.error(f"[Twitch] Channel info request failed: {channel_response.status_code}")
-                    
+                                    category_widget.blockSignals(True)
+                                    category_widget.setText(info['game_name'])
+                                finally:
+                                    category_widget.blockSignals(False)
+                                logger.info(f"[Twitch] Loaded category: {info['game_name']}")
+
+                        # Update tags
+                        if 'tags' in info and info['tags'] and 'twitch' in self.platform_widgets:
+                            tags_display = self.platform_widgets['twitch'].get('tags_display')
+                            if tags_display:
+                                layout = tags_display.layout()
+                                if layout is not None:
+                                    while layout.count() > 0:
+                                        item = layout.takeAt(0)
+                                        if item and item.widget():
+                                            item.widget().deleteLater()
+                                for tag_name in info['tags']:
+                                    self.add_tag_chip('twitch', tag_name, tags_display)
+                                try:
+                                    tags_display.setVisible(True)
+                                    tags_display.show()
+                                except Exception:
+                                    pass
+                                logger.info(f"[Twitch] Loaded {len(info['tags'])} tags")
+                    except Exception as e:
+                        logger.debug(f"[Twitch] UI update failed: {e}")
+
+                try:
+                    # Schedule via the widget helper which uses the executor or QTimer fallback
+                    self.run_on_main_thread(_update_ui)
+                except Exception as e:
+                    import traceback
+                    logger.error("[Twitch] Could not schedule UI update on main thread; skipping UI update")
+                    try:
+                        traceback.print_exc()
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                import traceback
+                logger.error(f"[Twitch] Error in background refresh: {e}")
+                try:
+                    traceback.print_exc()
+                except Exception:
+                    pass
+
+        # Run network refresh in background to avoid blocking UI
+        try:
+            t = threading.Thread(target=_worker, daemon=True)
+            t.start()
         except Exception as e:
-            logger.error(f"[Twitch] Error refreshing info: {e}")
+            logger.error(f"[Twitch] Failed to start background refresh thread: {e}")
     
     def refresh_youtube_info(self, connector):
         """Refresh YouTube stream info"""
@@ -2116,6 +2114,19 @@ class PlatformConnectionWidget(QWidget):
         # Check current state
         if button.text() == "Login":
             logger.debug(f"{account_type} login flow starting for platform {self.platform_id}")
+            # Short-circuit DLive: it does not use the standard OAuth flow
+            # and requires manual token entry. Avoid blocking the UI with
+            # the OAuth callback wait loop which can freeze the app.
+            try:
+                if self.platform_id == 'dlive':
+                    logger.info("[DLive] Manual token entry required; showing dialog")
+                    # platform display name
+                    platform_name = 'DLive'
+                    # Prompt user for token without blocking main thread
+                    self.showManualTokenEntry(account_type, '', platform_name)
+                    return
+            except Exception:
+                pass
             import threading
             from http.server import HTTPServer, BaseHTTPRequestHandler
             from urllib.parse import urlparse, parse_qs, urlencode
@@ -2643,24 +2654,46 @@ class PlatformConnectionWidget(QWidget):
     def showManualTokenEntry(self, account_type, username, platform_name):
         """Show dialog for manual token entry (for platforms without OAuth)"""
         from PyQt6.QtWidgets import QInputDialog, QLineEdit
-        
+        # For DLive, also ask for the display name so the worker can resolve
+        # the proper username via GraphQL. For other platforms, only token is needed.
         token, ok = QInputDialog.getText(
             self,
             f"{platform_name} Token",
             f"Paste your {platform_name} token/API key:",
             QLineEdit.EchoMode.Password
         )
-        
-        if ok and token.strip():
-            # For manual token entry, create minimal user info and save directly
-            user_info = {
-                'username': f'{platform_name} User',
-                'display_name': f'{platform_name} User',
-                'user_id': ''
-            }
-            self.onOAuthSuccess(account_type, user_info, token.strip(), '')
-        else:
+
+        if not (ok and token and token.strip()):
             self.onOAuthFailed(account_type, "No token provided")
+            return
+
+        token = token.strip()
+
+        # If DLive, ask for the display name (better than using a generic placeholder)
+        display_name = None
+        if platform_name.lower() == 'dlive':
+            try:
+                dname, dok = QInputDialog.getText(
+                    self,
+                    f"{platform_name} Display Name",
+                    f"Enter your {platform_name} display name (exactly as shown on your channel):",
+                    QLineEdit.EchoMode.Normal
+                )
+                if dok and dname and dname.strip():
+                    display_name = dname.strip()
+            except Exception:
+                display_name = None
+
+        if not display_name:
+            # Fallback to generic display name if user didn't provide one
+            display_name = f"{platform_name} User"
+
+        user_info = {
+            'username': display_name,
+            'display_name': display_name,
+            'user_id': ''
+        }
+        self.onOAuthSuccess(account_type, user_info, token, '')
     
     def exchangeCodeForToken(self, account_type, code):
         """Exchange authorization code for access token"""

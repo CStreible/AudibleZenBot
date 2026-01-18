@@ -6,6 +6,7 @@ import sys
 import os
 from datetime import datetime
 from typing import Optional
+import re
 
 
 class TeeOutput:
@@ -106,6 +107,39 @@ class LogManager:
         else:
             self.debug_map = {}
 
+        # Default debug schema - maps keys to human friendly labels
+        # UI will use this schema to render toggles
+        self._debug_schema = [
+            ("all", "Enable all debug messages"),
+            ("chatmanager", "Chat pipeline (de-dup / canonical)"),
+            ("connectors", "Connector lifecycle (connect/disconnect)"),
+            ("connectors.twitch", "Twitch connector verbose"),
+            ("connectors.trovo", "Trovo connector verbose"),
+            ("sends", "Send operations (bot / streamer traces)"),
+            ("network", "Network / HTTP requests"),
+            ("auth", "Auth / OAuth flows"),
+            ("persistence", "Persistent diagnostic file writes")
+        ]
+        # Default per-level toggles
+        self._level_keys = [
+            ('DEBUG', 'Debug messages'),
+            ('INFO', 'Informational messages'),
+            ('WARN', 'Warnings'),
+            ('ERROR', 'Errors'),
+            ('CRITICAL', 'Critical failures'),
+            ('TRACE', 'Trace / very verbose traces'),
+            ('DIAG', 'Diagnostic lines (DIAG)')
+        ]
+        try:
+            self.level_map = self.config.get('logging.levels', {}) if self.config else {}
+        except Exception:
+            self.level_map = {}
+        # Ensure defaults if not present
+        for k, _ in self._level_keys:
+            if k not in self.level_map:
+                # default: allow INFO+ and suppress DEBUG/TRACE/DIAG
+                self.level_map[k] = True if k in ('INFO', 'WARN', 'ERROR', 'CRITICAL') else False
+
     def should_emit(self, message: str) -> bool:
         """Decide whether a message should be emitted to console/log based on
         debug settings. Suppresses verbose tags like [TRACE], [DIAG], [DEBUG]
@@ -118,6 +152,22 @@ class LogManager:
             lowered = message.lower()
             if any(tag in lowered for tag in ['unhandled exception', '[error]', '[✗', 'traceback']):
                 return True
+
+            # Check message log level (expects format [Component][LEVEL] ...)
+            try:
+                tokens = re.findall(r'\[([^\]]+)\]', message)
+                level = None
+                if len(tokens) >= 2:
+                    # tokens[1] expected to be level like DEBUG, INFO
+                    level = tokens[1].strip().upper()
+                if level:
+                    # Map WARN to WARN key used in UI/config
+                    if level == 'WARNING':
+                        level = 'WARN'
+                    if not self.level_map.get(level, True):
+                        return False
+            except Exception:
+                pass
 
             # If global debug is enabled, allow everything
             if self.debug_map.get('all') or self.debug_map.get('global'):
@@ -140,7 +190,22 @@ class LogManager:
             except Exception:
                 comp = None
 
-            if comp and self.debug_map.get(comp):
+            # Support dotted component names like connectors.twitch
+            if comp:
+                # direct component match
+                if self.debug_map.get(comp):
+                    return True
+                # try parent group (e.g. connectors.twitch -> connectors)
+                parts = comp.split('.')
+                if len(parts) > 1:
+                    parent = parts[0]
+                    if self.debug_map.get(parent):
+                        return True
+                # also allow explicit mapping like 'twitch' to 'connectors.twitch'
+                if self.debug_map.get(f"connectors.{comp}"):
+                    return True
+
+            # No explicit enable for this component; suppress verbose line
                 return True
 
             # No explicit enable for this component; suppress verbose line
@@ -267,6 +332,55 @@ class LogManager:
         # Restore original stdout/stderr
         sys.stdout = self.original_stdout
         sys.stderr = self.original_stderr
+    
+    # --- Debug settings API -------------------------------------------------
+    def get_debug_schema(self):
+        """Return the available debug settings as (key, label) tuples."""
+        return list(self._debug_schema)
+
+    def get_debug_value(self, key: str) -> bool:
+        """Return whether `key` is enabled in the current debug map."""
+        try:
+            return bool(self.debug_map.get(key, False))
+        except Exception:
+            return False
+
+    def set_debug_value(self, key: str, enabled: bool):
+        """Set a debug flag at runtime and persist to config if available."""
+        try:
+            self.debug_map[key] = bool(enabled)
+            if self.config:
+                # Persist the debug map under 'debug'
+                try:
+                    self.config.set('debug', self.debug_map)
+                except Exception:
+                    pass
+            return True
+        except Exception:
+            return False
+
+    # --- Per-level schema API ------------------------------------------------
+    def get_level_schema(self):
+        """Return available logging levels as (key,label) tuples."""
+        return list(self._level_keys)
+
+    def get_level_value(self, key: str) -> bool:
+        try:
+            return bool(self.level_map.get(key, False))
+        except Exception:
+            return False
+
+    def set_level_value(self, key: str, enabled: bool):
+        try:
+            self.level_map[key] = bool(enabled)
+            if self.config:
+                try:
+                    self.config.set('logging.levels', self.level_map)
+                except Exception:
+                    pass
+            return True
+        except Exception:
+            return False
 
 
 # Global log manager instance
@@ -322,6 +436,33 @@ class SimpleLogger:
     def critical(self, msg: str):
         try:
             sys.stderr.write(self._format('CRITICAL', str(msg)))
+        except Exception:
+            pass
+
+    def exception(self, msg: str):
+        """Log an exception message and attempt to include a traceback."""
+        try:
+            # Write exception header to stderr
+            sys.stderr.write(self._format('ERROR', str(msg)))
+            try:
+                import traceback
+                tb = traceback.format_exc()
+                if tb and not tb.strip().endswith('None'):
+                    sys.stderr.write(tb)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def trace(self, msg: str):
+        try:
+            sys.stdout.write(self._format('TRACE', str(msg)))
+        except Exception:
+            pass
+
+    def diag(self, msg: str):
+        try:
+            sys.stdout.write(self._format('DIAG', str(msg)))
         except Exception:
             pass
 
