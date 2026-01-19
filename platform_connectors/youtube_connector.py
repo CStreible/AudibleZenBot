@@ -896,7 +896,8 @@ class YouTubeWorker(QThread):
                 
                 self.last_message_time = time.time()  # Update health timestamp
                 logger.debug(f"[YouTubeWorker] Chat: {username}: {message}")
-                self.message_signal.emit(username, message, metadata)
+                from .connector_utils import emit_chat
+                emit_chat(self, 'youtube', username, message, metadata)
                 
         except Exception as e:
             raise Exception(f"Message fetch error: {str(e)}")

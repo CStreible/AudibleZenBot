@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QStackedWidget, QLabel, QFrame, QScrollArea
 )
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer
 from PyQt6.QtGui import QIcon, QFont
 
 # Windows taskbar icon support
@@ -167,6 +167,15 @@ class MainWindow(QMainWindow):
         # Initialize logging system
         self.log_manager = get_log_manager(self.config)
         print("[Main] Log manager initialized")
+        # Prefetch Twitch global emotes in background to warm caches
+        try:
+            from core.twitch_emotes import get_manager as get_twitch_manager
+            try:
+                get_twitch_manager().prefetch_global(background=True)
+            except Exception:
+                pass
+        except Exception:
+            pass
         # Ensure Trovo callback server and ngrok tunnel are started if needed
         try:
             self._start_trovo_support_servers()
@@ -301,6 +310,75 @@ class MainWindow(QMainWindow):
         
         # Track sidebar state
         self.sidebar_expanded = False
+
+        # Emote cache status label in status bar (signal-driven)
+        try:
+            from core.twitch_emotes import get_manager as get_twitch_manager
+            from core.signals import signals as emote_signals
+            self.emote_status_label = QLabel('Emotes: warming')
+            try:
+                self.statusBar().addPermanentWidget(self.emote_status_label)
+            except Exception:
+                pass
+
+            def _set_global_ready():
+                try:
+                    text = 'Emotes: global=ready'
+                    # include channel state if available
+                    try:
+                        twitch_conn = getattr(self, 'chat_manager', None).connectors.get('twitch')
+                        bid = getattr(twitch_conn, 'broadcaster_id', None)
+                        if bid:
+                            mgr = get_twitch_manager()
+                            channel_ready = (str(bid) in getattr(mgr, '_warmed_channels', set()))
+                            text += f" | channel={'ready' if channel_ready else 'warming'}"
+                    except Exception:
+                        pass
+                    try:
+                        self.emote_status_label.setText(text)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+            def _set_channel_ready(bid: str):
+                try:
+                    mgr = get_twitch_manager()
+                    global_ready = bool(getattr(mgr, '_warmed_global', False))
+                    text = f"Emotes: global={'ready' if global_ready else 'warming'} | channel=ready"
+                    try:
+                        self.emote_status_label.setText(text)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+            try:
+                emote_signals.emotes_global_warmed.connect(lambda: _set_global_ready())
+                emote_signals.emotes_channel_warmed.connect(lambda bid: _set_channel_ready(bid))
+            except Exception:
+                pass
+
+            # Initialize label from current manager state
+            try:
+                mgr = get_twitch_manager()
+                text = f"Emotes: global={'ready' if getattr(mgr, '_warmed_global', False) else 'warming'}"
+                try:
+                    twitch_conn = getattr(self, 'chat_manager', None).connectors.get('twitch')
+                    bid = getattr(twitch_conn, 'broadcaster_id', None)
+                    if bid:
+                        channel_ready = (str(bid) in getattr(mgr, '_warmed_channels', set()))
+                        text += f" | channel={'ready' if channel_ready else 'warming'}"
+                except Exception:
+                    pass
+                try:
+                    self.emote_status_label.setText(text)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        except Exception:
+            pass
     
     def toggleSidebar(self):
         """Toggle sidebar expansion"""
@@ -418,6 +496,16 @@ class MainWindow(QMainWindow):
             print("\n📝 Closing log file...")
             self.log_manager.cleanup()
 
+        # Ensure Twitch emote manager shuts down background workers
+        try:
+            from core.twitch_emotes import get_manager as get_twitch_manager
+            try:
+                get_twitch_manager().shutdown()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
         # Persist window geometry (position + size)
         try:
             geom = self.geometry()
@@ -502,6 +590,15 @@ def main():
     """Main application entry point"""
     app = QApplication(sys.argv)
     app.setStyle('Fusion')  # Use Fusion style for better dark theme support
+    # Ensure Twitch emote manager shutdown is invoked on application quit
+    try:
+        from core.twitch_emotes import get_manager as get_twitch_manager
+        try:
+            app.aboutToQuit.connect(lambda: get_twitch_manager().shutdown())
+        except Exception:
+            pass
+    except Exception:
+        pass
     
     # Set application icon
     icon_path = "resources/icons/app_icon.ico"

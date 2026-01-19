@@ -415,7 +415,8 @@ class TwitterWorker(QThread):
 
                     # Emit the message
                     logger.info(f"[TwitterWorker] Broadcasting tweet from {author_name}: {text[:50]}...")
-                    self.message_signal.emit(author_name, text, metadata)
+                    from .connector_utils import emit_chat
+                    emit_chat(self, 'twitter', author_name, text, metadata)
                 
                 # Keep only last 1000 tweet IDs to avoid memory issues
                 if len(self.processed_tweets) > 1000:

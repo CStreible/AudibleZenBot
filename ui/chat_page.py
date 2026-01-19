@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QGroupBox, QHBoxLayou
                               QCheckBox, QPushButton, QMenu, QInputDialog, QMessageBox, QSizePolicy)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineScript
-from PyQt6.QtCore import pyqtSlot, Qt, QUrl
+from PyQt6.QtCore import pyqtSlot, Qt, QUrl, QTimer
 from PyQt6.QtGui import QAction
 
 # Project-specific imports
@@ -714,6 +714,58 @@ class ChatPage(QWidget):
             preview = message[:120] if message else ''
         except Exception:
             preview = ''
+        # Persistent receipt debug so we can see calls even if display path later suppresses
+        try:
+            import time, os
+            log_dir = os.path.join(os.getcwd(), 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+            dbg = os.path.join(log_dir, 'chat_page_received.log')
+            mid = None
+            try:
+                if isinstance(metadata, dict):
+                    mid = metadata.get('message_id') or metadata.get('id')
+            except Exception:
+                mid = None
+            with open(dbg, 'a', encoding='utf-8', errors='replace') as df:
+                df.write(f"{time.time():.3f} RECEIVED platform={platform} username={username} message_id={repr(mid)} preview={repr(preview)} metadata_keys={list(metadata.keys()) if isinstance(metadata, dict) else None}\n")
+        except Exception:
+            pass
+        # Early normalization: some connectors embed IRC tag blob into `username` (e.g. '... :realuser')
+        # Extract message_id and clean username so duplicate raw/normalized events are deduplicated.
+        try:
+            if isinstance(metadata, dict) is False:
+                metadata = metadata or {}
+            if platform == 'twitch' and username and ' :' in username:
+                raw_user = username
+                try:
+                    tag_part, real_user = raw_user.split(' :', 1)
+                    # extract id=... if present
+                    for kv in tag_part.split(';'):
+                        if '=' in kv:
+                            k, v = kv.split('=', 1)
+                            k = k.strip()
+                            v = v.strip()
+                            if k in ('id', 'message-id', 'message_id') and v:
+                                metadata['message_id'] = v
+                    # update username to cleaned value
+                    username = real_user.strip() or username
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Deduplicate by platform message id if we've already seen it
+        try:
+            platform_msg_id = None
+            if isinstance(metadata, dict):
+                platform_msg_id = metadata.get('message_id') or metadata.get('id')
+            if platform_msg_id:
+                key = f"{platform}:{platform_msg_id}"
+                if key in self.platform_message_id_map:
+                    logger.debug(f"Duplicate message ignored platform={platform} message_id={platform_msg_id}")
+                    return
+        except Exception:
+            pass
         try:
             logger.debug(f"[TRACE] addMessage called: platform={platform} username={username} preview={preview} paused={self.is_paused} chat_page_id={id(self)} chat_manager_id={id(self.chat_manager)}")
         except Exception:
@@ -858,34 +910,142 @@ class ChatPage(QWidget):
         if badges_html:
             parts.append(badges_html)
 
+        # Prepare emotes_tag (may be populated from metadata or recovered by heuristic)
+        emotes_tag = None
+
+        # Heuristic: some connectors may misplace IRC tag payload into `username`.
+        # Try to recover emotes and real username for Twitch regardless of metadata presence,
+        # but only override emotes_tag if we detect a tag-like payload.
+        try:
+            if platform == 'twitch':
+                raw_user = username or ''
+                # look for the pattern '... :username' where the left side is semicolon-delimited IRC tags
+                if ' :' in raw_user:
+                    tag_part, real_user = raw_user.split(' :', 1)
+                    first_token = tag_part.split(';', 1)[0]
+                    import re as _re
+                    if first_token and (_re.search(r"\d+-\d+", first_token) or 'emotesv2_' in first_token or 'id=' in tag_part):
+                        # Recover emotes tag only if we haven't got one already
+                        if not emotes_tag:
+                            emotes_tag = first_token
+                        # Update username to the real username portion
+                        username = real_user.strip()
+                        # Attempt to pull message_id and common keys if metadata is a dict
+                        try:
+                            if not isinstance(metadata, dict):
+                                metadata = {}
+                            for kv in tag_part.split(';'):
+                                if '=' in kv:
+                                    k, v = kv.split('=', 1)
+                                    k = k.strip()
+                                    v = v.strip()
+                                    if not v:
+                                        continue
+                                    if k in ('id', 'message-id', 'message_id'):
+                                        metadata['message_id'] = v
+                                    elif k in ('room-id', 'room_id', 'channel_id', 'broadcaster_id'):
+                                        metadata['room-id'] = v
+                                        metadata['channel_id'] = v
+                                    elif k in ('room', 'channel', 'broadcaster'):
+                                        metadata['channel'] = v
+                        except Exception:
+                            pass
+                        # Durable debug line for recovered values
+                        try:
+                            import time, os
+                            log_dir = os.path.join(os.getcwd(), 'logs')
+                            os.makedirs(log_dir, exist_ok=True)
+                            fname = os.path.join(log_dir, 'chat_page_received_fixed.log')
+                            with open(fname, 'a', encoding='utf-8', errors='replace') as f:
+                                f.write(f"{time.time():.3f} FIXED raw_username={repr(raw_user)} recovered_username={repr(username)} emotes_tag={repr(emotes_tag)}\n")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         # Username
-        username_html = f'<span style="color: {user_color}; font-weight: bold;">{username}</span>'
+        # Escape username to prevent raw HTML from being injected (connectors may include tag blobs)
+        safe_username = html.escape(username or '')
+        username_html = f'<span style="color: {user_color}; font-weight: bold;">{safe_username}</span>'
         parts.append(username_html)
 
-        # Message - replace emotes where possible
-        emotes_tag = None
+        # Message - replace emotes where possible (use unified renderer)
         # Common metadata keys for emotes across connectors
         for k in ('emotes', 'emotes_tag', 'emote_tags', 'emotes_raw'):
+            if emotes_tag:
+                break
             if k in metadata and metadata.get(k):
                 emotes_tag = metadata.get(k)
                 break
 
-        message_html = self.replace_emotes_with_images(message, emotes_tag)
+        
+
+        try:
+            # Persistent trace: record that we're about to call unified renderer
+            try:
+                import time, os
+                log_dir = os.path.join(os.getcwd(), 'logs')
+                os.makedirs(log_dir, exist_ok=True)
+                trace_file = os.path.join(log_dir, 'chat_page_render_trace.log')
+                mid = None
+                try:
+                    if isinstance(metadata, dict):
+                        mid = metadata.get('message_id') or metadata.get('id')
+                except Exception:
+                    mid = None
+                with open(trace_file, 'a', encoding='utf-8', errors='replace') as tf:
+                    tf.write(f"{time.time():.3f} RENDER_CALL mid={repr(mid)} emotes_tag={repr(emotes_tag)} preview={repr(message[:120])}\n")
+            except Exception:
+                pass
+
+            from core.emotes import render_message
+            message_html, has_img = render_message(message, emotes_tag, metadata)
+            if not message_html:
+                message_html = html.escape(message)
+        except Exception:
+            # If the unified renderer fails for any reason, fall back to legacy replacement
+            try:
+                logger.exception('core.emotes.render_message failed, falling back')
+            except Exception:
+                pass
+            message_html = self.replace_emotes_with_images(message, emotes_tag)
+
         parts.append(message_html)
 
+        # Function to actually inject HTML and send to overlay
+        def emit_message(final_parts, final_html_snippet, final_has_img):
+            combined = ' '.join(final_parts)
+            wrapped = f'<div class="message" data-message-id="{message_id}" style="{bg_style} padding: 2px 6px; border-radius: 4px; margin-bottom: 2px; cursor: pointer;">{combined}</div>'
 
-        # Combine all parts with spaces
-        html = ' '.join(parts)
-        
-        # Apply special styling for event messages
-        if is_event:
-            html = f'<span style="background: linear-gradient(90deg, rgba(138,43,226,0.2) 0%, rgba(138,43,226,0) 100%); padding: 4px 8px; border-left: 3px solid #8a2be2; display: block; font-style: italic;">{html}</span>'
-        
-        # Apply strike-through only if message was actually deleted from platform
-        if message_deleted_from_platform:
-            html = f'<span style="text-decoration: line-through; opacity: 0.7;">{html}</span>'
+            js_code_local = f"""
+                var chatBody = document.getElementById('chat-body');
+                if (chatBody) {{
+                    chatBody.insertAdjacentHTML('beforeend', `{wrapped}`);
+                    var messages = chatBody.querySelectorAll('.message');
+                    var newMessage = messages[messages.length - 1];
+                    newMessage.classList.add('message-slide-in');
+                    setTimeout(function() {{
+                        newMessage.classList.remove('message-slide-in');
+                        newMessage.classList.add('message-wiggle');
+                        setTimeout(function() {{
+                            newMessage.classList.remove('message-wiggle');
+                        }}, 2000);
+                    }}, 800);
+                    window.scrollTo(0, document.body.scrollHeight);
+                }}
+                true;
+            """
 
-        # Determine background style
+            self._queueJavaScriptExecution(js_code_local, message_id)
+
+            # Send to overlay only when images are available
+            is_event_local = metadata.get('event_type') is not None
+            if self.overlay_server and not is_event_local and final_has_img:
+                badges = metadata.get('badges', [])
+                color = user_color if self.show_user_colors else None
+                self.overlay_server.add_message(platform, username, message, message_id, badges, color)
+
+        # Determine background style (kept here so closure can use bg_style)
         bg_style = ''
         if self.background_style == 'Background':
             bg_style = 'background-color: #23272e;'
@@ -896,48 +1056,31 @@ class ChatPage(QWidget):
                 bg_style = 'background-color: #181b20;'
             self.message_count += 1
 
-        # Wrap in a div for styling with message ID
-        html = f'<div class="message" data-message-id="{message_id}" style="{bg_style} padding: 2px 6px; border-radius: 4px; margin-bottom: 2px; cursor: pointer;">{html}</div>'
+        # If images already present, emit immediately
+        if has_img:
+            emit_message(parts, message_html, True)
+        else:
+            # Retry a few times using QTimer to allow emote caches to populate
+            max_attempts = 5
+            delay_ms = 200
+            attempt = {'n': 0}
 
-        # Inject into chat display using JavaScript with animations
-        js_code = f"""
-            var chatBody = document.getElementById('chat-body');
-            if (chatBody) {{
-                chatBody.insertAdjacentHTML('beforeend', `{html}`);
-                
-                // Get the newly added message element
-                var messages = chatBody.querySelectorAll('.message');
-                var newMessage = messages[messages.length - 1];
-                
-                // Apply slide-in animation
-                newMessage.classList.add('message-slide-in');
-                
-                // After slide-in completes (0.8s), apply wiggle animation
-                setTimeout(function() {{
-                    newMessage.classList.remove('message-slide-in');
-                    newMessage.classList.add('message-wiggle');
-                    
-                    // Remove wiggle animation after it completes (2s)
-                    setTimeout(function() {{
-                        newMessage.classList.remove('message-wiggle');
-                    }}, 2000);
-                }}, 800);
-                
-                window.scrollTo(0, document.body.scrollHeight);
-            }}
-            true;  // Return value to indicate completion
-        """
-        
-        # Use queued execution to prevent message loss during high volume
-        self._queueJavaScriptExecution(js_code, message_id)
-        
-        # Send message to overlay server (but not events)
-        # Events like raids, subs, etc. should only show in chat log, not on stream overlay
-        is_event = metadata.get('event_type') is not None
-        if self.overlay_server and not is_event:
-            badges = metadata.get('badges', [])
-            color = user_color if self.show_user_colors else None
-            self.overlay_server.add_message(platform, username, message, message_id, badges, color)
+            def _retry():
+                attempt['n'] += 1
+                try:
+                    new_html, new_has = render_message(message, emotes_tag, metadata)
+                except Exception:
+                    new_html, new_has = (message_html, False)
+                if not new_html:
+                    new_html = html.escape(message)
+                if new_has or attempt['n'] >= max_attempts:
+                    # replace last part with latest html
+                    parts[-1] = new_html
+                    emit_message(parts, new_html, new_has)
+                else:
+                    QTimer.singleShot(delay_ms, _retry)
+
+            QTimer.singleShot(delay_ms, _retry)
     
     def togglePlatformIcons(self, state):
         """Toggle platform icon visibility"""

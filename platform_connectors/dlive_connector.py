@@ -696,7 +696,8 @@ class DLiveWorker(QThread):
                 }
                 
                 logger.info(f"[DLiveWorker] Chat: {username}: {content}")
-                self.message_signal.emit(username, content, metadata)
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, content, metadata)
             
             elif msg_type == "ChatGift":
                 # Gift message
@@ -718,7 +719,8 @@ class DLiveWorker(QThread):
                 }
                 
                 logger.info(f"[DLiveWorker] Gift: {username} {content}")
-                self.message_signal.emit(username, content, metadata)
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, content, metadata)
             
             elif msg_type == "ChatFollow":
                 # Follow message
@@ -736,7 +738,8 @@ class DLiveWorker(QThread):
                 
                 logger.info(f"[DLiveWorker] Follow: {username}")
                 # Emit as stream event instead of regular message
-                self.message_signal.emit(username, "🎯 followed the stream", {'event_type': 'follow', **event_data})
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, "🎯 followed the stream", {'event_type': 'follow', **event_data})
             
             elif msg_type == "ChatSubscription":
                 # Subscription message
@@ -756,7 +759,8 @@ class DLiveWorker(QThread):
                 
                 logger.info(f"[DLiveWorker] Subscription: {username} for {month} month(s)")
                 # Emit as stream event instead of regular message
-                self.message_signal.emit(username, f"⭐ subscribed for {month} month{'s' if month > 1 else ''}", {'event_type': 'subscription', **event_data})
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, f"⭐ subscribed for {month} month{'s' if month > 1 else ''}", {'event_type': 'subscription', **event_data})
             
             elif msg_type in ("ChatHost", "Host"):
                 # Host/raid message
@@ -776,7 +780,8 @@ class DLiveWorker(QThread):
                 
                 logger.info(f"[DLiveWorker] Host/Raid: {username} with {viewer_count} viewer(s)")
                 # Emit as stream event
-                self.message_signal.emit(username, f"📢 hosted with {viewer_count} viewer{'s' if viewer_count != 1 else ''}", {'event_type': 'raid', **event_data})
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, f"📢 hosted with {viewer_count} viewer{'s' if viewer_count != 1 else ''}", {'event_type': 'raid', **event_data})
             
             elif msg_type in ("ChatDelete", "Delete"):
                 # Message deletion event

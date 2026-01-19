@@ -228,6 +228,30 @@ class TwitchConnector(BasePlatformConnector):
             badge_manager.fetch_twitch_badges(self.client_id, self.oauth_token)
         except Exception as e:
             logger.exception(f"Error fetching badges: {e}")
+
+        # Attempt to resolve broadcaster_id and prefetch channel emotes in background
+        try:
+            from core.twitch_emotes import get_manager as get_twitch_manager
+            try:
+                if not getattr(self, 'broadcaster_id', None) and getattr(self, 'username', None):
+                    try:
+                        mgr = get_twitch_manager()
+                        bid = mgr.get_broadcaster_id(self.username)
+                        if bid:
+                            try:
+                                self.broadcaster_id = bid
+                            except Exception:
+                                pass
+                            try:
+                                mgr.prefetch_channel(bid, background=True)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        except Exception:
+            pass
         
         # Create worker thread for async connection
         # For bot accounts, we might connect to a different channel than our username
@@ -1348,7 +1372,8 @@ class TwitchWorker(QThread):
                 username, message, metadata = result
                 logger.info(f"[Twitch] Event: {username}: {message}")
                 logger.debug(f"[Twitch Event Metadata] {metadata.get('event_type', 'unknown')}")
-                self.message_signal.emit(username, message)
+                from .connector_utils import emit_chat
+                emit_chat(self, 'twitch', username, message, metadata)
                 if hasattr(self, '_metadata_callback') and self._metadata_callback:
                     self._metadata_callback(username, message, metadata)
             return
@@ -1377,7 +1402,8 @@ class TwitchWorker(QThread):
                 
                 # Emit signal with error handling
                 try:
-                    self.message_signal.emit(username, message)
+                    from .connector_utils import emit_chat
+                    emit_chat(self, 'twitch', username, message, metadata)
                     # Diagnostic: show which worker/connector will call metadata callback
                     try:
                         has_cb = hasattr(self, '_metadata_callback') and self._metadata_callback

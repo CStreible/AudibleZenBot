@@ -867,7 +867,8 @@ class TrovoWorker(QThread):
                         logger.info(f"[TrovoWorker] Raid: {username} - {viewers} viewers")
                     
                     logger.debug(f"[TrovoWorker] Emitting message from {username}: {message} with badges: {badges}")
-                    self.message_signal.emit(username, message, metadata)
+                    from .connector_utils import emit_chat
+                    emit_chat(self, 'trovo', username, message, metadata)
             elif msg_type == "MESSAGE_DELETE" or msg_type == "DELETE":
                 # Handle message deletion events
                 logger.debug(f"[TrovoWorker] Processing deletion message: {data}")

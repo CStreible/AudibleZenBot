@@ -33,6 +33,14 @@ except Exception:
 
 import core.http_session as http_session
 try:
+    try:
+        logger = get_logger('twitch_emotes')
+        logger.debug(f"import-time: core.http_session={repr(http_session)} factory={getattr(http_session, 'make_retry_session', None)}")
+    except Exception:
+        pass
+except Exception:
+    pass
+try:
     from core.signals import signals as emote_signals
 except Exception:
     emote_signals = None
@@ -53,7 +61,12 @@ class PrefetchError(Exception):
 class TwitchEmoteManager:
     def __init__(self, config=None):
         self.config = config
-        self.session = http_session.make_retry_session()
+        # Create session lazily to allow tests to swap `core.http_session`
+        # before the first network call (improves test isolation).
+        self.session = None
+        # Track which http_session factory produced `session` so tests can
+        # replace `core.http_session` and force a new manager when needed.
+        self._session_factory = None
         # Backoff base seconds (small default to keep tests fast)
         self._backoff_base = 0.05
         # configurable max retries (can be overridden via config)
@@ -95,7 +108,13 @@ class TwitchEmoteManager:
         max_attempts = int(max_retries or getattr(self, '_max_retries', 3))
         while True:
             try:
-                r = self.session.get(url, headers=self._headers(), params=params, timeout=timeout)
+                sess = self._get_session()
+                try:
+                    logger = get_logger('twitch_emotes')
+                    logger.debug(f"_request_with_backoff: using http_session module={repr(http_session)} factory={getattr(http_session, 'make_retry_session', None)} session={repr(sess)} url={url}")
+                except Exception:
+                    pass
+                r = sess.get(url, headers=self._headers(), params=params, timeout=timeout)
             except Exception as e:
                 # record attempts so callers can include attempts in payloads
                 try:
@@ -138,7 +157,54 @@ class TwitchEmoteManager:
             except Exception:
                 pass
 
+            try:
+                logger = get_logger('twitch_emotes')
+                logger.debug(f"_request_with_backoff: received response status={getattr(r, 'status_code', None)} for url={url}")
+            except Exception:
+                pass
+
             return r
+
+    def _get_session(self):
+        """Return an active HTTP session, creating it from the current
+        `core.http_session.make_retry_session()` factory if needed.
+
+        Creating the session lazily allows tests to replace the `core.http_session`
+        module (via `sys.modules` or direct assignment) before the first
+        network call; this reduces flakiness when tests run in parallel.
+        """
+        # Always construct a fresh session from the current factory so tests
+        # that swap `core.http_session` are guaranteed to be used. Creating
+        # per-request sessions is acceptable for the test harness and avoids
+        # stale session objects carrying over between tests.
+        # If a test or caller has explicitly set `self.session`, prefer it
+        # (this is used by integration tests which inject a stubbed session).
+        try:
+            if getattr(self, 'session', None) is not None:
+                return self.session
+
+            # Resolve the `core.http_session` module dynamically from sys.modules
+            # so tests that replace `sys.modules['core.http_session']` are
+            # observed even if the import-time binding didn't pick up the
+            # replacement.
+            import sys as _sys
+            current_http = _sys.modules.get('core.http_session', http_session)
+            factory = getattr(current_http, 'make_retry_session', None)
+            sess = factory() if callable(factory) else None
+            # remember the factory for detection in get_manager()
+            self._session_factory = factory
+            if sess is not None:
+                return sess
+        except Exception:
+            pass
+
+        # Fallback to a plain requests.Session per-call if no factory present
+        try:
+            import requests
+
+            return requests.Session()
+        except Exception:
+            return None
 
     def fetch_global_emotes(self) -> None:
         url = 'https://api.twitch.tv/helix/chat/emotes/global'
@@ -939,7 +1005,60 @@ def get_manager(config: Optional[object] = None) -> TwitchEmoteManager:
     except Exception:
         _manager = None
 
+    # If the http_session factory was swapped (tests often replace
+    # `sys.modules['core.http_session']`), make sure the singleton is
+    # recreated so it uses the new factory. Compare the known factory
+    # stored on the manager with the current module's factory.
+    try:
+        if _manager is not None:
+            # Resolve current http_session from sys.modules so test-time
+            # replacements (tests swapping `sys.modules['core.http_session']`)
+            # are detected and cause the singleton to be recreated.
+            try:
+                import sys as _sys
+                current_http = _sys.modules.get('core.http_session', http_session)
+                current_factory = getattr(current_http, 'make_retry_session', None)
+            except Exception:
+                current_factory = getattr(http_session, 'make_retry_session', None)
+
+            known_factory = getattr(_manager, '_session_factory', None)
+            if known_factory is not current_factory:
+                try:
+                    _manager.stop_emote_set_throttler()
+                except Exception:
+                    pass
+                try:
+                    _manager.shutdown(timeout=0.1)
+                except Exception:
+                    pass
+                _manager = None
+    except Exception:
+        _manager = None
+
     if _manager is None:
         _manager = TwitchEmoteManager(config=config)
     return _manager
+
+
+def reset_manager():
+    """Reset the module-level manager used by tests.
+
+    This stops background workers and clears the singleton so subsequent
+    calls to `get_manager()` return a fresh instance that will pick up any
+    test-time replacements of `core.http_session`.
+    """
+    global _manager
+    try:
+        if _manager is not None:
+            try:
+                _manager.stop_emote_set_throttler()
+            except Exception:
+                pass
+            try:
+                _manager.shutdown(timeout=0.1)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    _manager = None
 

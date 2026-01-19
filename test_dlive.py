@@ -1,9 +1,15 @@
 """
 Test DLive WebSocket subscription directly
 """
+import os
 import asyncio
 import json
+import pytest
 import websockets
+
+# Gate manual network tests: only run when RUN_NETWORK_TESTS=1 is set
+if os.getenv('RUN_NETWORK_TESTS') != '1':
+    pytest.skip("Skipping DLive network test; set RUN_NETWORK_TESTS=1 to enable", allow_module_level=True)
 
 ACCESS_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoidXNlciIsInVzZXJuYW1lIjoiYXVkaWJsZXplbmxpZmUiLCJleHAiOjE3NjgyNjY4MDh9.vwZmcVqxzqX7o7xh1FZKGww8s5zFV20b6OKt3TFqVoc"
 USERNAME = "AudibleZenLife"

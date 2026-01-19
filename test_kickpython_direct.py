@@ -1,8 +1,14 @@
 """
 Test kickpython package directly to see if it can send messages
 """
+import os
 import asyncio
+import pytest
 from kickpython import KickAPI
+
+# Gate manual network tests: only run when RUN_NETWORK_TESTS=1 is set
+if os.getenv('RUN_NETWORK_TESTS') != '1':
+    pytest.skip("Skipping Kick direct network test; set RUN_NETWORK_TESTS=1 to enable", allow_module_level=True)
 
 async def test_send():
     # Your OAuth credentials - prefer values from config

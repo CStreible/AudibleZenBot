@@ -6,7 +6,7 @@ import asyncio
 import time
 import os
 from typing import Dict, Optional
-from PyQt6.QtCore import QObject, pyqtSignal, QThread
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
 from PyQt6.QtCore import pyqtSlot
 from core.logger import get_logger
 
@@ -104,6 +104,22 @@ class ChatManager(QObject):
             if hasattr(connector, 'message_deleted'):
                 connector.message_deleted.connect(self.onMessageDeleted)
                 logger.info(f"Connected message_deleted for {platform_id}")
+            # Assert connector conforms to minimal contract
+            try:
+                self._assert_connector_contract(platform_id, connector)
+            except Exception:
+                logger.warning(f"Connector contract assertion failed for {platform_id}")
+
+    def _assert_connector_contract(self, platform_id: str, connector: object):
+        """Runtime check to ensure connectors implement at least one of the
+        expected incoming message signals. This helps catch legacy connectors
+        during startup and surfaces a clear warning.
+        """
+        has_with_meta = hasattr(connector, 'message_received_with_metadata')
+        has_legacy = hasattr(connector, 'message_received')
+        if not has_with_meta and not has_legacy:
+            logger.warning(f"Connector for '{platform_id}' exposes neither 'message_received_with_metadata' nor 'message_received'.")
+        # Additional checks could validate signal types if needed
 
     @pyqtSlot(str, str, str, dict)
     def _onConnectorMessageWithMetadata(self, platform, username, message, metadata):
@@ -120,6 +136,12 @@ class ChatManager(QObject):
             logger.debug(f"[TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username} preview={preview}")
         except Exception:
             logger.debug(f"[TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username}")
+        # Validate metadata shape before handing off
+        try:
+            metadata = self._normalize_and_validate_metadata(metadata)
+        except Exception as e:
+            logger.warning(f"Invalid metadata from {platform} by {username}: {e}")
+            metadata = {} if metadata is None else metadata
         self.onMessageReceivedWithMetadata(platform, username, message, metadata)
 
     @pyqtSlot(str, str, str, dict)
@@ -137,6 +159,56 @@ class ChatManager(QObject):
             logger.debug(f"[TRACE] _onConnectorMessageLegacy: platform={platform} username={username} preview={preview}")
         except Exception:
             logger.debug(f"[TRACE] _onConnectorMessageLegacy: platform={platform} username={username}")
+        # If this looks like a Twitch IRC tag blob mistakenly sent as `username`,
+        # delay handling briefly to allow the metadata-emitting path to run first.
+        try:
+            if platform == 'twitch' and isinstance(username, str):
+                # Heuristic: tag-heavy usernames contain '/' or 'emotesv2_' or patterns like '0-12'
+                if 'emotesv2_' in username or '/' in username or any(pat in username for pat in ('emotes=', 'emotes')):
+                    try:
+                        # Attempt to parse the tag blob and convert it into metadata immediately.
+                        raw_user = username or ''
+                        if ' :' in raw_user:
+                            tag_part, real_user = raw_user.split(' :', 1)
+                            # Parse semicolon-separated IRC tags into metadata dict
+                            meta = {}
+                            for kv in tag_part.split(';'):
+                                if '=' in kv:
+                                    k, v = kv.split('=', 1)
+                                    meta[k] = v
+                            # Promote known keys
+                            md = {}
+                            if 'emotes' in meta and meta.get('emotes'):
+                                md['emotes'] = meta.get('emotes')
+                            if 'id' in meta and meta.get('id'):
+                                md['message_id'] = meta.get('id')
+                            # Include timestamp and badges if present
+                            for k in ('tmi-sent-ts', 'timestamp', 'badges', 'color'):
+                                if k in meta and meta.get(k):
+                                    md[k] = meta.get(k)
+                            # Use recovered username as the display name
+                            recovered_username = real_user.strip()
+                            # Emit via the metadata path to ensure uniform handling
+                            try:
+                                self.onMessageReceivedWithMetadata(platform, recovered_username, message, md)
+                                return
+                            except Exception:
+                                # Fallback to legacy emit if metadata path fails
+                                try:
+                                    self.onMessageReceived(platform, username, message)
+                                    return
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Legacy path: ensure metadata is a dict-like object if provided
+        try:
+            metadata = self._normalize_and_validate_metadata(metadata)
+        except Exception:
+            metadata = {}
         # Call the legacy handler which will emit message_received after checks
         self.onMessageReceived(platform, username, message)
 
@@ -167,6 +239,29 @@ class ChatManager(QObject):
         if not connector:
             logger.warning(f"No connector found for {platform_id}")
             return False
+
+    def _normalize_and_validate_metadata(self, metadata):
+        """Ensure metadata is a dict and normalize common fields.
+
+        Rules:
+        - `metadata` must be a dict or None
+        - If `message_id` present, coerce to string
+        - If `timestamp` or `tmi-sent-ts` present, leave as-is but ensure it's a str/int
+        """
+        if metadata is None:
+            return {}
+        if not isinstance(metadata, dict):
+            raise TypeError('metadata must be a dict')
+        md = dict(metadata)
+        if 'message_id' in md and md['message_id'] is not None:
+            md['message_id'] = str(md['message_id'])
+        # normalize timestamp keys
+        for tkey in ('tmi-sent-ts', 'timestamp'):
+            if tkey in md and md[tkey] is not None:
+                # accept numeric or string timestamps
+                if not isinstance(md[tkey], (int, str)):
+                    md[tkey] = str(md[tkey])
+        return md
         
         try:
             # Pass ngrok_manager to connector if available
@@ -640,6 +735,51 @@ class ChatManager(QObject):
             logger.info(f"Platform {platform_id} is disabled, message not emitted")
             return
 
+        # Heuristic: some connectors may accidentally place IRC tag payload into the
+        # `username` field (e.g., "...;id=xxx;... :realuser"). If metadata is empty
+        # or minimal, attempt to recover emotes/message_id and the real username so
+        # downstream canonicalization/deduplication works correctly.
+        try:
+            if platform_id == 'twitch' and (not isinstance(metadata, dict) or not metadata.keys()):
+                raw_user = username or ''
+                # Look for the common pattern where tags and the real username are joined with ' :'
+                if ' :' in raw_user:
+                    tag_part, real_user = raw_user.split(' :', 1)
+                    first_token = tag_part.split(';', 1)[0]
+                    if first_token and ('emotes' in first_token or 'emotesv2_' in first_token or ('-' in first_token and '/' in first_token)):
+                        # Recover emotes tag into metadata and set username to real_user
+                        try:
+                            if not isinstance(metadata, dict):
+                                metadata = {}
+                        except Exception:
+                            metadata = {}
+                        try:
+                            metadata['emotes'] = first_token
+                        except Exception:
+                            pass
+                        try:
+                            # try to find id=... in the tag_part
+                            for kv in tag_part.split(';'):
+                                if '=' in kv:
+                                    k, v = kv.split('=', 1)
+                                    if k == 'id' and v:
+                                        metadata['message_id'] = v
+                                        break
+                        except Exception:
+                            pass
+                        # Replace username with cleaned real username
+                        username = real_user.strip()
+                        # Durable debug log
+                        try:
+                            log_dir = os.path.join(os.getcwd(), 'logs')
+                            os.makedirs(log_dir, exist_ok=True)
+                            with open(os.path.join(log_dir, 'chatmanager_username_fix.log'), 'a', encoding='utf-8', errors='replace') as f:
+                                f.write(f"{time.time():.3f} FIXED platform={platform_id} raw_username={repr(raw_user)} recovered_username={repr(username)} emotes={repr(metadata.get('emotes'))} message_id={repr(metadata.get('message_id'))}\n")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         # De-duplication: suppress duplicate incoming messages from multiple connections
         try:
             now = time.time()
@@ -720,6 +860,19 @@ class ChatManager(QObject):
                 diag_file = os.path.join(log_dir, 'chatmanager_emitted.log')
                 with open(diag_file, 'a', encoding='utf-8', errors='replace') as df:
                     df.write(f"{time.time():.3f} platform={platform_id} username={username} preview={repr(message)[:200]} metadata_keys={list(metadata.keys())}\n")
+            except Exception:
+                pass
+            # Additional debug: write full metadata and message id for tracing
+            try:
+                debug_file = os.path.join(log_dir, 'chatmanager_emit_debug.log')
+                with open(debug_file, 'a', encoding='utf-8', errors='replace') as df:
+                    mid = None
+                    try:
+                        if isinstance(metadata, dict):
+                            mid = metadata.get('message_id') or metadata.get('id')
+                    except Exception:
+                        mid = None
+                    df.write(f"{time.time():.3f} EMIT platform={platform_id} username={username} message_id={repr(mid)} metadata={repr(metadata)} preview={repr(message)[:200]}\n")
             except Exception:
                 pass
         except Exception as e:

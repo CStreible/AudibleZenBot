@@ -153,10 +153,18 @@ class KickConnector(BasePlatformConnector):
             self.worker.send_message(message)
     
     def onMessageReceived(self, username: str, message: str):
-        self.message_received.emit(username, message)
+        # Emit using standardized signature: platform, username, message, metadata
+        try:
+            self.message_received.emit('kick', username, message, {})
+        except Exception:
+            logger.exception("KickOldPusher: failed to emit standardized message_received signal")
     
     def onMessageReceivedWithMetadata(self, username: str, message: str, metadata: dict):
-        self.message_received_with_metadata.emit(username, message, metadata)
+        # Ensure standardized signature: platform, username, message, metadata
+        try:
+            self.message_received_with_metadata.emit('kick', username, message, metadata)
+        except Exception:
+            logger.exception("KickOldPusher: failed to emit standardized message_received_with_metadata signal")
     
     def onStatusChanged(self, connected: bool):
         self.connected = connected
@@ -321,8 +329,8 @@ class KickWorker(QThread):
                 }
                 
                 logger.info(f"[Kick] {username}: {content}")
-                self.message_signal.emit(username, content)
-                self.message_signal_with_metadata.emit(username, content, metadata)
+                from .connector_utils import emit_chat
+                emit_chat(self, 'kick', username, content, metadata)
                 
         except Exception as e:
             logger.error(f"Error handling Kick message: {e}")
