@@ -4,7 +4,10 @@ for transient network errors. Import `make_retry_session` in connectors.
 """
 from typing import Optional
 try:
-    import requests
+    try:
+        import requests
+    except Exception:
+        requests = None
     from requests.adapters import HTTPAdapter
     from urllib3.util import Retry
 

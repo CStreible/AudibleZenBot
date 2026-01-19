@@ -7,7 +7,10 @@ Uses official Kick Developer API: https://docs.kick.com/
 import asyncio
 import json
 import time
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from platform_connectors.base_connector import BasePlatformConnector

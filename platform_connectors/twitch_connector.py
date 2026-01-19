@@ -7,7 +7,10 @@ import asyncio
 import os
 import re
 import time
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 import json
 from typing import Optional
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -15,8 +18,14 @@ from platform_connectors.base_connector import BasePlatformConnector
 from core.badge_manager import get_badge_manager
 import websockets
 from core.logger import get_logger
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
+try:
+    from requests.adapters import HTTPAdapter
+except Exception:
+    HTTPAdapter = None
+try:
+    from urllib3.util import Retry
+except Exception:
+    Retry = None
 
 # Structured logger for this module
 logger = get_logger('TwitchConnector')

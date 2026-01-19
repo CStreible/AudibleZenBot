@@ -14,12 +14,6 @@ from core.logger import get_logger
 logger = get_logger('ChatManager')
 
 from core.config import ConfigManager
-from platform_connectors.twitch_connector import TwitchConnector
-from platform_connectors.youtube_connector import YouTubeConnector
-from platform_connectors.trovo_connector import TrovoConnector
-from platform_connectors.kick_connector import KickConnector
-from platform_connectors.dlive_connector import DLiveConnector
-from platform_connectors.twitter_connector import TwitterConnector
 
 
 class ChatManager(QObject):
@@ -46,7 +40,37 @@ class ChatManager(QObject):
                     self.disabled_platforms.add(platform_id)
 
         # Platform connectors (for reading chat - streamer account)
+        # Import connector classes lazily to avoid importing heavy runtime
+        # dependencies (like `requests`) at module import time which breaks
+        # unit-test collection in CI environments where those deps are not
+        # installed. Importing here delays that until ChatManager is actually
+        # instantiated.
         self.connectors: Dict[str, object] = {}
+        try:
+            from platform_connectors.twitch_connector import TwitchConnector
+        except Exception:
+            TwitchConnector = None
+        try:
+            from platform_connectors.youtube_connector import YouTubeConnector
+        except Exception:
+            YouTubeConnector = None
+        try:
+            from platform_connectors.trovo_connector import TrovoConnector
+        except Exception:
+            TrovoConnector = None
+        try:
+            from platform_connectors.kick_connector import KickConnector
+        except Exception:
+            KickConnector = None
+        try:
+            from platform_connectors.dlive_connector import DLiveConnector
+        except Exception:
+            DLiveConnector = None
+        try:
+            from platform_connectors.twitter_connector import TwitterConnector
+        except Exception:
+            TwitterConnector = None
+
         for pid, ctor in [
             ('twitch', TwitchConnector),
             ('youtube', YouTubeConnector),
@@ -55,6 +79,9 @@ class ChatManager(QObject):
             ('dlive', DLiveConnector),
             ('twitter', TwitterConnector)
         ]:
+            if ctor is None:
+                logger.info(f"Connector class for {pid} unavailable; skipping instantiation")
+                continue
             if pid not in self.disabled_platforms:
                 self.connectors[pid] = ctor(self.config)
             else:

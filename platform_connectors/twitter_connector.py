@@ -4,7 +4,10 @@ Connects to Twitter/X API v2 for tweet streams and mentions
 """
 
 import time
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 from platform_connectors.base_connector import BasePlatformConnector
 from PyQt6.QtCore import QThread, pyqtSignal
 from core.logger import get_logger

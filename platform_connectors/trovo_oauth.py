@@ -1,4 +1,7 @@
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 import webbrowser
 from urllib.parse import urlencode
 from core.logger import get_logger
@@ -60,7 +63,7 @@ def exchange_code_for_token_v2(auth_code):
         "redirect_uri": TROVO_REDIRECT_URI
     }
     try:
-        session = make_retry_session() if make_retry_session else requests.Session()
+        session = make_retry_session() if make_retry_session else (requests.Session() if requests is not None else None)
         resp = session.post(url, headers=headers, json=data, timeout=10)
     except requests.exceptions.RequestException as e:
         logger.exception(f"[Trovo OAuth] Network error exchanging code: {e}")

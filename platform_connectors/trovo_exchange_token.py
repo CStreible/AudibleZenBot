@@ -1,4 +1,7 @@
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -36,9 +39,12 @@ def exchange_code_for_token(auth_code):
         "redirect_uri": TROVO_REDIRECT_URI
     }
     try:
-        session = make_retry_session() if make_retry_session else requests.Session()
+        session = make_retry_session() if make_retry_session else (requests.Session() if requests is not None else None)
+        if session is None:
+            logger.error("[Trovo OAuth] 'requests' library not available in environment")
+            return None
         resp = session.post(TROVO_TOKEN_URL, headers=headers, json=data, timeout=10)
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logger.exception(f"[Trovo OAuth] Network error exchanging code: {e}")
         return None
     if resp.status_code == 200:

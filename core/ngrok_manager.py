@@ -6,7 +6,10 @@ Handles starting, stopping, and monitoring ngrok tunnels for webhook-based platf
 import os
 import sys
 import time
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 import subprocess
 from threading import Thread, Lock
 from typing import Dict, Optional, Any

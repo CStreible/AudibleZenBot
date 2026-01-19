@@ -6,7 +6,10 @@ Connects to YouTube Live Chat API
 import time
 from platform_connectors.base_connector import BasePlatformConnector
 from PyQt6.QtCore import QThread, pyqtSignal
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 from core.logger import get_logger
 try:
     from core.http_session import make_retry_session

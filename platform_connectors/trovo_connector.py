@@ -7,7 +7,10 @@ from platform_connectors.base_connector import BasePlatformConnector
 import asyncio
 import json
 import websockets
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 import random
 import string
 import time

@@ -12,7 +12,10 @@ import asyncio
 import json
 import time
 import websockets
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 from core.logger import get_logger
 
 logger = get_logger(__name__)

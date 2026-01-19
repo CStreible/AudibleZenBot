@@ -14,7 +14,10 @@ Alternative: Wait for Kick to release a WebSocket API for developers.
 """
 
 import json
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 import cloudscraper
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread

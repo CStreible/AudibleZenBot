@@ -4,7 +4,10 @@ Badge Manager - Download and cache Twitch badges
 
 import os
 import json
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 from pathlib import Path
 from typing import Dict, Optional
 from core.logger import get_logger
