@@ -158,7 +158,12 @@ class TwitchEmoteManager:
         # that swap `core.http_session` are guaranteed to be used. Creating
         # per-request sessions is acceptable for the test harness and avoids
         # stale session objects carrying over between tests.
+        # If a test or caller has explicitly set `self.session`, prefer it
+        # (this is used by integration tests which inject a stubbed session).
         try:
+            if getattr(self, 'session', None) is not None:
+                return self.session
+
             factory = getattr(http_session, 'make_retry_session', None)
             sess = factory() if callable(factory) else None
             # remember the factory for detection in get_manager()
