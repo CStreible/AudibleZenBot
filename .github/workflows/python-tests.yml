@@ -43,7 +43,8 @@ jobs:
 
   integration:
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_integration == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') }}
-    runs-on: ubuntu-latest
+    # Use Ubuntu 22.04 to ensure legacy audio packages like libasound2 are available
+    runs-on: ubuntu-22.04
     needs: test
     strategy:
       matrix:
