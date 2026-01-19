@@ -154,23 +154,27 @@ class TwitchEmoteManager:
         module (via `sys.modules` or direct assignment) before the first
         network call; this reduces flakiness when tests run in parallel.
         """
-        if self.session is None:
-            try:
-                factory = getattr(http_session, 'make_retry_session', None)
-                self.session = factory() if callable(factory) else None
-                # remember factory so callers can detect when tests swap it
-                self._session_factory = factory
-            except Exception:
-                # Fallback to a plain requests.Session if factory missing
-                try:
-                    import requests
+        # Always construct a fresh session from the current factory so tests
+        # that swap `core.http_session` are guaranteed to be used. Creating
+        # per-request sessions is acceptable for the test harness and avoids
+        # stale session objects carrying over between tests.
+        try:
+            factory = getattr(http_session, 'make_retry_session', None)
+            sess = factory() if callable(factory) else None
+            # remember the factory for detection in get_manager()
+            self._session_factory = factory
+            if sess is not None:
+                return sess
+        except Exception:
+            pass
 
-                    self.session = requests.Session()
-                except Exception:
-                    self.session = None
-                finally:
-                    self._session_factory = None
-        return self.session
+        # Fallback to a plain requests.Session per-call if no factory present
+        try:
+            import requests
+
+            return requests.Session()
+        except Exception:
+            return None
 
     def fetch_global_emotes(self) -> None:
         url = 'https://api.twitch.tv/helix/chat/emotes/global'
