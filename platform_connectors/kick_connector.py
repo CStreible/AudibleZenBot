@@ -18,7 +18,12 @@ try:
     import requests
 except Exception:
     requests = None
-import cloudscraper
+# cloudscraper is an optional dependency used to bypass Cloudflare protections at runtime.
+# Guard the import so test collection doesn't fail when it's not installed in CI.
+try:
+    import cloudscraper
+except Exception:
+    cloudscraper = None
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from platform_connectors.base_connector import BasePlatformConnector

@@ -1287,7 +1287,10 @@ class PlatformConnectionWidget(QWidget):
     def refresh_kick_info(self, connector):
         """Refresh Kick stream info"""
         import requests
-        import cloudscraper
+        try:
+            import cloudscraper
+        except Exception:
+            cloudscraper = None
         
         logger.debug(f"[Kick] Attempting to refresh info...")
         
@@ -1312,10 +1315,14 @@ class PlatformConnectionWidget(QWidget):
         logger.debug(f"[Kick] Using channel identifier: {channel_identifier}")
         
         try:
-            scraper = cloudscraper.create_scraper(
-                browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
-            )
-            response = scraper.get(f"https://kick.com/api/v2/channels/{channel_identifier}", timeout=10)
+            if cloudscraper is not None:
+                scraper = cloudscraper.create_scraper(
+                    browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
+                )
+                response = scraper.get(f"https://kick.com/api/v2/channels/{channel_identifier}", timeout=10)
+            else:
+                # Fall back to requests if cloudscraper isn't available (may fail on Cloudflare-protected pages)
+                response = requests.get(f"https://kick.com/api/v2/channels/{channel_identifier}", timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
@@ -1846,7 +1853,10 @@ class PlatformConnectionWidget(QWidget):
     def update_kick_api(self, stream_info):
         """Update Kick channel info via API"""
         import requests
-        import cloudscraper
+        try:
+            import cloudscraper
+        except Exception:
+            cloudscraper = None
         
         connector = self.chat_manager.connectors.get('kick')
         if not connector:
