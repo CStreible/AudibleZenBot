@@ -101,6 +101,11 @@ class TwitchEmoteManager:
         while True:
             try:
                 sess = self._get_session()
+                try:
+                    logger = get_logger('twitch_emotes')
+                    logger.debug(f"_request_with_backoff: using http_session module={repr(http_session)} factory={getattr(http_session, 'make_retry_session', None)} session={repr(sess)} url={url}")
+                except Exception:
+                    pass
                 r = sess.get(url, headers=self._headers(), params=params, timeout=timeout)
             except Exception as e:
                 # record attempts so callers can include attempts in payloads
@@ -141,6 +146,12 @@ class TwitchEmoteManager:
             # record successful attempts
             try:
                 self._last_request_attempts = attempt + 1
+            except Exception:
+                pass
+
+            try:
+                logger = get_logger('twitch_emotes')
+                logger.debug(f"_request_with_backoff: received response status={getattr(r, 'status_code', None)} for url={url}")
             except Exception:
                 pass
 
