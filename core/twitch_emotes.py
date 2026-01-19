@@ -33,6 +33,14 @@ except Exception:
 
 import core.http_session as http_session
 try:
+    try:
+        logger = get_logger('twitch_emotes')
+        logger.debug(f"import-time: core.http_session={repr(http_session)} factory={getattr(http_session, 'make_retry_session', None)}")
+    except Exception:
+        pass
+except Exception:
+    pass
+try:
     from core.signals import signals as emote_signals
 except Exception:
     emote_signals = None
