@@ -7,6 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 [![PyQt6](https://img.shields.io/badge/PyQt6-6.7.0-green.svg)](https://www.riverbankcomputing.com/software/pyqt/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/CStreible/AudibleZenBot/actions/workflows/python-tests.yml/badge.svg)](https://github.com/CStreible/AudibleZenBot/actions/workflows/python-tests.yml)
 
 Monitor and manage chat messages from **Twitch**, **YouTube**, **Trovo**, **Kick**, **DLive**, and **X (Twitter)** all in one unified interface!
 
@@ -107,11 +108,19 @@ python main.py
 
 ---
 
-## 📖 Documentation
+ [![Security](https://img.shields.io/badge/security-report-green.svg)](SECURITY.md)
+
+ ## 📖 Documentation
 
 - **[Quick Start Guide](QUICK_START.md)** - Get up and running in 3 steps
 - **[User Guide](USER_GUIDE.md)** - Complete user documentation
 - **[Developer Guide](DEVELOPER_GUIDE.md)** - Architecture and development info
+
+## 🔒 Security
+
+[![Security](https://img.shields.io/badge/security-report-green.svg)](SECURITY.md)
+
+If you discover a security vulnerability, please follow the instructions in our [SECURITY.md](SECURITY.md) and report it privately. Do not open a public issue for security reports.
 
 ---
 
