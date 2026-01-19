@@ -979,7 +979,7 @@ def get_manager(config: Optional[object] = None) -> TwitchEmoteManager:
         if _manager is not None:
             current_factory = getattr(http_session, 'make_retry_session', None)
             known_factory = getattr(_manager, '_session_factory', None)
-            if known_factory is not None and known_factory is not current_factory:
+            if known_factory is not current_factory:
                 try:
                     _manager.stop_emote_set_throttler()
                 except Exception:
