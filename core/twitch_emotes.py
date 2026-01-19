@@ -56,6 +56,9 @@ class TwitchEmoteManager:
         # Create session lazily to allow tests to swap `core.http_session`
         # before the first network call (improves test isolation).
         self.session = None
+        # Track which http_session factory produced `session` so tests can
+        # replace `core.http_session` and force a new manager when needed.
+        self._session_factory = None
         # Backoff base seconds (small default to keep tests fast)
         self._backoff_base = 0.05
         # configurable max retries (can be overridden via config)
@@ -153,7 +156,10 @@ class TwitchEmoteManager:
         """
         if self.session is None:
             try:
-                self.session = http_session.make_retry_session()
+                factory = getattr(http_session, 'make_retry_session', None)
+                self.session = factory() if callable(factory) else None
+                # remember factory so callers can detect when tests swap it
+                self._session_factory = factory
             except Exception:
                 # Fallback to a plain requests.Session if factory missing
                 try:
@@ -162,6 +168,8 @@ class TwitchEmoteManager:
                     self.session = requests.Session()
                 except Exception:
                     self.session = None
+                finally:
+                    self._session_factory = None
         return self.session
 
     def fetch_global_emotes(self) -> None:
@@ -960,6 +968,27 @@ def get_manager(config: Optional[object] = None) -> TwitchEmoteManager:
             if alive:
                 _manager = None
 
+    except Exception:
+        _manager = None
+
+    # If the http_session factory was swapped (tests often replace
+    # `sys.modules['core.http_session']`), make sure the singleton is
+    # recreated so it uses the new factory. Compare the known factory
+    # stored on the manager with the current module's factory.
+    try:
+        if _manager is not None:
+            current_factory = getattr(http_session, 'make_retry_session', None)
+            known_factory = getattr(_manager, '_session_factory', None)
+            if known_factory is not None and known_factory is not current_factory:
+                try:
+                    _manager.stop_emote_set_throttler()
+                except Exception:
+                    pass
+                try:
+                    _manager.shutdown(timeout=0.1)
+                except Exception:
+                    pass
+                _manager = None
     except Exception:
         _manager = None
 
