@@ -29,19 +29,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          if (Test-Path requirements.txt) { python -m pip install -r requirements.txt }
-
-      - name: Install dependencies (Linux/macOS)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      # Skip full requirements install in unit job; keep tests fast and cross-platform.
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
@@ -49,7 +37,7 @@ jobs:
 
       - name: Run tests with pytest
         run: |
-          python -m pytest -q tests
+          python -m pytest -q --ignore-glob=tests/test_manual_*.py tests
         env:
           CI: true
 
@@ -78,7 +66,10 @@ jobs:
         run: mkdir -p logs || true
       - name: Run integration tests under Xvfb
         run: |
-          xvfb-run -s "-screen 0 1280x720x24" bash -lc "python -m unittest discover -v 2>&1 | tee integration_test_output.txt"
+          # ensure pytest and PyQt6 are available for integration tests
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio PyQt6
+          xvfb-run -s "-screen 0 1280x720x24" bash -lc "python -m pytest -q --ignore-glob=tests/test_manual_*.py tests 2>&1 | tee integration_test_output.txt"
         env:
           CI: true
       - name: Upload integration artifacts
