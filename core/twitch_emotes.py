@@ -53,7 +53,9 @@ class PrefetchError(Exception):
 class TwitchEmoteManager:
     def __init__(self, config=None):
         self.config = config
-        self.session = http_session.make_retry_session()
+        # Create session lazily to allow tests to swap `core.http_session`
+        # before the first network call (improves test isolation).
+        self.session = None
         # Backoff base seconds (small default to keep tests fast)
         self._backoff_base = 0.05
         # configurable max retries (can be overridden via config)
@@ -95,7 +97,8 @@ class TwitchEmoteManager:
         max_attempts = int(max_retries or getattr(self, '_max_retries', 3))
         while True:
             try:
-                r = self.session.get(url, headers=self._headers(), params=params, timeout=timeout)
+                sess = self._get_session()
+                r = sess.get(url, headers=self._headers(), params=params, timeout=timeout)
             except Exception as e:
                 # record attempts so callers can include attempts in payloads
                 try:
@@ -139,6 +142,27 @@ class TwitchEmoteManager:
                 pass
 
             return r
+
+    def _get_session(self):
+        """Return an active HTTP session, creating it from the current
+        `core.http_session.make_retry_session()` factory if needed.
+
+        Creating the session lazily allows tests to replace the `core.http_session`
+        module (via `sys.modules` or direct assignment) before the first
+        network call; this reduces flakiness when tests run in parallel.
+        """
+        if self.session is None:
+            try:
+                self.session = http_session.make_retry_session()
+            except Exception:
+                # Fallback to a plain requests.Session if factory missing
+                try:
+                    import requests
+
+                    self.session = requests.Session()
+                except Exception:
+                    self.session = None
+        return self.session
 
     def fetch_global_emotes(self) -> None:
         url = 'https://api.twitch.tv/helix/chat/emotes/global'
@@ -942,4 +966,27 @@ def get_manager(config: Optional[object] = None) -> TwitchEmoteManager:
     if _manager is None:
         _manager = TwitchEmoteManager(config=config)
     return _manager
+
+
+def reset_manager():
+    """Reset the module-level manager used by tests.
+
+    This stops background workers and clears the singleton so subsequent
+    calls to `get_manager()` return a fresh instance that will pick up any
+    test-time replacements of `core.http_session`.
+    """
+    global _manager
+    try:
+        if _manager is not None:
+            try:
+                _manager.stop_emote_set_throttler()
+            except Exception:
+                pass
+            try:
+                _manager.shutdown(timeout=0.1)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    _manager = None
 
