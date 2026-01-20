@@ -1228,9 +1228,20 @@ class TwitchWorker(QThread):
                                     await self.handle_message(message)
                                     messages_parsed += 1
                             
-                            # Log stats periodically
+                            # Log stats periodically but avoid spamming when nothing parsed
                             if messages_received % 100 == 0:
-                                logger.debug(f"[Twitch Stats] Received: {messages_received}, Parsed: {messages_parsed}, Buffer size: {len(message_buffer)}")
+                                buf_len = len(message_buffer)
+                                # Only emit detailed stats if we parsed something or buffer has data
+                                if messages_parsed > 0 or buf_len > 0:
+                                    logger.debug(f"[Twitch Stats] Received: {messages_received}, Parsed: {messages_parsed}, Buffer size: {buf_len}")
+                                else:
+                                    # Occasional heartbeat log (every 1000 messages) so logs still show activity
+                                    if messages_received % 1000 == 0:
+                                        # Emit at DEBUG only if connectors.twitch debug enabled
+                                        try:
+                                            logger.debug(f"[Twitch Stats] Received: {messages_received} (no messages parsed yet)")
+                                        except Exception:
+                                            pass
                             
                         except asyncio.TimeoutError:
                             continue

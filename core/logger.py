@@ -7,6 +7,31 @@ import os
 from datetime import datetime
 from typing import Optional
 import re
+import logging
+
+
+def _configure_standard_logging(manager: 'LogManager'):
+    """Configure Python's standard `logging` to route through the app's
+    stdout/stderr stream so third-party logs are captured and formatted
+    similarly to the project's `SimpleLogger` output.
+
+    This creates a StreamHandler that writes to `sys.stdout` and applies
+    a formatter matching `[{name}][{LEVEL}] message` so LogManager's
+    filtering continues to work on the combined output.
+    """
+    try:
+        root = logging.getLogger()
+        # Avoid adding multiple handlers on repeated calls
+        if any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+            return
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter('[%(name)s][%(levelname)s] %(message)s')
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+        # Default to INFO unless overridden in config
+        root.setLevel(logging.INFO)
+    except Exception:
+        pass
 
 
 class TeeOutput:
@@ -153,6 +178,11 @@ class LogManager:
             if k not in self.level_map:
                 # default: allow INFO+ and suppress DEBUG/TRACE/DIAG
                 self.level_map[k] = True if k in ('INFO', 'WARN', 'ERROR', 'CRITICAL') else False
+        # Configure Python stdlib logging to route through TeeOutput
+        try:
+            _configure_standard_logging(self)
+        except Exception:
+            pass
 
     def should_emit(self, message: str) -> bool:
         """Decide whether a message should be emitted to console/log based on
