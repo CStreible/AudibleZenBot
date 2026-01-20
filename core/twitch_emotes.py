@@ -297,18 +297,30 @@ class TwitchEmoteManager:
         self._throttler_stop.clear()
 
         def _worker():
+            # Wrap the worker loop in robust exception handling so an unexpected
+            # error in a thread doesn't crash the whole interpreter. We log and
+            # emit a structured signal where possible, then either continue or
+            # exit gracefully depending on the error.
             while not self._throttler_stop.is_set():
                 try:
-                    batch = self._emote_set_queue.get(timeout=0.1)
-                except Exception:
                     batch = None
-                if batch:
+                    try:
+                        batch = self._emote_set_queue.get(timeout=0.1)
+                    except Exception:
+                        batch = None
+
+                    if not batch:
+                        continue
+
                     # Try to combine multiple queued batches into one request up to batch size
                     try:
                         combined = list(batch)
                         try:
                             while len(combined) < int(getattr(self, '_emote_set_batch_size', 25)):
-                                more = self._emote_set_queue.get_nowait()
+                                try:
+                                    more = self._emote_set_queue.get_nowait()
+                                except Exception:
+                                    break
                                 if more:
                                     combined.extend(more)
                         except Exception:
@@ -384,6 +396,30 @@ class TwitchEmoteManager:
                             time.sleep(self._batch_interval)
                         except Exception:
                             pass
+                except Exception as e:
+                    # Log unexpected exceptions, emit a best-effort signal and
+                    # sleep briefly before continuing to avoid tight failure loops.
+                    try:
+                        logger = get_logger('twitch_emotes')
+                        logger.exception(f"Uncaught exception in emote throttler worker: {e}")
+                    except Exception:
+                        pass
+                    try:
+                        if emote_signals is not None and hasattr(emote_signals, 'emote_set_batch_processed_ext'):
+                            try:
+                                emote_signals.emote_set_batch_processed_ext.emit({'status': 'error', 'error': str(e), 'source': 'emote_set_throttler'})
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        # Back off briefly to avoid hot loops on persistent errors
+                        time.sleep(0.2)
+                    except Exception:
+                        pass
+                    # If the stop flag is set, break out to allow clean shutdown
+                    if self._throttler_stop.is_set():
+                        break
             # Worker ending — clear thread reference for clean restart
             try:
                 self._throttler_thread = None
