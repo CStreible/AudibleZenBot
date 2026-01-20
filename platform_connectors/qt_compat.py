@@ -6,7 +6,7 @@ import modules and run in headless environments without raising at
 import time.
 """
 try:
-    from PyQt6.QtCore import QObject, QThread, pyqtSignal  # type: ignore
+    from PyQt6.QtCore import QObject, QThread, pyqtSignal, QTimer, pyqtSlot  # type: ignore
     HAS_QT = True
 except Exception:
     HAS_QT = False
