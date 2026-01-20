@@ -8,7 +8,7 @@ on:
 
 jobs:
   webengine:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     env:
       AZB_ENABLE_WEBENGINE_TESTS: '1'
       QTWEBENGINE_CHROMIUM_FLAGS: '--no-sandbox --disable-gpu --headless --disable-software-rasterizer --enable-logging=stderr --v=1'
