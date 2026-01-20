@@ -3,14 +3,45 @@ Connections Page - Manage platform connections and authentication
 """
 
 from logging import config
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
-    QLabel, QLineEdit, QPushButton, QCheckBox, QGroupBox,
-    QTextEdit, QFrame, QDialog, QProgressBar, QListWidget, QSizePolicy
-)
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl
-from PyQt6.QtGui import QFont
-from PyQt6.QtWebEngineWidgets import QWebEngineView
+# Guard PyQt6 imports for headless/test environments
+HAS_PYQT = True
+try:
+    from PyQt6.QtWidgets import (
+        QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
+        QLabel, QLineEdit, QPushButton, QCheckBox, QGroupBox,
+        QTextEdit, QFrame, QDialog, QProgressBar, QListWidget, QSizePolicy
+    )
+    from PyQt6.QtCore import Qt, pyqtSignal, QUrl
+    from PyQt6.QtGui import QFont
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+except Exception:
+    HAS_PYQT = False
+    QWidget = object
+    QVBoxLayout = object
+    QHBoxLayout = object
+    QTabWidget = object
+    QLabel = object
+    QLineEdit = object
+    QPushButton = object
+    QCheckBox = object
+    QGroupBox = object
+    QTextEdit = object
+    QFrame = object
+    QDialog = object
+    QProgressBar = object
+    QListWidget = object
+    QSizePolicy = object
+    Qt = object
+    def pyqtSignal(*a, **k):
+        class _DummySignal:
+            def connect(self, *args, **kwargs):
+                return None
+            def emit(self, *args, **kwargs):
+                return None
+        return _DummySignal()
+    QUrl = object
+    QFont = object
+    QWebEngineView = object
 from urllib.parse import urlparse, parse_qs
 import secrets
 import json

@@ -5,7 +5,7 @@ Connects to YouTube Live Chat API
 
 import time
 from platform_connectors.base_connector import BasePlatformConnector
-from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.qt_compat import QThread, pyqtSignal
 try:
     import requests
 except Exception:
@@ -15,6 +15,31 @@ try:
     from core.http_session import make_retry_session
 except Exception:
     make_retry_session = None
+
+# Dummy `requests` fallback so the module imports even when requests isn't installed.
+if requests is None:
+    class _DummyRequestsExceptions:
+        class RequestException(Exception):
+            pass
+
+    class _DummyRequestsSession:
+        def post(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def get(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def delete(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+    class _DummyRequestsModule:
+        exceptions = _DummyRequestsExceptions()
+
+        @staticmethod
+        def Session(*args, **kwargs):
+            return _DummyRequestsSession()
+
+    requests = _DummyRequestsModule()
 
 logger = get_logger(__name__)
 

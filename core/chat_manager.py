@@ -267,6 +267,63 @@ class ChatManager(QObject):
             logger.warning(f"No connector found for {platform_id}")
             return False
 
+        try:
+            # Pass ngrok_manager to connector if available
+            if self.ngrok_manager and hasattr(connector, 'ngrok_manager'):
+                connector.ngrok_manager = self.ngrok_manager
+
+            # Load cookies for Kick (stored during OAuth)
+            if platform_id == 'kick' and hasattr(connector, 'set_cookies'):
+                from core.config import ConfigManager
+                config = ConfigManager()
+                platform_config = config.get_platform_config(platform_id)
+                cookies_json = platform_config.get('streamer_cookies', '')
+                if cookies_json:
+                    import json
+                    try:
+                        cookies = json.loads(cookies_json)
+                        connector.set_cookies(cookies)
+                        logger.info(f"Loaded {len(cookies)} cookies for Kick")
+                    except Exception as e:
+                        logger.error(f"Failed to load Kick cookies: {e}")
+
+            # Set token if provided and connector supports it
+            if token and hasattr(connector, 'set_token'):
+                logger.debug(f"Setting token for {platform_id} (length: {len(token)})")
+                connector.set_token(token)
+            elif token and hasattr(connector, 'set_api_key'):
+                connector.set_api_key(token)
+
+            # Start connection in background
+            logger.info(f"Calling connect() for {platform_id}")
+            connector.connect(username)
+
+            # Wait briefly for the connector to report its actual connected state.
+            # Worker threads may take a short time to emit status; poll up to 3s.
+            import time
+            waited = 0.0
+            timeout = 3.0
+            interval = 0.1
+            try:
+                while waited < timeout:
+                    if getattr(connector, 'connected', False):
+                        break
+                    time.sleep(interval)
+                    waited += interval
+            except KeyboardInterrupt:
+                logger.info(f"connectPlatform interrupted while waiting for {platform_id}")
+                return False
+
+            connected_state = bool(getattr(connector, 'connected', False))
+            self.connection_status_changed.emit(platform_id, connected_state)
+            self.streamer_connection_changed.emit(platform_id, connected_state, username)
+            return True
+        except Exception as e:
+            logger.error(f"Error connecting to {platform_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def _normalize_and_validate_metadata(self, metadata):
         """Ensure metadata is a dict and normalize common fields.
 

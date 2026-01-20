@@ -24,10 +24,45 @@ try:
     import cloudscraper
 except Exception:
     cloudscraper = None
+
+# Provide safe dummy replacements for optional network libraries so the
+# connector module can be imported in environments without these deps.
+if requests is None:
+    class _DummyRequestsExceptions:
+        class RequestException(Exception):
+            pass
+
+    class _DummyRequestsSession:
+        def post(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def get(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def delete(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+    class _DummyRequestsModule:
+        exceptions = _DummyRequestsExceptions()
+
+        @staticmethod
+        def Session(*args, **kwargs):
+            return _DummyRequestsSession()
+
+    requests = _DummyRequestsModule()
+
+if cloudscraper is None:
+    class _DummyCloudScraper:
+        @staticmethod
+        def create_scraper(*args, **kwargs):
+            # Return a session-like object that raises RequestException on network calls
+            return requests.Session()
+
+    cloudscraper = _DummyCloudScraper()
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from platform_connectors.base_connector import BasePlatformConnector
-from PyQt6.QtCore import QThread, pyqtSignal, QObject
+from platform_connectors.qt_compat import QThread, pyqtSignal, QObject
 from core.logger import get_logger
 
 # Structured logger for this module

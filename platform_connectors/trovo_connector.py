@@ -15,7 +15,7 @@ import random
 import string
 import time
 import os
-from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.qt_compat import QThread, pyqtSignal
 import threading
 from core.logger import get_logger
 
@@ -25,6 +25,33 @@ try:
     from core.http_session import make_retry_session
 except Exception:
     make_retry_session = None
+
+# Provide a minimal dummy requests module if `requests` is not installed so
+# runtime code can catch `requests.exceptions.RequestException` without
+# raising NameError at import time.
+if requests is None:
+    class _DummyRequestsExceptions:
+        class RequestException(Exception):
+            pass
+
+    class _DummyRequestsSession:
+        def post(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def get(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def delete(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+    class _DummyRequestsModule:
+        exceptions = _DummyRequestsExceptions()
+
+        @staticmethod
+        def Session(*args, **kwargs):
+            return _DummyRequestsSession()
+
+    requests = _DummyRequestsModule()
 
 
 class TrovoConnector(BasePlatformConnector):

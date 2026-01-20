@@ -7,7 +7,7 @@ Protocol: graphql-ws
 """
 
 from platform_connectors.base_connector import BasePlatformConnector
-from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.qt_compat import QThread, pyqtSignal
 import asyncio
 import json
 import time
@@ -23,20 +23,46 @@ logger = get_logger(__name__)
 
 def _make_retry_session(total: int = 3, backoff_factor: float = 1.0):
     """Create a requests.Session with urllib3 Retry configured for transient errors."""
-    from requests.adapters import HTTPAdapter
-    from urllib3.util import Retry
+    try:
+        from requests.adapters import HTTPAdapter
+        from urllib3.util import Retry
+        session = requests.Session()
+        retries = Retry(
+            total=total,
+            backoff_factor=backoff_factor,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+        return session
+    except Exception:
+        try:
+            return requests.Session()
+        except Exception:
+            class _DummyRequestsExceptions:
+                class RequestException(Exception):
+                    pass
 
-    session = requests.Session()
-    retries = Retry(
-        total=total,
-        backoff_factor=backoff_factor,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-    return session
+            class _DummyRequestsSession:
+                def post(self, *args, **kwargs):
+                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
+
+                def get(self, *args, **kwargs):
+                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
+
+                def delete(self, *args, **kwargs):
+                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
+
+            class _DummyRequestsModule:
+                exceptions = _DummyRequestsExceptions()
+
+                @staticmethod
+                def Session(*args, **kwargs):
+                    return _DummyRequestsSession()
+
+            return _DummyRequestsModule().Session()
 
 
 class DLiveConnector(BasePlatformConnector):

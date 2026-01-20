@@ -10,13 +10,38 @@ import json
 import hashlib
 import html
 
-# PyQt6 imports
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QGroupBox, QHBoxLayout, 
-                              QCheckBox, QPushButton, QMenu, QInputDialog, QMessageBox, QSizePolicy)
-from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebEngineCore import QWebEngineScript
-from PyQt6.QtCore import pyqtSlot, Qt, QUrl, QTimer
-from PyQt6.QtGui import QAction
+# PyQt6 imports (guarded for headless/test environments)
+HAS_PYQT = True
+try:
+    from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QGroupBox, QHBoxLayout,
+                                  QCheckBox, QPushButton, QMenu, QInputDialog, QMessageBox, QSizePolicy)
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    from PyQt6.QtWebEngineCore import QWebEngineScript
+    from PyQt6.QtCore import pyqtSlot, Qt, QUrl, QTimer
+    from PyQt6.QtGui import QAction
+except Exception:
+    HAS_PYQT = False
+    QWidget = object
+    QVBoxLayout = object
+    QLabel = object
+    QGroupBox = object
+    QHBoxLayout = object
+    QCheckBox = object
+    QPushButton = object
+    QMenu = object
+    QInputDialog = object
+    QMessageBox = object
+    QSizePolicy = object
+    QWebEngineView = object
+    QWebEngineScript = object
+    def pyqtSlot(*a, **k):
+        def _decorator(f):
+            return f
+        return _decorator
+    Qt = object
+    QUrl = object
+    QTimer = object
+    QAction = object
 
 # Project-specific imports
 from core.badge_manager import get_badge_manager

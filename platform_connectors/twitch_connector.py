@@ -13,7 +13,7 @@ except Exception:
     requests = None
 import json
 from typing import Optional
-from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.qt_compat import QThread, pyqtSignal
 from platform_connectors.base_connector import BasePlatformConnector
 from core.badge_manager import get_badge_manager
 import websockets
@@ -36,17 +36,47 @@ def _make_retry_session(total: int = 3, backoff_factor: float = 1.0):
 
     Returns a session configured to retry on common transient HTTP errors.
     """
-    session = requests.Session()
-    retries = Retry(
-        total=total,
-        backoff_factor=backoff_factor,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-    return session
+    try:
+        session = requests.Session()
+        if HTTPAdapter is None or Retry is None:
+            return session
+        retries = Retry(
+            total=total,
+            backoff_factor=backoff_factor,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+        return session
+    except Exception:
+        # Fallback to basic session which may raise on network operations
+        try:
+            return requests.Session()
+        except Exception:
+            class _DummyRequestsExceptions:
+                class RequestException(Exception):
+                    pass
+
+            class _DummyRequestsSession:
+                def post(self, *args, **kwargs):
+                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
+
+                def get(self, *args, **kwargs):
+                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
+
+                def delete(self, *args, **kwargs):
+                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
+
+            class _DummyRequestsModule:
+                exceptions = _DummyRequestsExceptions()
+
+                @staticmethod
+                def Session(*args, **kwargs):
+                    return _DummyRequestsSession()
+
+            return _DummyRequestsModule().Session()
 
 
 class TwitchConnector(BasePlatformConnector):

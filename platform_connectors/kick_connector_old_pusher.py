@@ -14,7 +14,7 @@ except Exception:
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from platform_connectors.base_connector import BasePlatformConnector
-from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.qt_compat import QThread, pyqtSignal
 from core.logger import get_logger
 
 # Structured logger for this module
