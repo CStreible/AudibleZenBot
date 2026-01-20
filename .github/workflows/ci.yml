@@ -30,9 +30,16 @@ jobs:
         run: |
           if [ -f requirements.txt ]; then
             python -m pip install --upgrade pip
+            # Install runtime requirements but keep test runner deps explicit below
             pip install -r requirements.txt --no-deps --upgrade || true
           fi
 
-      - name: Run unit tests
+      - name: Install test dependencies
         run: |
-          python -m unittest discover -v tests
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio PyQt6 requests
+          fi
+
+      - name: Run unit tests with pytest
+        run: |
+          python -m pytest -q --ignore-glob=tests/test_manual_*.py tests

@@ -89,3 +89,42 @@ except Exception:
         def quit(self):
             # No-op for compatibility
             self._running = False
+
+    # Minimal pyqtSlot decorator fallback (no-op)
+    def pyqtSlot(*args, **kwargs):
+        def _decorator(fn):
+            return fn
+        return _decorator
+
+    # Lightweight QTimer fallback
+    class QTimer:
+        def __init__(self, parent=None):
+            self._interval = 0
+            self._running = False
+            self._callback = None
+
+        def start(self, interval=None):
+            if interval is not None:
+                self._interval = interval
+            self._running = True
+
+        def stop(self):
+            self._running = False
+
+        def setInterval(self, ms):
+            self._interval = ms
+
+        @staticmethod
+        def singleShot(ms, callback):
+            # Best-effort: run callback after a short sleep in background
+            import threading, time
+
+            def _runner():
+                try:
+                    time.sleep(ms / 1000.0)
+                    callback()
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=_runner, daemon=True)
+            t.start()

@@ -6,8 +6,7 @@ import asyncio
 import time
 import os
 from typing import Dict, Optional
-from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
-from PyQt6.QtCore import pyqtSlot
+from platform_connectors.qt_compat import QObject, pyqtSignal, QThread, QTimer, pyqtSlot
 from core.logger import get_logger
 
 # Structured logger for this module
