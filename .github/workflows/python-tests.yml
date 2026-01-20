@@ -58,7 +58,7 @@ jobs:
       - name: Install system packages for headless Qt
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libnss3 libxss1 libgtk-3-0 libgbm1 libasound2 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 fonts-liberation
+          sudo apt-get install -y xvfb libnss3 libxss1 libgtk-3-0 libgbm1 libasound2 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 fonts-liberation libegl1-mesa libgl1-mesa-glx
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
