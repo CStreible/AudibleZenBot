@@ -11,5 +11,9 @@ Files of interest:
 - tests/unit/test_smoke_connectors.py
 - .github/workflows/integration-webengine.yml
 
+Changelog:
+- `changelog/2026-01-20-startup-control.md` — notes the new `AUDIBLEZENBOT_CI` gating
+	which prevents connectors from starting background threads in CI/tests.
+
 This PR aims to make headless WebEngine tests reliable in CI and add
 baseline smoke coverage to catch import-time regressions.
