@@ -2,6 +2,45 @@ name: CI
 
 on:
   push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      AUDIBLEZENBOT_CI: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
+          pip install PyQt6 PyQt6-WebEngine pytest
+
+      - name: Run tests (headless)
+        run: |
+          # Run tests under Xvfb for headless Qt/WebEngine
+          xvfb-run -s "-screen 0 1920x1080x24" python -m pytest -qname: CI
+
+on:
+  push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
@@ -55,6 +94,11 @@ jobs:
       - name: Run unit tests with pytest
         run: |
           python -m pytest -q --ignore-glob=tests/test_manual_*.py tests
+
+      - name: Run connector websocket mocks
+        run: |
+          # Run connector-specific mocked websocket tests and import-smoke tests
+          python -m pytest -q tests/test_connectors_websocket_mock.py tests/test_connectors_imports.py
 
   integration:
     needs: test

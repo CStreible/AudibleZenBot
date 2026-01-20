@@ -32,15 +32,47 @@ try:
 except Exception:
     # Provide a minimal fallback session for test environments without 'requests'
     class _DummyResponse:
-        status_code = 200
-        content = b''
+        def __init__(self, status_code=200, data=None, headers=None):
+            self.status_code = status_code
+            self._data = {} if data is None else data
+            self.headers = {} if headers is None else dict(headers)
+            self.content = b''
+            try:
+                import json as _json
+                self.text = _json.dumps(self._data)
+            except Exception:
+                self.text = ''
 
         def json(self):
-            return {"data": []}
+            return self._data
+
+        def raise_for_status(self):
+            # No-op for dummy response
+            return None
 
     class _DummySession:
-        def get(self, url, headers=None, params=None, timeout=None):
+        def __init__(self):
+            self.headers = {}
+
+        def _make_response(self, url, method='GET', **kwargs):
+            # Return a generic OK response. Tests may monkeypatch sys.modules
+            # to provide more specific behavior when needed.
             return _DummyResponse()
+
+        def get(self, url, headers=None, params=None, timeout=None):
+            return self._make_response(url, method='GET')
+
+        def post(self, url, data=None, json=None, headers=None, timeout=None):
+            return self._make_response(url, method='POST')
+
+        def put(self, url, data=None, headers=None, timeout=None):
+            return self._make_response(url, method='PUT')
+
+        def delete(self, url, headers=None, timeout=None):
+            return self._make_response(url, method='DELETE')
+
+        def request(self, method, url, **kwargs):
+            return self._make_response(url, method=method)
 
     def make_retry_session(*args, **kwargs):
         return _DummySession()

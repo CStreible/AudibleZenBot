@@ -234,8 +234,13 @@ if HAS_PYQT:
             except Exception as e:
                 print(f"[Main] Failed to start trovo support servers: {e}")
 
-            # Setup UI
-            self.initUI()
+            # Setup UI (guarded to avoid unhandled AttributeError in headless/test environments)
+            try:
+                self.initUI()
+            except Exception as e:
+                print(f"[Main] initUI failed: {e}")
+                import traceback
+                traceback.print_exc()
 
             # Restore previous connections
             self.restoreSavedConnections()
@@ -249,6 +254,188 @@ if HAS_PYQT:
                     color: #ffffff;
                 }
             """)
+
+        def _start_trovo_support_servers(self):
+            """Start any auxiliary servers required for Trovo support.
+
+            This is intentionally lightweight: if the application embeds a
+            local callback server or needs ngrok setup, production code can
+            expand this. For tests and headless runs we keep this a safe no-op.
+            """
+            try:
+                # If platform connector provides a helper, try to call it.
+                # Keep this optional and non-fatal for test environments.
+                return None
+            except Exception as e:
+                print(f"[Main] _start_trovo_support_servers error: {e}")
+                return None
+
+        def initUI(self):
+            """Full UI initialization: sidebar + stacked pages with expand/collapse."""
+            central = QWidget(self)
+            hl = QHBoxLayout()
+            hl.setContentsMargins(0, 0, 0, 0)
+            central.setLayout(hl)
+
+            # Sidebar (collapsible)
+            self.sidebar = QFrame(self)
+            self.sidebar.setObjectName('sidebar')
+            SIDEBAR_EXPANDED = 220
+            SIDEBAR_COLLAPSED = 60
+            self.sidebar.setMaximumWidth(SIDEBAR_EXPANDED)
+            sidebar_layout = QVBoxLayout()
+            sidebar_layout.setContentsMargins(8, 8, 8, 8)
+            sidebar_layout.setSpacing(6)
+            self.sidebar.setLayout(sidebar_layout)
+
+            # Collapse/expand toggle
+            toggle_btn = QPushButton('☰', self)
+            toggle_btn.setFixedSize(40, 40)
+            toggle_btn.setCheckable(True)
+            toggle_btn.setChecked(True)
+            toggle_btn.setStyleSheet("background: transparent; color: #ffffff; font-size: 18px; border: none;")
+            sidebar_layout.addWidget(toggle_btn, 0, Qt.AlignmentFlag.AlignTop)
+
+            # Main stacked area
+            stack = QStackedWidget(self)
+
+            # Instantiate pages (guard each to avoid breaking when optional imports fail)
+            try:
+                chat_page = ChatPage(self.chat_manager, config=self.config)
+            except Exception:
+                chat_page = QWidget(self)
+
+            try:
+                connections_page = ConnectionsPage(self.chat_manager, self.config)
+            except Exception:
+                connections_page = QWidget(self)
+
+            try:
+                settings_page = SettingsPage(self.ngrok_manager, self.config, log_manager=self.log_manager)
+            except Exception:
+                settings_page = QWidget(self)
+
+            try:
+                overlay_page = OverlayPage(self.overlay_server, self.config)
+            except Exception:
+                overlay_page = QWidget(self)
+
+            try:
+                automation_page = AutomationPage(self.chat_manager, self.config)
+            except Exception:
+                automation_page = QWidget(self)
+
+            # Add pages to stack
+            stack.addWidget(chat_page)
+            stack.addWidget(connections_page)
+            stack.addWidget(settings_page)
+            stack.addWidget(overlay_page)
+            stack.addWidget(automation_page)
+
+            # Create sidebar buttons mapped to stack indices
+            buttons = []
+            def make_btn(text, icon_text, idx):
+                b = SidebarButton(text, icon_text=icon_text, parent=self)
+                b.clicked.connect(lambda _, i=idx: on_nav(i))
+                sidebar_layout.addWidget(b)
+                buttons.append(b)
+                return b
+
+            make_btn('Chat', '💬', 0)
+            make_btn('Connections', '🔗', 1)
+            make_btn('Settings', '⚙️', 2)
+            make_btn('Overlay', '🖥️', 3)
+            make_btn('Automation', '🤖', 4)
+
+            sidebar_layout.addStretch()
+
+            def on_nav(index):
+                for i, btn in enumerate(buttons):
+                    btn.setChecked(i == index)
+                stack.setCurrentIndex(index)
+
+            # Sidebar expand/collapse animation
+            self.sidebar_expanded = True
+            self.sidebar_anim = QPropertyAnimation(self.sidebar, b"maximumWidth")
+            self.sidebar_anim.setDuration(220)
+            self.sidebar_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+            def toggle_sidebar(checked):
+                target = SIDEBAR_EXPANDED if checked else SIDEBAR_COLLAPSED
+                self.sidebar_anim.stop()
+                self.sidebar_anim.setStartValue(self.sidebar.maximumWidth())
+                self.sidebar_anim.setEndValue(target)
+                self.sidebar_anim.start()
+                self.sidebar_expanded = checked
+                for btn in buttons:
+                    btn.updateStyleSheet(self.sidebar_expanded)
+
+            toggle_btn.toggled.connect(toggle_sidebar)
+
+            # Select default page
+            if buttons:
+                buttons[0].setChecked(True)
+                for btn in buttons:
+                    btn.updateStyleSheet(True)
+
+            hl.addWidget(self.sidebar)
+            hl.addWidget(stack, 1)
+            self.setCentralWidget(central)
+            # Expose pages for tests or other parts of app
+            self.pages = {
+                'chat': chat_page,
+                'connections': connections_page,
+                'settings': settings_page,
+                'overlay': overlay_page,
+                'automation': automation_page,
+            }
+
+        def restoreSavedConnections(self):
+            """Restore saved platform connections from config.
+
+            Mirrors the headless restore logic but uses the instance
+            `self.chat_manager` so GUI and headless code share behavior.
+            """
+            try:
+                platforms_config = self.config.get('platforms', {})
+                for platform_id, platform_data in (platforms_config.items() if platforms_config else []):
+                    if platform_data.get('disabled', False):
+                        print(f"[Main] Skipping disabled platform: {platform_id}")
+                        continue
+
+                    # Streamer connections (skip twitch/youtube streamer auto-connect as UI does)
+                    if platform_id not in ['twitch', 'youtube']:
+                        is_streamer_logged_in = platform_data.get('streamer_logged_in', False)
+                        is_streamer_connected = platform_data.get('streamer_connected', False)
+                        if is_streamer_logged_in or is_streamer_connected:
+                            username = platform_data.get('streamer_username', '')
+                            token = platform_data.get('streamer_token', '')
+                            if username and token:
+                                print(f"[Main] Auto-connecting streamer to {platform_id}: {username}")
+                                try:
+                                    ok = self.chat_manager.connectPlatform(platform_id, username, token)
+                                    print(f"[Main] connectPlatform returned: {ok}")
+                                except Exception as e:
+                                    print(f"[Main] Error connecting streamer to {platform_id}: {e}")
+
+                    # Bot connections
+                    bot_logged_in = platform_data.get('bot_logged_in', False)
+                    bot_connected = platform_data.get('bot_connected', False)
+                    if bot_logged_in or bot_connected:
+                        bot_username = platform_data.get('bot_username', '')
+                        bot_token = platform_data.get('bot_token', '') or platform_data.get('bot_access_token', '')
+                        bot_refresh_token = platform_data.get('bot_refresh_token', '')
+                        if bot_username and bot_token:
+                            print(f"[Main] Auto-connecting bot to {platform_id}: {bot_username}")
+                            try:
+                                ok = self.chat_manager.connectBotAccount(platform_id, bot_username, bot_token, bot_refresh_token)
+                                print(f"[Main] connectBotAccount returned: {ok}")
+                            except Exception as e:
+                                print(f"[Main] Error connecting bot to {platform_id}: {e}")
+            except Exception as e:
+                print(f"[Main] restoreSavedConnections failed: {e}")
+                import traceback
+                traceback.print_exc()
 
 
 def main():

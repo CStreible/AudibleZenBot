@@ -17,7 +17,7 @@ try:
                                   QCheckBox, QPushButton, QMenu, QInputDialog, QMessageBox, QSizePolicy)
     from PyQt6.QtWebEngineWidgets import QWebEngineView
     from PyQt6.QtWebEngineCore import QWebEngineScript
-    from PyQt6.QtCore import pyqtSlot, Qt, QUrl, QTimer
+    from PyQt6.QtCore import pyqtSlot, pyqtSignal, Qt, QUrl, QTimer
     from PyQt6.QtGui import QAction
 except Exception:
     HAS_PYQT = False
@@ -38,6 +38,22 @@ except Exception:
         def _decorator(f):
             return f
         return _decorator
+    class _DummySignal:
+        def __init__(self):
+            self._callbacks = []
+        def connect(self, cb):
+            try:
+                self._callbacks.append(cb)
+            except Exception:
+                pass
+        def emit(self, *a, **k):
+            for cb in list(self._callbacks):
+                try:
+                    cb(*a, **k)
+                except Exception:
+                    pass
+    def pyqtSignal(*a, **k):
+        return _DummySignal()
     Qt = object
     QUrl = object
     QTimer = object
@@ -228,6 +244,11 @@ def get_badge_html(badge_str: str, platform: str = 'twitch') -> str:
         return ''
 
 class ChatPage(QWidget):
+    # Emitted when a message has been rendered into the WebEngine DOM.
+    # Passes the `message_id` string when available.
+    message_rendered = pyqtSignal(str)
+    # Emitted when the WebEngine page is ready to receive JS (document.readyState)
+    page_ready = pyqtSignal()
     """Chat page displaying messages from all platforms"""
     
     def __init__(self, chat_manager, config=None, parent=None):
@@ -266,6 +287,8 @@ class ChatPage(QWidget):
         # Pause/unpause message display
         self.is_paused = False
         self.message_queue = []
+        # Count of Python-side display calls (increments for every _displayMessage call)
+        self._python_display_count = 0
         
         # JavaScript execution queue for reliable message rendering
         self.js_execution_queue = []
@@ -276,6 +299,8 @@ class ChatPage(QWidget):
         
         # Overlay server will be set by main.py
         self.overlay_server = None
+        # Page readiness flag
+        self._page_ready_emitted = False
         
         self.initUI()
         
@@ -660,6 +685,12 @@ class ChatPage(QWidget):
         self.chat_display.setHtml(initial_html)
         self.chat_display.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.chat_display.customContextMenuRequested.connect(self.showContextMenu)
+        # Listen for the WebEngine loadFinished to confirm page readiness
+        try:
+            # QWebEngineView emits loadFinished(bool)
+            self.chat_display.loadFinished.connect(self._on_page_load_finished)
+        except Exception:
+            pass
         # Chat display should expand to fill remaining space and resize dynamically
         main_layout.addWidget(self.chat_display, 1)
         
@@ -729,6 +760,59 @@ class ChatPage(QWidget):
             });
         """)
         self.chat_display.page().scripts().insert(script)
+
+    def _on_page_load_finished(self, ok: bool):
+        """Handler for QWebEngineView.loadFinished; probe document.readyState and emit `page_ready` when appropriate."""
+        try:
+            if not ok:
+                # loadFinished False - schedule a retry to probe readiness later
+                QTimer.singleShot(200, self._check_document_ready)
+                return
+        except Exception:
+            pass
+        # Probe document.readyState
+        self._check_document_ready()
+
+    def _check_document_ready(self):
+        """Run a short JS probe to determine document.readyState and emit `page_ready` once."""
+        # Avoid repeated emissions
+        try:
+            if getattr(self, '_page_ready_emitted', False):
+                return
+        except Exception:
+            pass
+
+        def _cb(state):
+            try:
+                s = (state or '').lower()
+                if s in ('complete', 'interactive'):
+                    try:
+                        self._page_ready_emitted = True
+                    except Exception:
+                        pass
+                    try:
+                        self.page_ready.emit()
+                    except Exception:
+                        pass
+                else:
+                    # Not ready yet - re-probe shortly
+                    QTimer.singleShot(200, self._check_document_ready)
+            except Exception:
+                # Swallow errors and retry once
+                try:
+                    QTimer.singleShot(200, self._check_document_ready)
+                except Exception:
+                    pass
+
+        try:
+            # Use runJavaScript to fetch document.readyState; callback will handle emission
+            self.chat_display.page().runJavaScript('document.readyState', _cb)
+        except Exception:
+            # If runJavaScript fails (view not ready), retry shortly
+            try:
+                QTimer.singleShot(200, self._check_document_ready)
+            except Exception:
+                pass
     
     @pyqtSlot(str, str, str, dict)
     @pyqtSlot(str, str, str, dict)
@@ -855,6 +939,14 @@ class ChatPage(QWidget):
             'message': message,
             'metadata': metadata
         }
+
+        # Increment Python-side display counter for tests/environments where
+        # QWebEngine callbacks may not run. This ensures we can assert that
+        # messages reached the UI layer even if the DOM wasn't updated.
+        try:
+            self._python_display_count += 1
+        except Exception:
+            pass
         
         # Map platform message_id to our internal message_id for deletion events
         platform_msg_id = metadata.get('message_id')
@@ -1210,6 +1302,12 @@ class ChatPage(QWidget):
                 # Success - clean up retry counter
                 if message_id:
                     retry_count.pop(message_id, None)
+                # Notify listeners/tests that a message was rendered
+                try:
+                    # Emit message_id if available, else empty string
+                    self.message_rendered.emit(message_id or '')
+                except Exception:
+                    pass
             
             # Process next item in queue
             if self.js_execution_queue:
@@ -1223,14 +1321,26 @@ class ChatPage(QWidget):
             logger.error(f"✗ Exception executing JavaScript: {e}")
             import traceback
             traceback.print_exc()
-            self.pending_js_count -= 1
-            
-            # Retry logic for exceptions too
+            # If the underlying QWebEngineView has been deleted, don't retry
+            # endlessly - clear the queue and stop processing.
+            msg = str(e) or ''
+            if 'has been deleted' in msg or 'wrapped C/C++ object' in msg:
+                try:
+                    # Drop entire queue - view is gone
+                    self.js_execution_queue.clear()
+                except Exception:
+                    pass
+                self.pending_js_count = max(0, self.pending_js_count - 1)
+                self.is_processing_js = False
+                return
+
+            # Retry logic for other transient exceptions
+            self.pending_js_count = max(0, self.pending_js_count - 1)
             current_retries = retry_count.get(message_id, 0)
             if current_retries < 3 and message_id:
                 retry_count[message_id] = current_retries + 1
                 self.js_execution_queue.insert(0, (js_code, message_id))
-            
+
             # Continue processing queue
             if self.js_execution_queue:
                 self._processNextJavaScript()

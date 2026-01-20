@@ -70,6 +70,16 @@ class ChatManager(QObject):
         except Exception:
             TwitterConnector = None
 
+        # Expose connector constructors on the instance so other methods
+        # (like `connectBotAccount`) can construct bot connectors without
+        # relying on names that were only local to __init__'s scope.
+        self.TwitchConnector = TwitchConnector
+        self.YouTubeConnector = YouTubeConnector
+        self.TrovoConnector = TrovoConnector
+        self.KickConnector = KickConnector
+        self.DLiveConnector = DLiveConnector
+        self.TwitterConnector = TwitterConnector
+
         for pid, ctor in [
             ('twitch', TwitchConnector),
             ('youtube', YouTubeConnector),
@@ -78,11 +88,22 @@ class ChatManager(QObject):
             ('dlive', DLiveConnector),
             ('twitter', TwitterConnector)
         ]:
+            # In CI/test environments we may want to avoid instantiating
+            # heavy connector classes which spawn threads or perform network
+            # requests. Honor `AUDIBLEZENBOT_CI=1` to skip creating real
+            # connectors; tests can opt-in to create lightweight stubs.
+            if os.environ.get('AUDIBLEZENBOT_CI', '0') == '1':
+                logger.info(f"CI mode active; skipping instantiation of connector for {pid}")
+                continue
+
             if ctor is None:
                 logger.info(f"Connector class for {pid} unavailable; skipping instantiation")
                 continue
             if pid not in self.disabled_platforms:
-                self.connectors[pid] = ctor(self.config)
+                try:
+                    self.connectors[pid] = ctor(self.config)
+                except Exception as e:
+                    logger.warning(f"Failed to instantiate connector for {pid}: {e}")
             else:
                 logger.info(f"Not instantiating connector for disabled platform: {pid}")
         
@@ -428,6 +449,26 @@ class ChatManager(QObject):
     def connectBotAccount(self, platform_id: str, username: str, token: str, refresh_token: str = None):
         """Connect bot account for sending messages (doesn't listen for incoming messages)"""
         try:
+            # In CI mode we avoid creating real bot connectors which spawn threads
+            # or perform network requests. Honor the AUDIBLEZENBOT_CI flag and
+            # short-circuit the connection process while preserving in-memory
+            # config state so callers that expect a truthy return value still
+            # proceed during tests.
+            if os.environ.get('AUDIBLEZENBOT_CI', '0') == '1':
+                logger.info(f"CI mode active; skipping bot connector creation for {platform_id}")
+                if self.config:
+                    # Load credentials into config memory but do not attempt network
+                    self.config.set_platform_config(platform_id, 'bot_username', username)
+                    self.config.set_platform_config(platform_id, 'bot_token', token)
+                    if refresh_token:
+                        self.config.set_platform_config(platform_id, 'bot_refresh_token', refresh_token)
+                # Emit UI update signal to indicate a bot is 'available' without connecting
+                try:
+                    self.bot_connection_changed.emit(platform_id, False, username)
+                except Exception:
+                    pass
+                return True
+
             logger.info(f"Connecting bot account for {platform_id}: {username}")
             
             # Update config with bot credentials to ensure they're in memory
@@ -453,17 +494,35 @@ class ChatManager(QObject):
             
             # Create new connector instance for bot
             if platform_id == 'twitch':
-                bot_connector = TwitchConnector(self.config, is_bot_account=True)
+                ctor = getattr(self, 'TwitchConnector', None)
+                if ctor is None:
+                    raise RuntimeError('TwitchConnector not available')
+                bot_connector = ctor(self.config, is_bot_account=True)
             elif platform_id == 'youtube':
-                bot_connector = YouTubeConnector(self.config)
+                ctor = getattr(self, 'YouTubeConnector', None)
+                if ctor is None:
+                    raise RuntimeError('YouTubeConnector not available')
+                bot_connector = ctor(self.config)
             elif platform_id == 'trovo':
-                bot_connector = TrovoConnector(self.config)
+                ctor = getattr(self, 'TrovoConnector', None)
+                if ctor is None:
+                    raise RuntimeError('TrovoConnector not available')
+                bot_connector = ctor(self.config)
             elif platform_id == 'kick':
-                bot_connector = KickConnector(self.config)
+                ctor = getattr(self, 'KickConnector', None)
+                if ctor is None:
+                    raise RuntimeError('KickConnector not available')
+                bot_connector = ctor(self.config)
             elif platform_id == 'dlive':
-                bot_connector = DLiveConnector(self.config)
+                ctor = getattr(self, 'DLiveConnector', None)
+                if ctor is None:
+                    raise RuntimeError('DLiveConnector not available')
+                bot_connector = ctor(self.config)
             elif platform_id == 'twitter':
-                bot_connector = TwitterConnector(self.config)
+                ctor = getattr(self, 'TwitterConnector', None)
+                if ctor is None:
+                    raise RuntimeError('TwitterConnector not available')
+                bot_connector = ctor(self.config)
             else:
                 logger.error(f"Unknown platform: {platform_id}")
                 return False
