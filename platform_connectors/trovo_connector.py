@@ -18,6 +18,7 @@ import os
 from platform_connectors.qt_compat import QThread, pyqtSignal
 import threading
 from core.logger import get_logger
+from platform_connectors.connector_utils import connect_with_retry, startup_allowed
 
 # Structured logger for this module
 logger = get_logger('TrovoConnector')
@@ -25,6 +26,19 @@ try:
     from core.http_session import make_retry_session
 except Exception:
     make_retry_session = None
+
+# Ensure `connect` exists on the imported `websockets` module for environments
+# where a local stub or different websockets version is used. Tests patch
+# `platform_connectors.*.websockets.connect` so this makes that attribute
+# consistently available.
+try:
+    import websockets as _ws
+    if not hasattr(_ws, 'connect'):
+        import importlib as _il
+        _stub = _il.import_module('websockets_stub')
+        setattr(_ws, 'connect', getattr(_stub, 'connect'))
+except Exception:
+    pass
 
 # Provide a minimal dummy requests module if `requests` is not installed so
 # runtime code can catch `requests.exceptions.RequestException` without
@@ -140,6 +154,9 @@ class TrovoConnector(BasePlatformConnector):
             except Exception:
                 pass
             try:
+                if not startup_allowed():
+                    logger.info("[TrovoConnector] CI mode: skipping TrovoWorker.start()")
+                    return
                 self.worker.start()
             except Exception as e:
                 logger.error(f"[TrovoConnector] Error starting TrovoWorker: {e}")
@@ -711,7 +728,7 @@ class TrovoWorker(QThread):
     async def connect_to_trovo(self):
         try:
             # Disable built-in ping/pong since Trovo uses custom protocol
-            async with websockets.connect(self.TROVO_CHAT_WS_URL, ping_interval=None) as ws:
+            async with connect_with_retry(websockets.connect, self.TROVO_CHAT_WS_URL, ping_interval=None) as ws:
                 self.ws = ws
                 logger.info("[TrovoWorker] Connected to Trovo chat WebSocket.")
                 # Step 2: Send AUTH message

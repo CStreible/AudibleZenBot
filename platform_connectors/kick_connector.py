@@ -63,6 +63,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from platform_connectors.base_connector import BasePlatformConnector
 from platform_connectors.qt_compat import QThread, pyqtSignal, QObject
+from platform_connectors.connector_utils import startup_allowed
 from core.logger import get_logger
 
 # Structured logger for this module
@@ -744,7 +745,10 @@ class KickConnector(BasePlatformConnector):
         
         # Step 4: Start webhook server (shared callback server)
         self.webhook_thread = Thread(target=self.start_webhook_server, daemon=True)
-        self.webhook_thread.start()
+        if not startup_allowed():
+            logger.info("[KickConnector] CI mode: skipping webhook server thread start")
+        else:
+            self.webhook_thread.start()
 
         # Give the webhook server a moment to start
         import time
@@ -965,7 +969,10 @@ class KickConnector(BasePlatformConnector):
             
             # Run WebSocket in separate thread
             self.ws_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
-            self.ws_thread.start()
+            if not startup_allowed():
+                logger.info("[KickConnector] CI mode: skipping chat websocket thread start")
+            else:
+                self.ws_thread.start()
             
             logger.info(f"[Kick WS] Started connection thread")
             
@@ -1004,7 +1011,10 @@ class KickConnector(BasePlatformConnector):
             logger.info(f"Health monitoring stopped")
         
         self.health_check_thread = Thread(target=health_check_worker, daemon=True)
-        self.health_check_thread.start()
+        if not startup_allowed():
+            logger.info("[KickConnector] CI mode: skipping health_check thread start")
+        else:
+            self.health_check_thread.start()
     
     def verify_subscription(self):
         """Verify that webhook subscription is still active"""

@@ -43,6 +43,31 @@ except Exception:
         return _DummySignal()
     QFont = object
     QColor = object
+# Ensure a usable QMessageBox exists for headless/tests even if the import
+# fallback set it to `object` earlier (some test collection paths import
+# modules before test stubs are installed). Provide minimal methods used
+# by tests so they can monkeypatch them reliably.
+if globals().get('QMessageBox') is object:
+    class _MinimalMessageBox:
+        StandardButton = type('SB', (), {'Yes': 1, 'No': 2})
+
+        @staticmethod
+        def information(parent, title, text):
+            return _MinimalMessageBox.StandardButton.Yes
+
+        @staticmethod
+        def warning(parent, title, text):
+            return _MinimalMessageBox.StandardButton.Yes
+
+        @staticmethod
+        def critical(parent, title, text):
+            return _MinimalMessageBox.StandardButton.Yes
+
+        @staticmethod
+        def question(parent, title, text, buttons=None):
+            return _MinimalMessageBox.StandardButton.Yes
+
+    QMessageBox = _MinimalMessageBox
 import os
 import sys
 from core.logger import get_logger

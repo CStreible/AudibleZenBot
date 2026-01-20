@@ -6,6 +6,7 @@ Connects to YouTube Live Chat API
 import time
 from platform_connectors.base_connector import BasePlatformConnector
 from platform_connectors.qt_compat import QThread, pyqtSignal
+from platform_connectors.connector_utils import startup_allowed
 try:
     import requests
 except Exception:
@@ -259,6 +260,9 @@ class YouTubeConnector(BasePlatformConnector):
         self.worker.error_signal.connect(self.onError)
 
         self.worker_thread.started.connect(self.worker.run)
+        if not startup_allowed():
+            logger.info("[YouTubeConnector] CI mode: skipping YouTubeWorker thread start")
+            return
         self.worker_thread.start()
     
     def check_authenticated_user(self):

@@ -16,6 +16,7 @@ from threading import Thread
 from platform_connectors.base_connector import BasePlatformConnector
 from platform_connectors.qt_compat import QThread, pyqtSignal
 from core.logger import get_logger
+from platform_connectors.connector_utils import connect_with_retry, startup_allowed
 
 # Structured logger for this module
 logger = get_logger('KickOldPusher')
@@ -23,6 +24,14 @@ try:
     from core.http_session import make_retry_session
 except Exception:
     make_retry_session = None
+import websockets
+try:
+    if not hasattr(websockets, 'connect'):
+        import importlib as _il
+        _stub = _il.import_module('websockets_stub')
+        setattr(websockets, 'connect', getattr(_stub, 'connect'))
+except Exception:
+    pass
 
 
 class KickConnector(BasePlatformConnector):
@@ -137,6 +146,9 @@ class KickConnector(BasePlatformConnector):
         self.worker.error_signal.connect(self.onError)
         
         self.worker_thread.started.connect(self.worker.run)
+        if not startup_allowed():
+            logger.info("[KickOldPusher] CI mode: skipping worker thread start")
+            return
         self.worker_thread.start()
     
     def disconnect(self):
@@ -242,7 +254,7 @@ class KickWorker(QThread):
             logger.info(f"Connecting to Kick WebSocket: {ws_url}")
             logger.warning("NOTE: Kick WebSocket may fail due to cluster mismatch - this is a known issue")
             
-            async with websockets.connect(ws_url) as websocket:
+            async with connect_with_retry(websockets.connect, ws_url, retries=3) as websocket:
                 self.ws = websocket
                 
                 # Subscribe to chat channel

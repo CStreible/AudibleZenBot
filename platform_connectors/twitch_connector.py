@@ -18,6 +18,7 @@ from platform_connectors.base_connector import BasePlatformConnector
 from core.badge_manager import get_badge_manager
 import websockets
 from core.logger import get_logger
+from platform_connectors.connector_utils import connect_with_retry, startup_allowed
 try:
     from requests.adapters import HTTPAdapter
 except Exception:
@@ -29,6 +30,18 @@ except Exception:
 
 # Structured logger for this module
 logger = get_logger('TwitchConnector')
+
+# Compatibility: ensure `websockets.connect` exists for environments where
+# the top-level `websockets` package may expose connect in a submodule or
+# when a local stub is in use. Tests rely on patching
+# `platform_connectors.*.websockets.connect` so provide a stable symbol.
+try:
+    if not hasattr(websockets, 'connect'):
+        import importlib as _il
+        _stub = _il.import_module('websockets_stub')
+        setattr(websockets, 'connect', getattr(_stub, 'connect'))
+except Exception:
+    pass
 
 
 def _make_retry_session(total: int = 3, backoff_factor: float = 1.0):
@@ -344,6 +357,11 @@ class TwitchConnector(BasePlatformConnector):
                 existing_worker.error_signal.connect(self.onError)
 
                 self.worker_thread.started.connect(existing_worker.run)
+                if not startup_allowed():
+                    logger.info(f"[TwitchConnector] CI mode: skipping reuse worker thread start for {nick_for_auth}")
+                    # Keep reference but don't start background thread in CI/test environments
+                    self.worker = existing_worker
+                    return
                 self.worker_thread.start()
 
                 try:
@@ -418,6 +436,14 @@ class TwitchConnector(BasePlatformConnector):
         self.worker.error_signal.connect(self.onError)
         
         self.worker_thread.started.connect(self.worker.run)
+        if not startup_allowed():
+            logger.info(f"[TwitchConnector] CI mode: skipping worker thread start for {nick_for_auth}")
+            self.worker = self.worker
+            try:
+                self._last_worker_created = time.time()
+            except Exception:
+                pass
+            return
         self.worker_thread.start()
         try:
             self._last_worker_created = time.time()
@@ -445,7 +471,10 @@ class TwitchConnector(BasePlatformConnector):
             except Exception:
                 pass
             self.eventsub_worker_thread.started.connect(self.eventsub_worker.run)
-            self.eventsub_worker_thread.start()
+            if not startup_allowed():
+                logger.info(f"[TwitchConnector] CI mode: skipping EventSub worker start for {nick_for_auth}")
+            else:
+                self.eventsub_worker_thread.start()
     
     def refresh_access_token(self):
         """Refresh the access token using refresh token
@@ -1141,7 +1170,7 @@ class TwitchWorker(QThread):
         
         while self.running:
             try:
-                async with websockets.connect(self.IRC_SERVER) as websocket:
+                async with connect_with_retry(websockets.connect, self.IRC_SERVER, retries=3) as websocket:
                     self.ws = websocket
                     retry_count = 0  # Reset on successful connection
                     
@@ -1988,7 +2017,7 @@ class TwitchEventSubWorker(QThread):
             try:
                 logger.info(f"[EventSub] Connecting to {self.EVENTSUB_URL}...")
                 
-                async with websockets.connect(self.EVENTSUB_URL) as ws:
+                async with connect_with_retry(websockets.connect, self.EVENTSUB_URL, retries=3) as ws:
                     self.ws = ws
                     self.status_signal.emit(True)
                     logger.info(f"[EventSub] Connected!")

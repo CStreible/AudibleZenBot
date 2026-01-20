@@ -10,6 +10,7 @@ except Exception:
     requests = None
 from platform_connectors.base_connector import BasePlatformConnector
 from platform_connectors.qt_compat import QThread, pyqtSignal
+from platform_connectors.connector_utils import startup_allowed
 from core.logger import get_logger
 try:
     from core.http_session import make_retry_session
@@ -178,6 +179,9 @@ class TwitterConnector(BasePlatformConnector):
         self.worker.error_signal.connect(self.onError)
         
         self.worker_thread.started.connect(self.worker.run)
+        if not startup_allowed():
+            logger.info("[TwitterConnector] CI mode: skipping TwitterWorker thread start")
+            return
         self.worker_thread.start()
     
     def disconnect(self):

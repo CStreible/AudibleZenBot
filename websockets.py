@@ -1,50 +1,66 @@
-"""Minimal local stub for the `websockets` package used in tests and
-local development when the real `websockets` package isn't available.
+"""Shim that prefers the installed `websockets` package but falls back
+to the bundled `websockets_stub.py` when the real package isn't present.
 
-This module intentionally provides a small async-compatible API surface
-so connector code (which uses `async with websockets.connect(...)` and
-`except websockets.exceptions.*`) can run without the real dependency.
-
-Notes:
-- `connect()` is a synchronous factory that returns an object implementing
-  the asynchronous context manager protocol (async __aenter__/__aexit__).
-- An `exceptions` namespace is provided with commonly used exception
-  classes so `websockets.exceptions.ConnectionClosed` etc. resolve.
+This avoids accidental shadowing of the real dependency by a top-level
+file while keeping the lightweight stub available for offline tests.
 """
 
-class WebSocketException(Exception):
-    """Base exception for the stub."""
+from importlib import import_module
+import sys
+import os
 
+# Attempt to import the real `websockets` package from site-packages by
+# temporarily removing the project directory from `sys.path` so that
+# local files do not shadow the distribution.
+_this_dir = os.path.dirname(__file__)
+_removed = False
+_real = None
+try:
+    if _this_dir in sys.path:
+        sys.path.remove(_this_dir)
+        _removed = True
+    try:
+        _real = import_module('websockets')
+    except Exception:
+        _real = None
+finally:
+    if _removed:
+        sys.path.insert(0, _this_dir)
 
-class ConnectionClosed(WebSocketException):
+if _real is not None:
+    # Re-export everything from the real package
+    globals().update({k: v for k, v in _real.__dict__.items() if not k.startswith('__')})
+    # Ensure a top-level `connect` symbol exists for legacy code/tests that
+    # expect `websockets.connect`. Some websockets versions expose connect in
+    # a submodule (e.g. websockets.client.connect); try to locate it.
+    if 'connect' not in globals():
+        _connect = getattr(_real, 'connect', None)
+        if _connect is None:
+            _client = getattr(_real, 'client', None)
+            _connect = getattr(_client, 'connect', None) if _client is not None else None
+        if _connect is not None:
+            globals()['connect'] = _connect
+else:
+    # Fall back to the bundled stub (import by name to work when this
+    # module is executing as a top-level script/module).
+    import importlib as _il
+    _stub = _il.import_module('websockets_stub')
+    _stub_dict = {k: v for k, v in _stub.__dict__.items() if not k.startswith('__')}
+    globals().update(_stub_dict)
+    # Ensure common symbols are explicitly provided
+    if 'connect' not in globals() and hasattr(_stub, 'connect'):
+        globals()['connect'] = getattr(_stub, 'connect')
+    if 'exceptions' not in globals() and hasattr(_stub, 'exceptions'):
+        globals()['exceptions'] = getattr(_stub, 'exceptions')
+
+# As a last resort, ensure the module object in sys.modules has a `connect`
+# attribute so modules that imported earlier get the symbol available for
+# patching in tests.
+try:
+    import sys as _sys
+    if 'connect' in globals():
+        setattr(_sys.modules[__name__], 'connect', globals()['connect'])
+    if 'exceptions' in globals():
+        setattr(_sys.modules[__name__], 'exceptions', globals()['exceptions'])
+except Exception:
     pass
-
-
-class _ExceptionsNamespace:
-    WebSocketException = WebSocketException
-    ConnectionClosed = ConnectionClosed
-
-
-exceptions = _ExceptionsNamespace()
-
-
-def connect(uri, *args, **kwargs):
-    """Return a simple async context manager that mimics a websocket
-    connection. This object supports `async with` and has `recv`/`send`
-    coroutines for basic interoperability in tests.
-    """
-    class _Conn:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def recv(self):
-            # Return an empty string to indicate no data by default
-            return ''
-
-        async def send(self, data):
-            return None
-
-    return _Conn()

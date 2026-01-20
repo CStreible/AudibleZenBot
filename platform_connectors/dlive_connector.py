@@ -12,11 +12,22 @@ import asyncio
 import json
 import time
 import websockets
+# Ensure a compatible `connect` symbol exists for tests and older
+# websockets versions; if the installed package doesn't provide it, map
+# to the bundled stub implementation.
+try:
+    if not hasattr(websockets, 'connect'):
+        import importlib as _il
+        _stub = _il.import_module('websockets_stub')
+        setattr(websockets, 'connect', getattr(_stub, 'connect'))
+except Exception:
+    pass
 try:
     import requests
 except Exception:
     requests = None
 from core.logger import get_logger
+from platform_connectors.connector_utils import connect_with_retry, startup_allowed
 
 logger = get_logger(__name__)
 
@@ -102,6 +113,9 @@ class DLiveConnector(BasePlatformConnector):
         self.worker.deletion_signal.connect(self.onMessageDeleted)
         self.worker.status_signal.connect(self.onStatusChanged)
         self.worker.error_signal.connect(self.onError)
+        if not startup_allowed():
+            logger.info("[DLiveConnector] CI mode: skipping DLiveWorker.start()")
+            return
         self.worker.start()
     
     def disconnect(self):
@@ -384,12 +398,14 @@ class DLiveWorker(QThread):
             
             # Use an explicit open timeout and a ping interval to surface
             # connection problems faster and avoid long hangs in connect().
-            async with websockets.connect(
+            async with connect_with_retry(
+                websockets.connect,
                 self.WS_URL,
                 subprotocols=["graphql-ws"],
                 extra_headers=headers,
                 open_timeout=self.open_timeout,
                 ping_interval=self.ping_interval,
+                retries=5,
             ) as websocket:
                 self.ws = websocket
                 logger.info("[DLiveWorker] WebSocket connected")
