@@ -47,21 +47,30 @@ except Exception:
 
 
 def get_inner_html(page, timeout=2.0):
-    """Helper to synchronously fetch innerHTML of chat-body from QWebEnginePage."""
+    """Synchronously fetch innerHTML of #chat-body using a Qt event loop.
+
+    Uses `runJavaScript` callback to detect completion and waits up to
+    `timeout` seconds. This is more reliable in headless WebEngine tests
+    than sleeping + processEvents polling.
+    """
+    from PyQt6.QtCore import QEventLoop, QTimer
+
     result = {'html': None}
 
     def cb(r):
         result['html'] = r
+        try:
+            loop.quit()
+        except Exception:
+            pass
 
+    loop = QEventLoop()
+    # Kick off JS with callback; it will quit the loop when invoked
     page.runJavaScript("document.getElementById('chat-body') ? document.getElementById('chat-body').innerHTML : ''", cb)
 
-    # wait for callback
-    waited = 0.0
-    interval = 0.05
-    while result['html'] is None and waited < timeout:
-        QApplication.processEvents()
-        time.sleep(interval)
-        waited += interval
+    # Ensure we don't block forever
+    QTimer.singleShot(int(timeout * 1000), loop.quit)
+    loop.exec()
 
     return result['html'] or ''
 
@@ -79,13 +88,52 @@ class ChatPageIntegrationTests(unittest.TestCase):
         # Import ChatPage here to avoid module-level PyQt imports when unavailable
         from ui.chat_page import ChatPage
         self.page = ChatPage(self.cm, config=None)
+        # Wait for the WebEngine page to be ready (document readyState == 'complete')
+        try:
+            from PyQt6.QtCore import QEventLoop, QTimer
+
+            def _page_ready():
+                ready = {'state': None}
+
+                def cb(r):
+                    ready['state'] = r
+
+                self.page.chat_display.page().runJavaScript("document.readyState", cb)
+                loop = QEventLoop()
+                QTimer.singleShot(250, loop.quit)
+                loop.exec()
+                return ready['state']
+
+            waited = 0.0
+            interval = 0.1
+            timeout = 3.0
+            while waited < timeout:
+                state = _page_ready()
+                if state in ('complete', 'interactive'):
+                    break
+                waited += interval
+                QTimer.singleShot(int(interval * 1000), QEventLoop().quit)
+                # small sleep to allow the WebEngine to progress
+                time.sleep(interval)
+        except Exception:
+            # Best-effort; continue even if readiness probing fails
+            pass
 
     def test_message_renders_in_chat_body(self):
         # Send a message and verify it appears in chat-body HTML
         self.cm.onMessageReceivedWithMetadata('int', 'Alice', 'HelloIntegration', {})
-        # allow JS to execute
-        time.sleep(0.2)
-        html = get_inner_html(self.page.chat_display.page(), timeout=2.0)
+        # Wait for JS to execute and the DOM to update (poll up to 5s)
+        deadline = 5.0
+        interval = 0.1
+        elapsed = 0.0
+        html = ''
+        while elapsed < deadline:
+            html = get_inner_html(self.page.chat_display.page(), timeout=1.0)
+            if html and 'HelloIntegration' in html:
+                break
+            time.sleep(interval)
+            elapsed += interval
+
         self.assertIn('HelloIntegration', html)
         self.assertIn('data-message-id="msg_', html)
 
