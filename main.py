@@ -431,13 +431,16 @@ if HAS_PYQT:
                         print(f"[Main] Skipping disabled platform: {platform_id}")
                         continue
 
-                    # Streamer connections (skip twitch/youtube streamer auto-connect as UI does)
-                    if platform_id not in ['twitch', 'youtube']:
+                    # Streamer connections: auto-connect streamer accounts when saved credentials exist.
+                    # Historically we skipped Twitch/Youtube here because UI handled interactive
+                    # flows; allow Twitch to auto-connect when tokens/usernames are persisted.
+                    if platform_id != 'youtube':
                         is_streamer_logged_in = platform_data.get('streamer_logged_in', False)
                         is_streamer_connected = platform_data.get('streamer_connected', False)
                         if is_streamer_logged_in or is_streamer_connected:
                             username = platform_data.get('streamer_username', '')
-                            token = platform_data.get('streamer_token', '')
+                            # Support multiple stored token keys that may be used: canonical streamer_token or oauth_token
+                            token = platform_data.get('streamer_token', '') or platform_data.get('oauth_token', '')
                             if username and token:
                                 print(f"[Main] Auto-connecting streamer to {platform_id}: {username}")
                                 try:
@@ -574,13 +577,16 @@ def headless_main():
                 print(f"[Headless] Skipping disabled platform: {platform_id}")
                 continue
 
-            # Streamer connections (skip twitch/youtube streamer auto-connect as UI does)
-            if platform_id not in ['twitch', 'youtube']:
+            # Streamer connections: auto-connect streamer accounts when saved credentials exist.
+            # Historically we skipped Twitch/Youtube here because UI handled interactive
+            # flows; allow Twitch to auto-connect when tokens/usernames are persisted.
+            if platform_id != 'youtube':
                 is_streamer_logged_in = platform_data.get('streamer_logged_in', False)
                 is_streamer_connected = platform_data.get('streamer_connected', False)
                 if is_streamer_logged_in or is_streamer_connected:
                     username = platform_data.get('streamer_username', '')
-                    token = platform_data.get('streamer_token', '')
+                    # Support multiple stored token keys that may be used: canonical streamer_token or oauth_token
+                    token = platform_data.get('streamer_token', '') or platform_data.get('oauth_token', '')
                     if username and token:
                         print(f"[Headless] Auto-connecting streamer to {platform_id}: {username}")
                         try:

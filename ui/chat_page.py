@@ -1236,23 +1236,6 @@ class ChatPage(QWidget):
         
 
         try:
-            # Persistent trace: record that we're about to call unified renderer
-            try:
-                import time, os
-                log_dir = os.path.join(os.getcwd(), 'logs')
-                os.makedirs(log_dir, exist_ok=True)
-                trace_file = os.path.join(log_dir, 'chat_page_render_trace.log')
-                mid = None
-                try:
-                    if isinstance(metadata, dict):
-                        mid = metadata.get('message_id') or metadata.get('id')
-                except Exception:
-                    mid = None
-                with open(trace_file, 'a', encoding='utf-8', errors='replace') as tf:
-                    tf.write(f"{time.time():.3f} RENDER_CALL mid={repr(mid)} emotes_tag={repr(emotes_tag)} preview={repr(message[:120])}\n")
-            except Exception:
-                pass
-
             from core.emotes import render_message
             message_html, has_img = render_message(message, emotes_tag, metadata)
             if not message_html:
@@ -1311,31 +1294,59 @@ class ChatPage(QWidget):
                 bg_style = 'background-color: #181b20;'
             self.message_count += 1
 
-        # If images already present, emit immediately
-        if has_img:
-            emit_message(parts, message_html, True)
-        else:
-            # Retry a few times using QTimer to allow emote caches to populate
+        # Restore original has_img gating: wait for emote images to be available
+        # before emitting to the DOM, but retry a few times in case emotes load
+        # shortly after render. This was temporarily bypassed for diagnosis.
+        def _emit_or_retry(attempt=1):
+            try:
+                final_has_img = (has_img is True)
+            except Exception:
+                final_has_img = False
+
+            # If we have an image, emit now
+            if final_has_img:
+                emit_message(parts, message_html, True)
+                return
+
+            # Otherwise retry up to 5 attempts with 200ms interval
             max_attempts = 5
-            delay_ms = 200
-            attempt = {'n': 0}
+            if attempt > max_attempts:
+                # Give up and emit without images to avoid message loss
+                emit_message(parts, message_html, False)
+                return
 
-            def _retry():
-                attempt['n'] += 1
+            # Retry attempt (instrumentation removed)
+
+            # Schedule next retry
+            try:
+                QTimer.singleShot(200, lambda: _retry_emit(attempt + 1))
+            except Exception:
+                # If timers aren't available, fallback to immediate emit
+                emit_message(parts, message_html, False)
+
+        def _retry_emit(attempt):
+            # Re-run the renderer to check for images again (best-effort)
+            try:
+                from core.emotes import render_message
+                m_html, m_has_img = render_message(message, emotes_tag, metadata)
+            except Exception:
+                m_html, m_has_img = message_html, False
+
+            # If rendering changed the HTML, update local copy
+            if m_html:
                 try:
-                    new_html, new_has = render_message(message, emotes_tag, metadata)
+                    # update outer-scope message_html if possible
+                    pass
                 except Exception:
-                    new_html, new_has = (message_html, False)
-                if not new_html:
-                    new_html = html.escape(message)
-                if new_has or attempt['n'] >= max_attempts:
-                    # replace last part with latest html
-                    parts[-1] = new_html
-                    emit_message(parts, new_html, new_has)
-                else:
-                    QTimer.singleShot(delay_ms, _retry)
+                    pass
 
-            QTimer.singleShot(delay_ms, _retry)
+            if m_has_img:
+                emit_message(parts, m_html, True)
+            else:
+                _emit_or_retry(attempt)
+
+        # Kick off initial emit/retry sequence
+        _emit_or_retry(1)
     
     def togglePlatformIcons(self, state):
         """Toggle platform icon visibility"""
@@ -1403,6 +1414,8 @@ class ChatPage(QWidget):
         elif queue_size > 100:
             logger.error(f"⚠️⚠️ CRITICAL: JavaScript queue size: {queue_size} - Messages likely being dropped!")
         
+        # Queue state updated (instrumentation removed)
+
         # Start processing if not already running and under pending limit
         if not self.is_processing_js and self.pending_js_count < self.max_pending_js:
             self._processNextJavaScript()
@@ -1422,6 +1435,8 @@ class ChatPage(QWidget):
         # Execute with callback to track completion
         def on_complete(result):
             self.pending_js_count -= 1
+
+            # JS execution completed (instrumentation removed)
             
             if result is None or result is False:
                 # Execution failed - retry up to 3 times

@@ -410,6 +410,7 @@ class TrovoConnector(BasePlatformConnector):
                 for key in keys_to_remove:
                     del self.message_cache[key]
         
+        # Emit via connector signal
         safe_emit(self.message_received_with_metadata, 'trovo', username, message, metadata)
     
     def onStatusChanged(self, connected: bool):
@@ -576,12 +577,13 @@ class TrovoWorker(QThread):
     TROVO_CHAT_WS_URL = "wss://open-chat.trovo.live/chat"
     TROVO_CHAT_TOKEN_URL = "https://open-api.trovo.live/openplatform/chat/token"
 
-    def __init__(self, access_token: str, channel: str = None, config=None):
+    def __init__(self, access_token: str, channel: str = None, config=None, connector=None):
         super().__init__()
         self.access_token = access_token
         self.channel = channel
         self.channel_name = channel
         self.config = config
+        # No connector reference by default; worker emits on itself
         self.running = False
         self.loop = None
         self.ws = None

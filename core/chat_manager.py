@@ -185,6 +185,8 @@ class ChatManager(QObject):
             logger.debug(f"[TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username} preview={preview}")
         except Exception:
             logger.debug(f"[TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username}")
+
+        # Hand off to metadata handler
         # Validate metadata shape before handing off
         try:
             metadata = self._normalize_and_validate_metadata(metadata)
@@ -208,6 +210,8 @@ class ChatManager(QObject):
             logger.debug(f"[TRACE] _onConnectorMessageLegacy: platform={platform} username={username} preview={preview}")
         except Exception:
             logger.debug(f"[TRACE] _onConnectorMessageLegacy: platform={platform} username={username}")
+
+        # Legacy handoff path
         # If this looks like a Twitch IRC tag blob mistakenly sent as `username`,
         # delay handling briefly to allow the metadata-emitting path to run first.
         try:
