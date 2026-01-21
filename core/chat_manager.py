@@ -6,6 +6,7 @@ import asyncio
 import time
 import os
 import threading
+import importlib
 from typing import Dict, Optional
 from platform_connectors.qt_compat import QObject, pyqtSignal, QThread, QTimer, pyqtSlot
 from core.logger import get_logger
@@ -290,8 +291,38 @@ class ChatManager(QObject):
         
         connector = self.connectors.get(platform_id)
         if not connector:
-            logger.warning(f"No connector found for {platform_id}")
-            return False
+            # Attempt lazy import/instantiation for connectors that were
+            # unavailable at ChatManager __init__ time (missing optional
+            # runtime deps, platform-specific errors, etc.). This helps the
+            # UI path which may enable platforms after startup to connect
+            # without requiring a full restart.
+            try:
+                ctor_name_map = {
+                    'twitch': 'TwitchConnector',
+                    'youtube': 'YouTubeConnector',
+                    'trovo': 'TrovoConnector',
+                    'kick': 'KickConnector',
+                    'dlive': 'DLiveConnector',
+                    'twitter': 'TwitterConnector'
+                }
+                module_name = f'platform_connectors.{platform_id}_connector'
+                module = importlib.import_module(module_name)
+                ctor_name = ctor_name_map.get(platform_id)
+                ctor = getattr(module, ctor_name, None) if ctor_name else None
+                if ctor is None:
+                    logger.warning(f"No connector found for {platform_id}")
+                    return False
+                # Instantiate and cache the connector instance
+                try:
+                    self.connectors[platform_id] = ctor(self.config)
+                    connector = self.connectors[platform_id]
+                    logger.info(f"Lazily instantiated connector for {platform_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to instantiate connector for {platform_id}: {e}")
+                    return False
+            except Exception as e:
+                logger.warning(f"No connector found for {platform_id}: lazy import failed: {e}")
+                return False
 
         try:
             # Prepare connector (may modify connector state quickly)

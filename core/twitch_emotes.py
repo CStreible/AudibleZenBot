@@ -48,6 +48,7 @@ from core.logger import get_logger
 import traceback
 import random
 import json
+import hashlib
 import queue
 
 
@@ -96,10 +97,43 @@ class TwitchEmoteManager:
             os.makedirs(self.cache_dir, exist_ok=True)
         except Exception:
             pass
+        # Track last fetch times to avoid repeated warming; default to 0
+        self._last_global_fetch = 0
+        self._last_channel_fetch = {}
 
     def _headers(self):
-        # Minimal headers; real app may add client-id / auth
-        return {}
+        # Build minimal headers. Prefer explicit environment variables so
+        # test runs can override without touching persistent config. If
+        # not present, attempt to read stored platform config for Twitch.
+        try:
+            # Prefer environment overrides
+            cid = os.environ.get('TWITCH_CLIENT_ID') or os.environ.get('TWITCH_CLIENTID') or os.environ.get('AUDIBLEZENBOT_TWITCH_CLIENT_ID')
+            token = os.environ.get('TWITCH_OAUTH_TOKEN') or os.environ.get('TWITCH_TOKEN') or os.environ.get('AUDIBLEZENBOT_TWITCH_OAUTH')
+            headers = {}
+            if cid:
+                headers['Client-ID'] = cid
+            if token:
+                headers['Authorization'] = f'Bearer {token}'
+            if headers:
+                return headers
+
+            # Fallback: try reading from persisted config if available
+            try:
+                from core.config import ConfigManager
+                cfg = ConfigManager()
+                p = cfg.get_platform_config('twitch') or {}
+                cid = cid or p.get('client_id') or p.get('clientid')
+                # Try common token keys used across the app
+                token = token or p.get('oauth_token') or p.get('bot_token') or p.get('access_token')
+                if cid:
+                    headers['Client-ID'] = cid
+                if token:
+                    headers['Authorization'] = f'Bearer {token}'
+                return headers
+            except Exception:
+                return {}
+        except Exception:
+            return {}
 
     def _request_with_backoff(self, url: str, params=None, timeout: int = 10, max_retries: int = 3):
         attempt = 0
@@ -207,6 +241,13 @@ class TwitchEmoteManager:
             return None
 
     def fetch_global_emotes(self) -> None:
+        # Throttle global fetches to at most once per hour
+        try:
+            if time.time() - getattr(self, '_last_global_fetch', 0) < 60 * 60:
+                return
+        except Exception:
+            pass
+
         url = 'https://api.twitch.tv/helix/chat/emotes/global'
         try:
             r = self._request_with_backoff(url, timeout=10)
@@ -230,6 +271,10 @@ class TwitchEmoteManager:
                         raise
                     except Exception:
                         pass
+                except Exception:
+                    pass
+                try:
+                    self._last_global_fetch = int(time.time())
                 except Exception:
                     pass
             else:
@@ -519,6 +564,14 @@ class TwitchEmoteManager:
     def fetch_channel_emotes(self, broadcaster_id: str) -> None:
         if not broadcaster_id:
             return
+        bid = str(broadcaster_id)
+        # Throttle per-channel fetches to at most once per hour
+        try:
+            last = int(self._last_channel_fetch.get(bid, 0) or 0)
+            if time.time() - last < 60 * 60:
+                return
+        except Exception:
+            pass
         url = 'https://api.twitch.tv/helix/chat/emotes'
         params = {'broadcaster_id': broadcaster_id}
         try:
@@ -599,6 +652,14 @@ class TwitchEmoteManager:
             raise PrefetchError('network', 'Network error during fetch_channel_emotes')
 
         # end of fetch_channel_emotes
+        try:
+            # record last successful channel fetch time
+            try:
+                self._last_channel_fetch[bid] = int(time.time())
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def dump_channel_emotes(self, broadcaster_id: str) -> Optional[str]:
         """Fetch (best-effort) channel emotes and write a pretty JSON dump.
@@ -681,8 +742,15 @@ class TwitchEmoteManager:
             ext = 'png'
             if url.lower().endswith('.gif'):
                 ext = 'gif'
-            fname = f'twitch_{eid}.{ext}'
-            fpath = os.path.join(self.cache_dir, fname)
+            # Build a sanitized, readable filename including emote name and a short hash
+            name = emobj.get('name') or emobj.get('emote_name') or emobj.get('code') or ''
+            base_part = f"twitch_{eid}_{name}" if name else f"twitch_{eid}"
+            safe_base = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in base_part)
+            if len(safe_base) > 50:
+                safe_base = safe_base[:50]
+            h = hashlib.sha1((name or str(eid)).encode('utf-8')).hexdigest()[:8]
+            safe_fname = f"{safe_base}_{h}.{ext}"
+            fpath = os.path.join(self.cache_dir, safe_fname)
             try:
                 if os.path.exists(fpath) and (time.time() - os.path.getmtime(fpath)) < 60*60*24:
                     continue
@@ -693,6 +761,7 @@ class TwitchEmoteManager:
                 status = getattr(r, 'status_code', None)
                 if status == 200 and getattr(r, 'content', None):
                     try:
+                        # Always write prefetch images to disk (prefetch path)
                         with open(fpath, 'wb') as wf:
                             wf.write(r.content)
                         # Emit structured signal that an image was cached
@@ -737,26 +806,82 @@ class TwitchEmoteManager:
         ext = 'png'
         if url.lower().endswith('.gif'):
             ext = 'gif'
-        fname = f'twitch_{eid}.{ext}'
-        fpath = os.path.join(self.cache_dir, fname)
-        if not os.path.exists(fpath):
-            try:
-                r = self._request_with_backoff(url, timeout=10)
-                status = getattr(r, 'status_code', None)
-                if status == 200 and getattr(r, 'content', None):
-                    with open(fpath, 'wb') as wf:
-                        wf.write(r.content)
-                else:
-                    if status == 429:
-                        raise PrefetchError('rate_limited', 'HTTP 429 while fetching emote data')
-                    raise PrefetchError(f'http_{status}', f'HTTP {status} while fetching emote data')
-            except Exception:
-                return None
+        # Build sanitized filename but prefer returning data URI when disk not desired
+        name = emobj.get('name') or emobj.get('emote_name') or emobj.get('code') or ''
+        base_part = f"twitch_{eid}_{name}" if name else f"twitch_{eid}"
+        safe_base = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in base_part)
+        if len(safe_base) > 50:
+            safe_base = safe_base[:50]
+        h = hashlib.sha1((name or str(eid)).encode('utf-8')).hexdigest()[:8]
+        safe_fname = f"{safe_base}_{h}.{ext}"
+        fpath = os.path.join(self.cache_dir, safe_fname)
+
+        # If the file exists, read and return it
         try:
-            with open(fpath, 'rb') as f:
-                b = f.read()
-            mime = 'image/gif' if fpath.lower().endswith('.gif') else 'image/png'
-            return f'data:{mime};base64,' + base64.b64encode(b).decode()
+            if os.path.exists(fpath):
+                with open(fpath, 'rb') as f:
+                    b = f.read()
+                mime = 'image/gif' if fpath.lower().endswith('.gif') else 'image/png'
+                return f'data:{mime};base64,' + base64.b64encode(b).decode()
+        except Exception:
+            pass
+
+        # Fallback: fetch from network and return data URI without forcing a disk write
+        try:
+            r = self._request_with_backoff(url, timeout=10)
+            status = getattr(r, 'status_code', None)
+            if status == 200 and getattr(r, 'content', None):
+                b = r.content
+                mime = 'image/gif' if url.lower().endswith('.gif') else 'image/png'
+                return f'data:{mime};base64,' + base64.b64encode(b).decode()
+            else:
+                if status == 429:
+                    raise PrefetchError('rate_limited', 'HTTP 429 while fetching emote data')
+                raise PrefetchError(f'http_{status}', f'HTTP {status} while fetching emote data')
+        except Exception:
+            return None
+
+    def get_emote_id_by_name(self, name: str, broadcaster_id: Optional[str] = None) -> Optional[str]:
+        """Return the emote id for a given emote name if known.
+
+        Best-effort: will attempt a synchronous channel/global prefetch when
+        a broadcaster_id is provided and the name is not already cached.
+        """
+        try:
+            if not name:
+                return None
+            # Quick hit from existing map
+            eid = self.name_map.get(name)
+            if eid:
+                return str(eid)
+
+            # Try to warm channel/global lists synchronously to reduce races
+            try:
+                if broadcaster_id:
+                    # perform a blocking prefetch for the channel
+                    self.prefetch_channel(str(broadcaster_id), background=False)
+                else:
+                    # attempt a global prefetch as a last resort
+                    self.prefetch_global(background=False)
+                # small grace window for cache writes
+                time.sleep(0.05)
+            except Exception:
+                pass
+
+            eid = self.name_map.get(name)
+            if eid:
+                return str(eid)
+            return None
+        except Exception:
+            return None
+
+    def get_emote_data_uri_by_name(self, name: str, broadcaster_id: Optional[str] = None) -> Optional[str]:
+        """Return a data URI for an emote by its name (best-effort)."""
+        try:
+            eid = self.get_emote_id_by_name(name, broadcaster_id=broadcaster_id)
+            if not eid:
+                return None
+            return self.get_emote_data_uri(str(eid), broadcaster_id=broadcaster_id)
         except Exception:
             return None
 
@@ -1073,6 +1198,19 @@ def get_manager(config: Optional[object] = None) -> TwitchEmoteManager:
 
     if _manager is None:
         _manager = TwitchEmoteManager(config=config)
+        try:
+            # Start throttler and trigger a background global prefetch so
+            # emotes are warmed early without blocking the main thread/UI.
+            try:
+                _manager.start_emote_set_throttler()
+            except Exception:
+                pass
+            try:
+                _manager.prefetch_global(background=True)
+            except Exception:
+                pass
+        except Exception:
+            pass
     return _manager
 
 

@@ -10,10 +10,348 @@ can reliably import and exercise `render_message` without network access.
 import html
 import re
 import time
+import threading
+import os
+import base64
+import hashlib
 from typing import Optional
 from core.logger import get_logger
 
 logger = get_logger('Emotes')
+
+
+# In-memory emote name -> data-uri cache
+class InMemoryEmoteMap:
+    def __init__(self, t_mgr, broadcaster_id=None):
+        self.lock = threading.Lock()
+        self.map = {}  # name -> data-uri/info
+        self.pattern = None
+        self.t_mgr = t_mgr
+        self.broadcaster_id = broadcaster_id
+
+    def rebuild(self):
+        with self.lock:
+            entries = {}
+            # Prefer Twitch names first. Use the manager's `name_map` keys
+            # exactly as provided by the API (e.g. '<3', ':)') and resolve
+            # to a lightweight info dict containing id/url/source. We avoid
+            # fetching binary image data here; images will be fetched and
+            # cached on first use to reduce startup network/disk activity.
+            try:
+                if self.t_mgr is not None:
+                    for name, emid in list(getattr(self.t_mgr, 'name_map', {}).items() if getattr(self.t_mgr, 'name_map', None) else []):
+                        try:
+                            if not emid:
+                                continue
+                            emobj = getattr(self.t_mgr, 'id_map', {}).get(str(emid)) or {}
+                            # Determine best candidate URL without downloading
+                            try:
+                                url = self.t_mgr._select_image_url(emobj)
+                            except Exception:
+                                url = None
+                            entries[name] = {'id': str(emid), 'url': url, 'source': 'twitch'}
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+            # BTTV/FFZ support removed — only use Twitch manager entries
+
+            self.map = entries
+            # Build regex pattern sorted by length descending
+            if self.map:
+                names = sorted(list(self.map.keys()), key=lambda x: -len(x))
+                escaped = [re.escape(n) for n in names]
+                alt = '|'.join(escaped)
+                # match when preceded by start or whitespace and followed by end or whitespace
+                self.pattern = re.compile(r'(?:((?<=\s)|(?<=^))(' + alt + r')(?=(?:\s)|$))')
+            else:
+                self.pattern = None
+
+    def replace_tokens(self, text):
+        if not self.pattern:
+            # No built pattern available — attempt a quick, non-blocking
+            # fallback using the current managers' name_map entries so we
+            # can match names present in memory without waiting for a
+            # warm/rebuild signal.
+            try:
+                entries = {}
+                if self.t_mgr is not None and getattr(self.t_mgr, 'name_map', None):
+                    for name, emid in list(getattr(self.t_mgr, 'name_map', {}).items()):
+                        try:
+                            if not emid:
+                                continue
+                            entries[name] = {'id': str(emid), 'url': None, 'source': 'twitch'}
+                        except Exception:
+                            continue
+                if self.b_mgr is not None and getattr(self.b_mgr, 'name_map', None):
+                    for name, info in list(getattr(self.b_mgr, 'name_map', {}).items()):
+                        if name in entries:
+                            continue
+                        try:
+                            if isinstance(info, dict):
+                                entries[name] = info
+                            else:
+                                entries[name] = {'id': None, 'url': info, 'source': 'bttv_ffz'}
+                        except Exception:
+                            continue
+                if not entries:
+                    # No manager entries available — try a fast local cache lookup
+                    # for tokens that may have been cached previously on disk.
+                    try:
+                        cache_dir = None
+                        if self.t_mgr and hasattr(self.t_mgr, 'cache_dir'):
+                            cache_dir = getattr(self.t_mgr, 'cache_dir')
+                        if not cache_dir and self.b_mgr and hasattr(self.b_mgr, 'cache_dir'):
+                            cache_dir = getattr(self.b_mgr, 'cache_dir')
+                        if not cache_dir:
+                            cache_dir = os.path.join('resources', 'emotes')
+
+                        def _find_cached_uri(tok):
+                            try:
+                                safe_tok = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in (tok or ''))
+                                if not os.path.isdir(cache_dir):
+                                    return None
+                                for fname in os.listdir(cache_dir):
+                                    if safe_tok and safe_tok in fname:
+                                        fpath = os.path.join(cache_dir, fname)
+                                        try:
+                                            with open(fpath, 'rb') as f:
+                                                b = f.read()
+                                            mime = 'image/gif' if fpath.lower().endswith('.gif') else 'image/png'
+                                            return f'data:{mime};base64,' + base64.b64encode(b).decode()
+                                        except Exception:
+                                            continue
+                                return None
+                            except Exception:
+                                return None
+
+                        # perform a simple substitution using cached files
+                        def _cached_repl(m):
+                            # Use the full match and replace the token inside it
+                            # so we preserve surrounding whitespace exactly.
+                            token = m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(1)
+                            uri = _find_cached_uri(token)
+                            if uri:
+                                img = f'<img src="{uri}" alt="{html.escape(token)}" />'
+                                return m.group(0).replace(token, img)
+                            return m.group(0)
+
+                        # attempt a direct substitution using files in cache_dir
+                        try:
+                            names = [re.escape(n) for n in []]
+                            # reuse the original regex structure but with a generic alt
+                            # that will match whatever token pattern the caller used
+                            # (we can't build a precise alt without entries), so use
+                            # the same boundary logic and a permissive token matcher
+                            perm = re.compile(r'(?:((?<=\s)|(?<=^))(\S+?)(?=(?:\s)|$))')
+                            return perm.sub(_cached_repl, text)
+                        except Exception:
+                            logger.debug('emotes: replace_tokens cache fallback failed')
+                            return text
+                    except Exception:
+                        logger.debug('emotes: replace_tokens no pattern and no fallback entries')
+                        return text
+
+                names = sorted(list(entries.keys()), key=lambda x: -len(x))
+                escaped = [re.escape(n) for n in names]
+                alt = '|'.join(escaped)
+                temp_pattern = re.compile(r'(?:((?<=\s)|(?<=^))(' + alt + r')(?=(?:\s)|$))')
+
+                def _fallback_repl(m):
+                    token = m.group(2)
+                    info = entries.get(token)
+                    uri = None
+                    try:
+                        if info:
+                            uri = self._ensure_data_uri(token, info)
+                    except Exception:
+                        uri = None
+
+                    if uri:
+                        return m.group(1).replace(token, f'<img src="{uri}" alt="{html.escape(token)}" />')
+                    return m.group(0)
+
+                try:
+                    return temp_pattern.sub(_fallback_repl, text)
+                except Exception:
+                    return text
+            except Exception:
+                logger.debug('emotes: replace_tokens fallback failed')
+                return text
+        def _repl(m):
+            token = m.group(2)
+            info = None
+            try:
+                logger.debug(f'emotes: replace_tokens token="{token}" present={token in self.map}')
+            except Exception:
+                pass
+            try:
+                info = self.map.get(token)
+            except Exception:
+                info = None
+
+            uri = None
+            try:
+                if info:
+                    uri = self._ensure_data_uri(token, info)
+            except Exception:
+                uri = None
+            try:
+                logger.debug(f'emotes: replace_tokens token="{token}" uri_present={bool(uri)}')
+            except Exception:
+                pass
+
+            if uri:
+                return m.group(1).replace(token, f'<img src="{uri}" alt="{html.escape(token)}" />')
+            return m.group(0)
+
+        return self.pattern.sub(_repl, text)
+
+    def _ensure_data_uri(self, name, info):
+        """Return a data URI for emote `name` using info dict.
+        If a disk-cached image exists return it; otherwise fetch from
+        the `url`, save to the emote cache, and return its data URI.
+        """
+        if not info:
+            return None
+        url = info.get('url')
+        source = info.get('source') or 'unknown'
+        eid = info.get('id')
+
+        # determine cache dir
+        cache_dir = None
+        try:
+            if self.t_mgr and hasattr(self.t_mgr, 'cache_dir'):
+                cache_dir = getattr(self.t_mgr, 'cache_dir')
+        except Exception:
+            cache_dir = None
+        if not cache_dir:
+            try:
+                if self.b_mgr and hasattr(self.b_mgr, 'cache_dir'):
+                    cache_dir = getattr(self.b_mgr, 'cache_dir')
+            except Exception:
+                cache_dir = None
+        if not cache_dir:
+            cache_dir = os.path.join('resources', 'emotes')
+
+        # BTTV/FFZ support removed — only Twitch images handled here
+
+        # Twitch: compute same sanitized filename as Twitch manager and fetch+cache
+        try:
+            if not url and self.t_mgr and eid:
+                try:
+                    emobj = getattr(self.t_mgr, 'id_map', {}).get(str(eid)) or {}
+                    url = self.t_mgr._select_image_url(emobj)
+                except Exception:
+                    url = None
+        except Exception:
+            url = url
+
+        if not url:
+            return None
+
+        ext = 'gif' if url.lower().endswith('.gif') else 'png'
+
+        # build sanitized filename consistent with Twitch's naming
+        try:
+            base_part = f"twitch_{eid}_{name}" if name else f"twitch_{eid}"
+            safe_base = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in base_part)
+            if len(safe_base) > 50:
+                safe_base = safe_base[:50]
+            h = hashlib.sha1((name or str(eid)).encode('utf-8')).hexdigest()[:8]
+            safe_fname = f"{safe_base}_{h}.{ext}"
+            fpath = os.path.join(cache_dir, safe_fname)
+        except Exception:
+            fpath = None
+
+        try:
+            logger.debug(f'emotes: _ensure_data_uri name={name!r} source={source!r} url={url!r} cache_dir={cache_dir!r} fpath={fpath!r}')
+        except Exception:
+            pass
+
+        # If file exists, read and return data URI
+        try:
+            if fpath and os.path.exists(fpath):
+                with open(fpath, 'rb') as f:
+                    b = f.read()
+                mime = 'image/gif' if fpath.lower().endswith('.gif') else 'image/png'
+                return f'data:{mime};base64,' + base64.b64encode(b).decode()
+        except Exception:
+            pass
+
+        # Otherwise fetch from network and save to disk
+        try:
+            # Prefer manager's request helper when available
+            if self.t_mgr and hasattr(self.t_mgr, '_request_with_backoff'):
+                r = self.t_mgr._request_with_backoff(url, timeout=10)
+                status = getattr(r, 'status_code', None)
+                if status == 200 and getattr(r, 'content', None):
+                    b = r.content
+                    try:
+                        if fpath:
+                            with open(fpath, 'wb') as wf:
+                                wf.write(b)
+                    except Exception:
+                        pass
+                    mime = 'image/gif' if url.lower().endswith('.gif') else 'image/png'
+                    return f'data:{mime};base64,' + base64.b64encode(b).decode()
+        except Exception:
+            pass
+
+        return None
+
+
+# Module-level singleton emote map rebuilt only on warm/image-cached signals
+_global_emap = None
+
+def _get_global_emap(t_mgr, broadcaster_id=None):
+    global _global_emap
+    try:
+        if _global_emap is None:
+            _global_emap = InMemoryEmoteMap(t_mgr, broadcaster_id=broadcaster_id)
+            try:
+                _global_emap.rebuild()
+            except Exception:
+                pass
+            # Attempt to hook signals so rebuild occurs only on warms/caches
+            try:
+                from core.signals import signals as emote_signals
+                def _on_warm(*a, **k):
+                    try:
+                        _global_emap.rebuild()
+                    except Exception:
+                        pass
+
+                try:
+                    emote_signals.emotes_global_warmed_ext.connect(_on_warm)
+                except Exception:
+                    pass
+                try:
+                    emote_signals.emotes_channel_warmed_ext.connect(_on_warm)
+                except Exception:
+                    pass
+                try:
+                    emote_signals.emote_image_cached_ext.connect(_on_warm)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        else:
+            # If caller requests a different broadcaster_id, update and rebuild
+            try:
+                if broadcaster_id and _global_emap.broadcaster_id != broadcaster_id:
+                    _global_emap.broadcaster_id = broadcaster_id
+                    try:
+                        _global_emap.rebuild()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        return _global_emap
+    except Exception:
+        return None
 
 
 def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
@@ -34,13 +372,8 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
             from core.twitch_emotes import get_manager as get_twitch_manager
         except Exception:
             get_twitch_manager = None
-        try:
-            from core.bttv_ffz import get_manager as get_bttvffz_manager
-        except Exception:
-            get_bttvffz_manager = None
 
         t_mgr = get_twitch_manager() if get_twitch_manager is not None else None
-        b_mgr = get_bttvffz_manager() if get_bttvffz_manager is not None else None
 
         broadcaster_id = None
         if metadata and isinstance(metadata, dict):
@@ -88,7 +421,10 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
             if e < s:
                 continue
             if s > last:
-                out_parts.append(html.escape(message[last:s]))
+                # Append raw text here; escape will be applied after
+                # in-memory emote replacement so tokens like "<3" can
+                # be matched against manager names.
+                out_parts.append(message[last:s])
 
             emote_html = None
             # numeric id
@@ -119,8 +455,34 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
 
                 if not found_id and t_mgr:
                     try:
-                        nm = t_mgr.get_emote_id_by_name(emote_text, broadcaster_id=broadcaster_id)
-                        if nm:
+                        # Avoid blocking synchronous network prefetches during
+                        # render. Prefer a fast lookup from the manager's
+                        # `name_map`. If the name isn't present, schedule a
+                        # background channel/global prefetch and continue —
+                        # the in-memory emote map will rebuild when warming
+                        # completes via signals.
+                        nm = None
+                        try:
+                            nm = t_mgr.name_map.get(emote_text) if getattr(t_mgr, 'name_map', None) else None
+                        except Exception:
+                            nm = None
+
+                        if not nm:
+                            try:
+                                # schedule background warm; non-blocking
+                                if broadcaster_id:
+                                    try:
+                                        t_mgr.prefetch_channel(str(broadcaster_id), background=True)
+                                    except Exception:
+                                        pass
+                                else:
+                                    try:
+                                        t_mgr.prefetch_global(background=True)
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                        else:
                             found_id = nm
                     except Exception:
                         pass
@@ -136,41 +498,63 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
             if emote_html:
                 out_parts.append(emote_html)
             else:
-                out_parts.append(html.escape(message[s:e+1]))
+                # Append raw token; will be escaped later if not replaced
+                out_parts.append(message[s:e+1])
 
             last = e + 1
 
         if last < len(message):
-            out_parts.append(html.escape(message[last:]))
+            # Append raw trailing text so the in-memory replacements can
+            # match tokens like "<3" before any escaping is applied.
+            out_parts.append(message[last:])
 
         interim_html = ''.join(out_parts)
 
-        # Replace remaining tokens in non-<img> parts using BTTV/FFZ then Twitch name lookup
+        # Replace remaining tokens in non-<img> parts using an in-memory emote map.
+        # We operate on raw text so emoticon names like "<3" match the keys
+        # in the managers. After replacement we escape any non-<img> text to
+        # ensure safety.
         parts = re.split(r'(<img[^>]*>)', interim_html)
+
+        # Build or reuse module-level in-memory map (rebuild only on warm signals)
+        try:
+            emap = _get_global_emap(t_mgr, broadcaster_id=broadcaster_id)
+        except Exception:
+            emap = None
+
+        # Ensure the in-memory map reflects current managers/broadcaster now
+        try:
+            if emap is not None:
+                try:
+                    emap.rebuild()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         for i, part in enumerate(parts):
             if part.startswith('<img'):
+                # already safe HTML for an emote
                 continue
+            # Apply in-memory replacements on raw text
+            try:
+                if emap is not None:
+                    replaced = emap.replace_tokens(part)
+                else:
+                    replaced = part
+            except Exception:
+                replaced = part
 
-            def repl_token(m):
-                token = m.group(0)
-                # Try BTTV/FFZ first
-                try:
-                    if b_mgr:
-                        uri = b_mgr.get_emote_data_uri_by_name(token, broadcaster_id=broadcaster_id)
-                        if uri:
-                            return f'<img src="{uri}" alt="{html.escape(token)}" />'
-                except Exception:
-                    pass
-                try:
-                    if t_mgr:
-                        uri = t_mgr.get_emote_data_uri_by_name(token, broadcaster_id=broadcaster_id)
-                        if uri:
-                            return f'<img src="{uri}" alt="{html.escape(token)}" />'
-                except Exception:
-                    pass
-                return token
-
-            parts[i] = re.sub(r'(\S+)', repl_token, part)
+            # Now escape any text except the inserted <img> tags.
+            try:
+                subparts = re.split(r'(<img[^>]*>)', replaced)
+                for j, sp in enumerate(subparts):
+                    if sp.startswith('<img'):
+                        continue
+                    subparts[j] = html.escape(sp)
+                parts[i] = ''.join(subparts)
+            except Exception:
+                parts[i] = html.escape(replaced)
 
         final_html = ''.join(parts)
         has_img = '<img' in final_html

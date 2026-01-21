@@ -82,12 +82,64 @@ if _have_requests_with_retries:
         session.mount('http://', adapter)
         return session
 
-elif requests is not None and hasattr(requests, 'Session'):
+        # Wrap session.request to log Twitch API calls (URL, params, masked headers)
+        try:
+            from core.logger import get_logger
+            tlogger = get_logger('TwitchAPI')
+            orig_request = session.request
+
+            def _logged_request(method, url, **kwargs):
+                try:
+                    if isinstance(url, str) and 'twitch.tv' in url:
+                        headers = kwargs.get('headers') or {}
+                        params = kwargs.get('params') or {}
+                        # mask Authorization for logs
+                        hcopy = dict(headers) if isinstance(headers, dict) else dict(headers or {})
+                        if 'Authorization' in hcopy and isinstance(hcopy['Authorization'], str):
+                            try:
+                                hcopy['Authorization'] = hcopy['Authorization'][:8] + '...'
+                            except Exception:
+                                hcopy['Authorization'] = '***'
+                        tlogger.debug(f"Twitch API Request: method={method} url={url} params={params} headers={hcopy}")
+                except Exception:
+                    pass
+                return orig_request(method, url, **kwargs)
+
+            session.request = _logged_request
+        except Exception:
+            pass
+
+        return session
     # `requests` is importable but the HTTPAdapter/Retry helpers weren't
     # available. Return a plain Session (no retry adapter) so callers can
     # still perform HTTP requests without the dummy session behavior.
     def make_retry_session(*args, **kwargs):
-        return requests.Session()
+        session = requests.Session()
+        try:
+            from core.logger import get_logger
+            tlogger = get_logger('TwitchAPI')
+            orig_request = session.request
+
+            def _logged_request(method, url, **kwargs):
+                try:
+                    if isinstance(url, str) and 'twitch.tv' in url:
+                        headers = kwargs.get('headers') or {}
+                        params = kwargs.get('params') or {}
+                        hcopy = dict(headers) if isinstance(headers, dict) else dict(headers or {})
+                        if 'Authorization' in hcopy and isinstance(hcopy['Authorization'], str):
+                            try:
+                                hcopy['Authorization'] = hcopy['Authorization'][:8] + '...'
+                            except Exception:
+                                hcopy['Authorization'] = '***'
+                        tlogger.debug(f"Twitch API Request: method={method} url={url} params={params} headers={hcopy}")
+                except Exception:
+                    pass
+                return orig_request(method, url, **kwargs)
+
+            session.request = _logged_request
+        except Exception:
+            pass
+        return session
 
 else:
     # In test mode we provide a minimal fallback session so tests don't

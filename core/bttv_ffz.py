@@ -16,6 +16,7 @@ import time
 import base64
 from core.http_session import make_retry_session
 from core.logger import get_logger
+import hashlib
 
 logger = get_logger('BTTV_FFZ')
 
@@ -158,7 +159,7 @@ class BTTVFFZManager:
         except Exception:
             pass
 
-    def get_emote_data_uri_by_name(self, name: str, broadcaster_id: Optional[str] = None) -> Optional[str]:
+    def get_emote_data_uri_by_name(self, name: str, broadcaster_id: Optional[str] = None, use_disk_cache: bool = True) -> Optional[str]:
         try:
             # Ensure we have some candidate maps
             self.ensure_channel(broadcaster_id)
@@ -182,13 +183,39 @@ class BTTVFFZManager:
             url = info.get('url')
             if not url:
                 return None
-            # Cache to file
             ext = 'png'
             if url.lower().endswith('.gif'):
                 ext = 'gif'
-            fname = f"{info.get('source')}_{name}.{ext}"
-            safe_fname = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in fname)
+            src = info.get('source') or 'bttv_ffz'
+            # readable sanitized base (keep letters, numbers, dash, underscore, dot)
+            base_part = f"{src}_{name}"
+            safe_base = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in base_part)
+            # truncate to a reasonable length to avoid long filenames
+            if len(safe_base) > 50:
+                safe_base = safe_base[:50]
+            # append a short deterministic hash of the original name to guarantee uniqueness
+            h = hashlib.sha1(name.encode('utf-8')).hexdigest()[:8]
+            safe_fname = f"{safe_base}_{h}.{ext}"
             fpath = os.path.join(self.cache_dir, safe_fname)
+
+            # If disk caching is disabled, fetch and return a data URI without writing
+            if not use_disk_cache:
+                try:
+                    r = self.session.get(url, timeout=10)
+                    if r.status_code == 200 and getattr(r, 'content', None):
+                        b = r.content
+                        mime = 'image/gif' if url.lower().endswith('.gif') else 'image/png'
+                        result = f'data:{mime};base64,' + base64.b64encode(b).decode()
+                        _log_data_uri(info.get('source') or 'bttv_ffz', name, broadcaster_id, result)
+                        return result
+                    else:
+                        logger.debug(f'BTTV/FFZ fetch failed for {name}: {getattr(r, "status_code", "ERR")}')
+                        return None
+                except Exception as e:
+                    logger.debug(f'BTTV/FFZ download error for {name}: {e}')
+                    return None
+
+            # Disk-cached path (existing behavior)
             if not os.path.exists(fpath) or (time.time() - os.path.getmtime(fpath)) > 60*60*24:
                 try:
                     r = self.session.get(url, timeout=10)

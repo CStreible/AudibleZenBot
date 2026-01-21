@@ -2013,7 +2013,7 @@ class PlatformConnectionWidget(QWidget):
             # Extract port, default to 8887 if not present
             port = pr.port or 8887
             server = HTTPServer(('localhost', port), CallbackHandler)
-            server_thread = threading.Thread(target=lambda: server.handle_request())
+            server_thread = threading.Thread(target=server.serve_forever)
             server_thread.daemon = True
             server_thread.start()
             local_callback_server = server
@@ -2190,15 +2190,24 @@ class PlatformConnectionWidget(QWidget):
                 def log_message(self, format, *args):
                     pass
 
-            # Use port 8890 for Kick (developers page uses that), otherwise default to 8888
-            port = 8888
+            # Use configured shared callback port when possible (defaults to 8889).
             try:
-                if self.platform_id == 'kick':
-                    port = 8890
+                from core.config import ConfigManager
+                cfg = ConfigManager()
+                callback_port = cfg.get('ngrok.callback_port', 8889)
             except Exception:
+                callback_port = 8889
+
+            # Use port 8890 for Kick (developers page uses that).
+            # For Twitch when not using ngrok, prefer the traditional localhost:8888 callback.
+            if getattr(self, 'platform_id', None) == 'kick':
+                port = 8890
+            elif getattr(self, 'platform_id', None) == 'twitch':
                 port = 8888
+            else:
+                port = callback_port
             server = HTTPServer(('localhost', port), CallbackHandler)
-            server_thread = threading.Thread(target=lambda: server.handle_request())
+            server_thread = threading.Thread(target=server.serve_forever)
             server_thread.daemon = True
             server_thread.start()
 
@@ -2214,7 +2223,8 @@ class PlatformConnectionWidget(QWidget):
                     client_id = twitch_cfg.get('client_id', '')
                 except Exception:
                     client_id = ''
-                redirect_uri = "http://localhost:8888/callback"
+                # Use the original Twitch OAuth redirect path
+                redirect_uri = f"http://localhost:{port}/callback"
                 scopes = [
                     "user:read:email",
                     "chat:read",
@@ -2258,7 +2268,7 @@ class PlatformConnectionWidget(QWidget):
                         pass
                     port = callback_port
                     server = HTTPServer(('localhost', port), CallbackHandler)
-                    server_thread = threading.Thread(target=lambda: server.handle_request())
+                    server_thread = threading.Thread(target=server.serve_forever)
                     server_thread.daemon = True
                     server_thread.start()
 
@@ -2386,7 +2396,15 @@ class PlatformConnectionWidget(QWidget):
 
             # Wait for callback (with timeout)
             if callback_received.wait(timeout=120):
-                server.server_close()
+                try:
+                    if hasattr(server, 'shutdown'):
+                        server.shutdown()
+                except Exception:
+                    pass
+                try:
+                    server.server_close()
+                except Exception:
+                    pass
                 if 'code' in auth_code_container:
                     auth_code = auth_code_container['code']
                     logger.debug(f"[OAuth] Authorization code received: {auth_code[:20]}...")
@@ -2906,7 +2924,8 @@ class PlatformConnectionWidget(QWidget):
                         self.onOAuthFailed(account_type, "Twitch client_secret not configured in config.json. Add it under twitch > client_secret")
                         return
                 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
-                TWITCH_REDIRECT_URI = "http://localhost:8888/callback"
+                # When exchanging code, use the original localhost redirect path (default 8888)
+                TWITCH_REDIRECT_URI = f"http://localhost:{(8888 if getattr(self, 'platform_id', None) == 'twitch' else callback_port)}/callback"
                 data = {
                     "client_id": client_id,
                     "client_secret": client_secret,
@@ -3744,6 +3763,36 @@ class ConnectionsPage(QWidget):
                 widget.streamer_display_name.setText(streamer_display_name)
                 widget.streamer_login_btn.setText("Logout")
                 logger.debug(f"[ConnectionsPage] Updated streamer UI for {platform_id}: {streamer_display_name}")
+                # If this is Twitch, trigger a background per-channel emote prefetch
+                try:
+                    if platform_id.lower() == 'twitch':
+                        try:
+                            from core.config import ConfigManager as _CM
+                            _cfg = _CM()
+                            pconf = _cfg.get_platform_config(platform_id) or {}
+                            # Common keys storing numeric broadcaster id
+                            bid = pconf.get('streamer_user_id') or pconf.get('streamer_channel_id') or pconf.get('channel_id') or None
+                        except Exception:
+                            bid = None
+                        try:
+                            if not bid and username:
+                                # fall back to using username (some APIs accept username)
+                                bid = username
+                        except Exception:
+                            pass
+
+                        try:
+                            from core.twitch_emotes import get_manager as _get_tmgr
+                            tm = _get_tmgr() if _get_tmgr is not None else None
+                            if tm is not None and bid:
+                                try:
+                                    tm.prefetch_channel(str(bid), background=True)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             else:
                 # If the streamer account is still considered "logged in" in
                 # the config but the connector is temporarily disconnected,
