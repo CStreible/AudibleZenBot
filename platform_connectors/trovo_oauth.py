@@ -51,20 +51,47 @@ def get_authorization_url():
 
 def exchange_code_for_token_v2(auth_code):
     url = "https://open-api.trovo.live/openplatform/exchangetoken"
+    # Prefer configured client id/secret when module-level values are not set
+    client_id = TROVO_CLIENT_ID
+    client_secret = TROVO_CLIENT_SECRET
+    try:
+        if not client_id or not client_secret:
+            from core.config import ConfigManager
+            cfg = ConfigManager()
+            trovo_cfg = cfg.get_platform_config('trovo') or {}
+            client_id = client_id or trovo_cfg.get('client_id', '')
+            client_secret = client_secret or trovo_cfg.get('client_secret', '')
+    except Exception:
+        pass
+
     headers = {
         "Accept": "application/json",
-        "client-id": TROVO_CLIENT_ID,
-        "Content-Type": "application/json"
+        "client-id": client_id
     }
+
     data = {
-        "client_secret": TROVO_CLIENT_SECRET,
+        "client_id": client_id,
+        "client_secret": client_secret,
         "grant_type": "authorization_code",
         "code": auth_code,
         "redirect_uri": TROVO_REDIRECT_URI
     }
     try:
         session = make_retry_session() if make_retry_session else (requests.Session() if requests is not None else None)
-        resp = session.post(url, headers=headers, json=data, timeout=10)
+        # Save outgoing request (mask secret) for debugging
+        try:
+            import json, time
+            dbg = {'ts': int(time.time()), 'url': url, 'headers': dict(headers), 'data': dict(data)}
+            if 'client_secret' in dbg['data']:
+                dbg['data']['client_secret'] = '***'
+            try:
+                with open('tools/trovo_exchange_request_v2.json', 'w', encoding='utf-8') as f:
+                    json.dump(dbg, f, indent=2)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        resp = session.post(url, headers=headers, data=data, timeout=10)
     except requests.exceptions.RequestException as e:
         logger.exception(f"[Trovo OAuth] Network error exchanging code: {e}")
         return None

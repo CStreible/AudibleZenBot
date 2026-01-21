@@ -7,10 +7,7 @@ import asyncio
 import os
 import re
 import time
-try:
-    import requests
-except Exception:
-    requests = None
+import requests
 import json
 from typing import Optional
 from platform_connectors.qt_compat import QThread, pyqtSignal
@@ -18,30 +15,11 @@ from platform_connectors.base_connector import BasePlatformConnector
 from core.badge_manager import get_badge_manager
 import websockets
 from core.logger import get_logger
-from platform_connectors.connector_utils import connect_with_retry, startup_allowed
-try:
-    from requests.adapters import HTTPAdapter
-except Exception:
-    HTTPAdapter = None
-try:
-    from urllib3.util import Retry
-except Exception:
-    Retry = None
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 # Structured logger for this module
 logger = get_logger('TwitchConnector')
-
-# Compatibility: ensure `websockets.connect` exists for environments where
-# the top-level `websockets` package may expose connect in a submodule or
-# when a local stub is in use. Tests rely on patching
-# `platform_connectors.*.websockets.connect` so provide a stable symbol.
-try:
-    if not hasattr(websockets, 'connect'):
-        import importlib as _il
-        _stub = _il.import_module('websockets_stub')
-        setattr(websockets, 'connect', getattr(_stub, 'connect'))
-except Exception:
-    pass
 
 
 def _make_retry_session(total: int = 3, backoff_factor: float = 1.0):
@@ -49,47 +27,17 @@ def _make_retry_session(total: int = 3, backoff_factor: float = 1.0):
 
     Returns a session configured to retry on common transient HTTP errors.
     """
-    try:
-        session = requests.Session()
-        if HTTPAdapter is None or Retry is None:
-            return session
-        retries = Retry(
-            total=total,
-            backoff_factor=backoff_factor,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
-        )
-        adapter = HTTPAdapter(max_retries=retries)
-        session.mount('https://', adapter)
-        session.mount('http://', adapter)
-        return session
-    except Exception:
-        # Fallback to basic session which may raise on network operations
-        try:
-            return requests.Session()
-        except Exception:
-            class _DummyRequestsExceptions:
-                class RequestException(Exception):
-                    pass
-
-            class _DummyRequestsSession:
-                def post(self, *args, **kwargs):
-                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
-
-                def get(self, *args, **kwargs):
-                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
-
-                def delete(self, *args, **kwargs):
-                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
-
-            class _DummyRequestsModule:
-                exceptions = _DummyRequestsExceptions()
-
-                @staticmethod
-                def Session(*args, **kwargs):
-                    return _DummyRequestsSession()
-
-            return _DummyRequestsModule().Session()
+    session = requests.Session()
+    retries = Retry(
+        total=total,
+        backoff_factor=backoff_factor,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    return session
 
 
 class TwitchConnector(BasePlatformConnector):
@@ -280,30 +228,6 @@ class TwitchConnector(BasePlatformConnector):
             badge_manager.fetch_twitch_badges(self.client_id, self.oauth_token)
         except Exception as e:
             logger.exception(f"Error fetching badges: {e}")
-
-        # Attempt to resolve broadcaster_id and prefetch channel emotes in background
-        try:
-            from core.twitch_emotes import get_manager as get_twitch_manager
-            try:
-                if not getattr(self, 'broadcaster_id', None) and getattr(self, 'username', None):
-                    try:
-                        mgr = get_twitch_manager()
-                        bid = mgr.get_broadcaster_id(self.username)
-                        if bid:
-                            try:
-                                self.broadcaster_id = bid
-                            except Exception:
-                                pass
-                            try:
-                                mgr.prefetch_channel(bid, background=True)
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        except Exception:
-            pass
         
         # Create worker thread for async connection
         # For bot accounts, we might connect to a different channel than our username
@@ -357,11 +281,6 @@ class TwitchConnector(BasePlatformConnector):
                 existing_worker.error_signal.connect(self.onError)
 
                 self.worker_thread.started.connect(existing_worker.run)
-                if not startup_allowed():
-                    logger.info(f"[TwitchConnector] CI mode: skipping reuse worker thread start for {nick_for_auth}")
-                    # Keep reference but don't start background thread in CI/test environments
-                    self.worker = existing_worker
-                    return
                 self.worker_thread.start()
 
                 try:
@@ -436,14 +355,6 @@ class TwitchConnector(BasePlatformConnector):
         self.worker.error_signal.connect(self.onError)
         
         self.worker_thread.started.connect(self.worker.run)
-        if not startup_allowed():
-            logger.info(f"[TwitchConnector] CI mode: skipping worker thread start for {nick_for_auth}")
-            self.worker = self.worker
-            try:
-                self._last_worker_created = time.time()
-            except Exception:
-                pass
-            return
         self.worker_thread.start()
         try:
             self._last_worker_created = time.time()
@@ -471,10 +382,7 @@ class TwitchConnector(BasePlatformConnector):
             except Exception:
                 pass
             self.eventsub_worker_thread.started.connect(self.eventsub_worker.run)
-            if not startup_allowed():
-                logger.info(f"[TwitchConnector] CI mode: skipping EventSub worker start for {nick_for_auth}")
-            else:
-                self.eventsub_worker_thread.start()
+            self.eventsub_worker_thread.start()
     
     def refresh_access_token(self):
         """Refresh the access token using refresh token
@@ -1170,7 +1078,7 @@ class TwitchWorker(QThread):
         
         while self.running:
             try:
-                async with connect_with_retry(websockets.connect, self.IRC_SERVER, retries=3) as websocket:
+                async with websockets.connect(self.IRC_SERVER) as websocket:
                     self.ws = websocket
                     retry_count = 0  # Reset on successful connection
                     
@@ -1228,20 +1136,9 @@ class TwitchWorker(QThread):
                                     await self.handle_message(message)
                                     messages_parsed += 1
                             
-                            # Log stats periodically but avoid spamming when nothing parsed
+                            # Log stats periodically
                             if messages_received % 100 == 0:
-                                buf_len = len(message_buffer)
-                                # Only emit detailed stats if we parsed something or buffer has data
-                                if messages_parsed > 0 or buf_len > 0:
-                                    logger.debug(f"[Twitch Stats] Received: {messages_received}, Parsed: {messages_parsed}, Buffer size: {buf_len}")
-                                else:
-                                    # Occasional heartbeat log (every 1000 messages) so logs still show activity
-                                    if messages_received % 1000 == 0:
-                                        # Emit at DEBUG only if connectors.twitch debug enabled
-                                        try:
-                                            logger.debug(f"[Twitch Stats] Received: {messages_received} (no messages parsed yet)")
-                                        except Exception:
-                                            pass
+                                logger.debug(f"[Twitch Stats] Received: {messages_received}, Parsed: {messages_parsed}, Buffer size: {len(message_buffer)}")
                             
                         except asyncio.TimeoutError:
                             continue
@@ -1272,6 +1169,20 @@ class TwitchWorker(QThread):
                     
         self.status_signal.emit(False)
         self.ws = None
+        # Also update the connector directly in case Qt signal delivery is
+        # not active (headless or non-Qt test runners).
+        try:
+            if self.connector:
+                try:
+                    self.connector.connected = False
+                except Exception:
+                    pass
+                try:
+                    self.connector.connection_status.emit(False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
     
     async def refresh_token_if_needed(self):
         """Refresh token during active connection"""
@@ -1382,6 +1293,20 @@ class TwitchWorker(QThread):
         # Log join confirmation
         if f'JOIN #{self.channel}' in raw_message:
             logger.info(f"Successfully joined #{self.channel}")
+            # If a connector object is attached, mark it connected and
+            # emit the connection status so non-Qt callers can observe it
+            try:
+                if self.connector:
+                    try:
+                        self.connector.connected = True
+                    except Exception:
+                        pass
+                    try:
+                        self.connector.connection_status.emit(True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             return
         
         # Check for error messages (NOTICE, msg_banned, msg_suspended, etc.)
@@ -1451,8 +1376,7 @@ class TwitchWorker(QThread):
                 username, message, metadata = result
                 logger.info(f"[Twitch] Event: {username}: {message}")
                 logger.debug(f"[Twitch Event Metadata] {metadata.get('event_type', 'unknown')}")
-                from .connector_utils import emit_chat
-                emit_chat(self, 'twitch', username, message, metadata)
+                self.message_signal.emit(username, message)
                 if hasattr(self, '_metadata_callback') and self._metadata_callback:
                     self._metadata_callback(username, message, metadata)
             return
@@ -1481,8 +1405,7 @@ class TwitchWorker(QThread):
                 
                 # Emit signal with error handling
                 try:
-                    from .connector_utils import emit_chat
-                    emit_chat(self, 'twitch', username, message, metadata)
+                    self.message_signal.emit(username, message)
                     # Diagnostic: show which worker/connector will call metadata callback
                     try:
                         has_cb = hasattr(self, '_metadata_callback') and self._metadata_callback
@@ -2028,7 +1951,7 @@ class TwitchEventSubWorker(QThread):
             try:
                 logger.info(f"[EventSub] Connecting to {self.EVENTSUB_URL}...")
                 
-                async with connect_with_retry(websockets.connect, self.EVENTSUB_URL, retries=3) as ws:
+                async with websockets.connect(self.EVENTSUB_URL) as ws:
                     self.ws = ws
                     self.status_signal.emit(True)
                     logger.info(f"[EventSub] Connected!")

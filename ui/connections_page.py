@@ -2814,12 +2814,43 @@ class PlatformConnectionWidget(QWidget):
                 response = requests.post(TROVO_TOKEN_URL, headers=headers, json=data)
                 response.raise_for_status()
                 token_data = response.json()
-                access_token = token_data.get('access_token')
-                refresh_token = token_data.get('refresh_token', '')
+                access_token = token_data.get('access_token') if isinstance(token_data, dict) else None
+                refresh_token = token_data.get('refresh_token', '') if isinstance(token_data, dict) else ''
+                # Trovo may return a {'data': [ {...} ]} envelope - handle that
+                if not access_token:
+                    try:
+                        if isinstance(token_data, dict):
+                            d = token_data.get('data')
+                            if isinstance(d, list) and len(d) > 0 and isinstance(d[0], dict):
+                                access_token = d[0].get('access_token') or d[0].get('accessToken')
+                                refresh_token = d[0].get('refresh_token', '') or d[0].get('refreshToken', '')
+                    except Exception:
+                        pass
                 if access_token:
                     user_info = self.fetchUserInfo(access_token)
                     self.onOAuthSuccess(account_type, user_info, access_token, refresh_token)
                 else:
+                    try:
+                        logger.error("Trovo token response JSON: %s", token_data)
+                    except Exception:
+                        try:
+                            logger.error("Trovo token response text: %s", response.text)
+                        except Exception:
+                            pass
+                    # Write raw token response to file for debugging
+                    try:
+                        import os
+                        path = os.path.join(os.getcwd(), 'trovo_token_response.txt')
+                        with open(path, 'w', encoding='utf-8') as _f:
+                            try:
+                                _f.write(str(token_data))
+                            except Exception:
+                                try:
+                                    _f.write(response.text)
+                                except Exception:
+                                    _f.write('')
+                    except Exception:
+                        pass
                     logger.error("No access token in response")
                     self.onOAuthFailed(account_type, "No access token in response")
             elif self.platform_id == 'youtube':
@@ -3406,11 +3437,31 @@ class PlatformConnectionWidget(QWidget):
         return current_token if current_token else None
     
     def loadAccountStates(self):
-        """Load saved account states from config"""
-        from core.config import ConfigManager
-        config = ConfigManager()
-        platform_config = config.get_platform_config(self.platform_id)
+        """Load saved account states from config.
 
+        This method defers the potentially-blocking config read to a background
+        thread and schedules UI updates back on the main thread to avoid
+        blocking UI initialization.
+        """
+        import threading
+        from PyQt6.QtCore import QTimer
+
+        def _reader():
+            try:
+                from core.config import ConfigManager
+                config = ConfigManager()
+                platform_config = config.get_platform_config(self.platform_id)
+            except Exception as e:
+                logger.exception(f"[{self.platform_id}] Error reading platform config: {e}")
+                platform_config = None
+
+            # Schedule UI update on the main thread
+            QTimer.singleShot(0, lambda: self._applyAccountStates(platform_config))
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+    def _applyAccountStates(self, platform_config):
+        """Apply platform config to UI controls. Must run on the main/UI thread."""
         if not platform_config:
             logger.debug(f"[{self.platform_id}] No config found in loadAccountStates")
             return
@@ -3425,34 +3476,55 @@ class PlatformConnectionWidget(QWidget):
             token = platform_config.get('streamer_token', '')
             # Use display name if available, otherwise fallback to username
             if display_name:
-                self.streamer_display_name.setText(display_name)
+                try:
+                    self.streamer_display_name.setText(display_name)
+                except Exception:
+                    pass
             elif username:
-                self.streamer_display_name.setText(username)
+                try:
+                    self.streamer_display_name.setText(username)
+                except Exception:
+                    pass
             if display_name or username:
-                self.status_label.setText(f"Streamer logged in: {display_name or username}")
-                self.streamer_login_btn.setText("Logout")
-                self.streamer_login_btn.setEnabled(True)
+                try:
+                    self.status_label.setText(f"Streamer logged in: {display_name or username}")
+                    self.streamer_login_btn.setText("Logout")
+                    self.streamer_login_btn.setEnabled(True)
+                except Exception:
+                    pass
                 # Auto-connect to platform with streamer account
                 if username and token:
                     if hasattr(self, 'append_status_message'):
-                        self.append_status_message(f"[Streamer] Auto-connecting to {self.platform_name} chat...")
-                    self.connect_requested.emit(self.platform_id, username, token)
+                        try:
+                            self.append_status_message(f"[Streamer] Auto-connecting to {self.platform_name} chat...")
+                        except Exception:
+                            pass
+                    try:
+                        self.connect_requested.emit(self.platform_id, username, token)
+                    except Exception as e:
+                        logger.debug(f"Failed to emit connect_requested for {self.platform_id}: {e}")
                 else:
                     logger.warning(f"[{self.platform_id}] Streamer logged in but missing username={bool(username)} or token={bool(token)}")
         else:
-            self.streamer_display_name.setText("")
+            try:
+                self.streamer_display_name.setText("")
+            except Exception:
+                pass
 
         # Load bot account
         if platform_config.get('bot_logged_in', False):
             display_name = platform_config.get('bot_display_name', '')
             username = platform_config.get('bot_username', '')
             # Set the bot account username field in the UI
-            if display_name:
-                self.bot_display_name.setText(display_name)
-                self.status_label.setText(f"Bot logged in: {display_name}")
-            elif username:
-                self.bot_display_name.setText(username)
-                self.status_label.setText(f"Bot logged in: {username}")
+            try:
+                if display_name:
+                    self.bot_display_name.setText(display_name)
+                    self.status_label.setText(f"Bot logged in: {display_name}")
+                elif username:
+                    self.bot_display_name.setText(username)
+                    self.status_label.setText(f"Bot logged in: {username}")
+            except Exception:
+                pass
         # Load disable state for this platform (persist across runs)
         try:
             disabled = platform_config.get('disabled', False)

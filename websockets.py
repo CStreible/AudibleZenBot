@@ -1,66 +1,52 @@
-"""Shim that prefers the installed `websockets` package but falls back
-to the bundled `websockets_stub.py` when the real package isn't present.
+"""Environment-aware shim for `websockets`.
 
-This avoids accidental shadowing of the real dependency by a top-level
-file while keeping the lightweight stub available for offline tests.
+This shim loads a local stub in test mode and delegates to the installed
+`websockets` distribution in production. To avoid importing this shim
+instead of the installed package it temporarily removes this module from
+`sys.modules` and strips the current working directory from `sys.path`
+while performing the import.
 """
 
-from importlib import import_module
-import sys
 import os
+import sys
+import importlib
+import importlib.util
+from core.env import is_test
 
-# Attempt to import the real `websockets` package from site-packages by
-# temporarily removing the project directory from `sys.path` so that
-# local files do not shadow the distribution.
-_this_dir = os.path.dirname(__file__)
-_removed = False
-_real = None
-try:
-    if _this_dir in sys.path:
-        sys.path.remove(_this_dir)
-        _removed = True
+
+def _load_local_stub():
+    stub_path = os.path.join(os.path.dirname(__file__), 'websockets.localstub.py')
+    spec = importlib.util.spec_from_file_location('websockets_localstub', stub_path)
+    stub = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stub)
+    for k, v in vars(stub).items():
+        if k.startswith('__'):
+            continue
+        globals()[k] = v
+
+
+def _delegate_to_installed():
+    modname = 'websockets'
+    orig_mod = sys.modules.pop(modname, None)
+    _orig_sys_path = list(sys.path)
     try:
-        _real = import_module('websockets')
-    except Exception:
-        _real = None
-finally:
-    if _removed:
-        sys.path.insert(0, _this_dir)
+        cwd = os.path.abspath(os.getcwd())
+        sys.path = [p for p in sys.path if p and os.path.abspath(p) != cwd]
+        real = importlib.import_module('websockets')
+        # Replace this shim in sys.modules with the real package so that
+        # submodule imports like `websockets.legacy` resolve correctly.
+        sys.modules[modname] = real
+    finally:
+        sys.path[:] = _orig_sys_path
 
-if _real is not None:
-    # Re-export everything from the real package
-    globals().update({k: v for k, v in _real.__dict__.items() if not k.startswith('__')})
-    # Ensure a top-level `connect` symbol exists for legacy code/tests that
-    # expect `websockets.connect`. Some websockets versions expose connect in
-    # a submodule (e.g. websockets.client.connect); try to locate it.
-    if 'connect' not in globals():
-        _connect = getattr(_real, 'connect', None)
-        if _connect is None:
-            _client = getattr(_real, 'client', None)
-            _connect = getattr(_client, 'connect', None) if _client is not None else None
-        if _connect is not None:
-            globals()['connect'] = _connect
+    # Copy public attributes from installed package for convenience
+    for k, v in vars(real).items():
+        if k.startswith('__'):
+            continue
+        globals()[k] = v
+
+
+if is_test():
+    _load_local_stub()
 else:
-    # Fall back to the bundled stub (import by name to work when this
-    # module is executing as a top-level script/module).
-    import importlib as _il
-    _stub = _il.import_module('websockets_stub')
-    _stub_dict = {k: v for k, v in _stub.__dict__.items() if not k.startswith('__')}
-    globals().update(_stub_dict)
-    # Ensure common symbols are explicitly provided
-    if 'connect' not in globals() and hasattr(_stub, 'connect'):
-        globals()['connect'] = getattr(_stub, 'connect')
-    if 'exceptions' not in globals() and hasattr(_stub, 'exceptions'):
-        globals()['exceptions'] = getattr(_stub, 'exceptions')
-
-# As a last resort, ensure the module object in sys.modules has a `connect`
-# attribute so modules that imported earlier get the symbol available for
-# patching in tests.
-try:
-    import sys as _sys
-    if 'connect' in globals():
-        setattr(_sys.modules[__name__], 'connect', globals()['connect'])
-    if 'exceptions' in globals():
-        setattr(_sys.modules[__name__], 'exceptions', globals()['exceptions'])
-except Exception:
-    pass
+    _delegate_to_installed()

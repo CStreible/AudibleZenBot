@@ -5,26 +5,59 @@ four-argument message signal `(platform, username, message, metadata)` while
 also preserving legacy emits for connectors that other code may still
 listen to.
 """
-from typing import Any
+from typing import Any, Callable, Optional
 import asyncio
 import logging
-import time
 from contextlib import asynccontextmanager
-from typing import Callable, Optional
 import os
 
 
-def emit_chat(connector: Any, platform: str, username: str, message: str, metadata: dict | None = None) -> None:
+def safe_emit(signal, *args, **kwargs):
+    """Safely emit a PyQt signal, swallowing RuntimeError when the
+    underlying QObject has been deleted during shutdown.
+    """
+    try:
+        signal.emit(*args, **kwargs)
+    except RuntimeError:
+        # QObject already deleted; ignore
+        return
+    except Exception:
+        return
+
+
+def emit_chat(connector: Any, platform: str, username: str, message: str, metadata: Optional[dict] = None) -> None:
+    """Emit a canonical chat message while preserving legacy signals.
+
+    This helper ensures connectors can emit both the modern
+    `message_received_with_metadata(platform, username, message, metadata)`
+    as well as legacy `message_received(platform, username, message)` or
+    two-argument variants for backward compatibility.
+    """
     if metadata is None:
         metadata = {}
 
-    # Preferred canonical emits
     try:
         if hasattr(connector, 'message_received_with_metadata'):
+            safe_emit(connector.message_received_with_metadata, platform, username, message, metadata)
+    except Exception:
+        pass
+
+    try:
+        if hasattr(connector, 'message_received'):
+            safe_emit(connector.message_received, platform, username, message)
+    except Exception:
+        pass
+
+    # Legacy two-arg signal
+    try:
+        if hasattr(connector, 'message_signal'):
             try:
-                connector.message_received_with_metadata.emit(platform, username, message, metadata)
-            except Exception:
-                pass
+                safe_emit(connector.message_signal, username, message)
+            except TypeError:
+                try:
+                    safe_emit(connector.message_signal, username, message, metadata)
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -44,19 +77,15 @@ async def connect_with_retry(connect_callable: Callable, uri: str, *args, retrie
     """Async context manager that attempts to establish a websocket connection
     using ``connect_callable`` (typically ``websockets.connect``). Retries
     on failure with exponential backoff and logs attempts.
-
-    Usage:
-        async with connect_with_retry(websockets.connect, uri) as ws:
-            ...
     """
     if logger is None:
         logger = logging.getLogger('platform_connectors')
 
     attempt = 0
+    max_retries = max(1, int(retries))
     last_exc = None
-    while attempt < max(1, int(retries)):
+    while attempt < max_retries:
         try:
-            # connect_callable should return an async context manager
             cm = connect_callable(uri, *args, **kwargs)
             async with cm as ws:
                 yield ws
@@ -64,56 +93,19 @@ async def connect_with_retry(connect_callable: Callable, uri: str, *args, retrie
         except Exception as e:
             last_exc = e
             attempt += 1
-            if attempt >= retries:
-                break
             wait = backoff_factor * (2 ** (attempt - 1))
-            try:
-                logger.warning(f"[connectors][WARN] websockets connect failed attempt {attempt}/{retries} for {uri}: {e}; retrying in {wait:.1f}s")
-            except Exception:
-                pass
+            logger.warning(f"websockets connect failed attempt {attempt} for {uri}: {e}; retrying in {wait}s")
+            if attempt >= max_retries:
+                break
             try:
                 await asyncio.sleep(wait)
-            except asyncio.CancelledError:
-                raise
-
-    try:
-        logger.error(f"[connectors][ERROR] websockets connect failed after {retries} attempts for {uri}: {last_exc}")
-    except Exception:
-        pass
-    if last_exc:
-        raise last_exc
-    raise RuntimeError("websockets.connect failed without exception")
-
-    try:
-        if hasattr(connector, 'message_received'):
-            try:
-                connector.message_received.emit(platform, username, message, metadata)
             except Exception:
+                # If sleep is interrupted, proceed to next retry
                 pass
+    # Log an error about exhausted retries for callers/tests that expect it
+    try:
+        logger.error(f"websockets connect failed after {max_retries} attempts for {uri}: {last_exc}")
     except Exception:
         pass
 
-    # Backwards-compatible legacy emits (username, message[, metadata])
-    try:
-        if hasattr(connector, 'message_signal_with_metadata'):
-            try:
-                connector.message_signal_with_metadata.emit(username, message, metadata)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    try:
-        if hasattr(connector, 'message_signal'):
-            try:
-                # Some legacy connectors expect two args
-                connector.message_signal.emit(username, message)
-            except TypeError:
-                try:
-                    connector.message_signal.emit(username, message, metadata)
-                except Exception:
-                    pass
-            except Exception:
-                pass
-    except Exception:
-        pass
+    raise RuntimeError(f"Failed to connect to {uri} after {max_retries} attempts")

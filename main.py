@@ -263,8 +263,36 @@ if HAS_PYQT:
             expand this. For tests and headless runs we keep this a safe no-op.
             """
             try:
-                # If platform connector provides a helper, try to call it.
-                # Keep this optional and non-fatal for test environments.
+                cfg = getattr(self, 'config', None)
+                if not cfg:
+                    return None
+
+                # Read ngrok config
+                ngcfg = cfg.get('ngrok', {}) or {}
+                auto_start = bool(ngcfg.get('auto_start', True))
+                token = ngcfg.get('auth_token', '') or ''
+                # Prefer explicit callback port in config, fallback to default
+                callback_port = int(cfg.get('ngrok.callback_port', ngcfg.get('callback_port', 8889) or 8889))
+
+                if hasattr(self, 'ngrok_manager') and self.ngrok_manager:
+                    # If token present, configure ngrok manager
+                    if token:
+                        try:
+                            self.ngrok_manager.set_auth_token(token)
+                        except Exception as e:
+                            print(f"[Main] Failed to set ngrok auth token: {e}")
+
+                    # Auto-start tunnel if configured and token available
+                    if auto_start and token and self.ngrok_manager.is_available():
+                        try:
+                            public = self.ngrok_manager.get_tunnel_url(callback_port)
+                            if not public:
+                                public = self.ngrok_manager.start_tunnel(callback_port, protocol='http', name='trovo_callback')
+                            if public:
+                                print(f"[Main] Ngrok auto-started for port {callback_port}: {public}")
+                        except Exception as e:
+                            print(f"[Main] Failed to auto-start ngrok tunnel: {e}")
+
                 return None
             except Exception as e:
                 print(f"[Main] _start_trovo_support_servers error: {e}")

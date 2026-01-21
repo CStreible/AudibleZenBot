@@ -1,0 +1,10 @@
+{
+  "ts": 1768959528,
+  "status_code": 200,
+  "response_text": "",
+  "response_headers": {},
+  "response_json": {
+    "access_token": "X",
+    "refresh_token": "Y"
+  }
+}

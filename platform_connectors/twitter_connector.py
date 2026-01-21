@@ -10,7 +10,7 @@ except Exception:
     requests = None
 from platform_connectors.base_connector import BasePlatformConnector
 from platform_connectors.qt_compat import QThread, pyqtSignal
-from platform_connectors.connector_utils import startup_allowed
+from platform_connectors.connector_utils import startup_allowed, safe_emit
 from core.logger import get_logger
 try:
     from core.http_session import make_retry_session
@@ -151,7 +151,7 @@ class TwitterConnector(BasePlatformConnector):
         # Implementation kept for future use if API becomes available
         logger.info(f"[TwitterConnector] Twitter/X integration is currently disabled")
         logger.info(f"[TwitterConnector] Live broadcast chat is not available via Twitter API")
-        self.error_occurred.emit("Twitter/X chat integration is currently disabled. Live broadcast chat not supported by API.")
+        safe_emit(self.error_occurred, "Twitter/X chat integration is currently disabled. Live broadcast chat not supported by API.")
         return
         
         # Try to refresh token if we have a refresh token
@@ -193,7 +193,7 @@ class TwitterConnector(BasePlatformConnector):
             self.worker_thread.wait()
         
         self.connected = False
-        self.connection_status.emit(False)
+        safe_emit(self.connection_status, False)
     
     def send_message(self, message: str):
         """Send a tweet"""
@@ -203,16 +203,16 @@ class TwitterConnector(BasePlatformConnector):
     def onMessageReceived(self, username: str, message: str, metadata: dict):
         """Handle received message"""
         logger.debug(f"[TwitterConnector] onMessageReceived: {username}, {message}")
-        self.message_received_with_metadata.emit('twitter', username, message, metadata)
+        safe_emit(self.message_received_with_metadata, 'twitter', username, message, metadata)
     
     def onStatusChanged(self, connected: bool):
         """Handle connection status change"""
         self.connected = connected
-        self.connection_status.emit(connected)
+        safe_emit(self.connection_status, connected)
     
     def onError(self, error: str):
         """Handle error"""
-        self.error_occurred.emit(error)
+        safe_emit(self.error_occurred, error)
 
 
 class TwitterWorker(QThread):
@@ -261,18 +261,18 @@ class TwitterWorker(QThread):
         if not self.oauth_token:
             error_msg = "No OAuth token provided. Cannot connect to Twitter."
             logger.error(f"TwitterWorker ERROR: {error_msg}")
-            self.error_signal.emit(error_msg)
-            self.status_signal.emit(False)
+            safe_emit(self.error_signal, error_msg)
+            safe_emit(self.status_signal, False)
             return
         
         try:
             # Get user ID from username
             if not self.get_user_id():
-                self.error_signal.emit(f"Could not find user: {self.username}")
-                self.status_signal.emit(False)
+                safe_emit(self.error_signal, f"Could not find user: {self.username}")
+                safe_emit(self.status_signal, False)
                 return
             
-            self.status_signal.emit(True)
+            safe_emit(self.status_signal, True)
             
             # Poll for timeline and relevant tweets
             while self.running:
@@ -292,12 +292,12 @@ class TwitterWorker(QThread):
                     time.sleep(30)  # Poll every 30 seconds to stay within rate limits
                     
                 except Exception as e:
-                    self.error_signal.emit(f"Error fetching tweets: {str(e)}")
+                    safe_emit(self.error_signal, f"Error fetching tweets: {str(e)}")
                     time.sleep(15)
                     
         except Exception as e:
-            self.error_signal.emit(f"Connection error: {str(e)}")
-            self.status_signal.emit(False)
+            safe_emit(self.error_signal, f"Connection error: {str(e)}")
+            safe_emit(self.status_signal, False)
     
     def get_user_id(self) -> bool:
         """Get the user ID from username"""
@@ -529,7 +529,7 @@ class TwitterWorker(QThread):
                     }
                     
                     logger.info(f"Mention from {author_name}: {text[:50]}...")
-                    self.message_signal.emit(author_name, text, metadata)
+                    safe_emit(self.message_signal, author_name, text, metadata)
                     
         except Exception as e:
             logger.exception(f"Exception fetching mentions: {e}")
@@ -629,7 +629,7 @@ class TwitterWorker(QThread):
                     }
                     
                     # Emit the message
-                    self.message_signal.emit(author_name, text, metadata)
+                    safe_emit(self.message_signal, author_name, text, metadata)
                 
                 # Keep only last 1000 tweet IDs to avoid memory issues
                 if len(self.processed_tweets) > 1000:
@@ -752,7 +752,7 @@ class TwitterWorker(QThread):
                         'badges': []
                     }
                     
-                    self.message_signal.emit(author_name, text, metadata)
+                    safe_emit(self.message_signal, author_name, text, metadata)
                 
         except Exception as e:
             logger.exception(f"Exception fetching conversation: {e}")

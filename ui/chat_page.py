@@ -21,23 +21,66 @@ try:
     from PyQt6.QtGui import QAction
 except Exception:
     HAS_PYQT = False
-    QWidget = object
-    QVBoxLayout = object
-    QLabel = object
-    QGroupBox = object
-    QHBoxLayout = object
-    QCheckBox = object
-    QPushButton = object
-    QMenu = object
-    QInputDialog = object
-    QMessageBox = object
-    QSizePolicy = object
-    QWebEngineView = object
-    QWebEngineScript = object
+    class QWidget:
+        def __init__(self, parent=None):
+            self._parent = parent
+
+    class QVBoxLayout:
+        def __init__(self, *a, **k):
+            pass
+
+    class QLabel:
+        def __init__(self, *a, **k):
+            pass
+
+    class QGroupBox:
+        def __init__(self, *a, **k):
+            pass
+
+    class QHBoxLayout:
+        def __init__(self, *a, **k):
+            pass
+
+    class QCheckBox:
+        def __init__(self, *a, **k):
+            pass
+
+    class QPushButton:
+        def __init__(self, *a, **k):
+            pass
+
+    class QMenu:
+        def __init__(self, *a, **k):
+            pass
+
+    class QInputDialog:
+        @staticmethod
+        def getText(parent, title, label):
+            return ('', False)
+
+    class QMessageBox:
+        @staticmethod
+        def information(parent, title, message):
+            return None
+
+    class QSizePolicy:
+        def __init__(self, *a, **k):
+            pass
+
+    class QWebEngineView:
+        def __init__(self, *a, **k):
+            pass
+
+    class QWebEngineScript:
+        DocumentReady = 0
+        def __init__(self, *a, **k):
+            pass
+
     def pyqtSlot(*a, **k):
         def _decorator(f):
             return f
         return _decorator
+
     class _DummySignal:
         def __init__(self):
             self._callbacks = []
@@ -52,12 +95,79 @@ except Exception:
                     cb(*a, **k)
                 except Exception:
                     pass
+
     def pyqtSignal(*a, **k):
         return _DummySignal()
-    Qt = object
-    QUrl = object
-    QTimer = object
-    QAction = object
+
+    class Qt:
+        AlignLeft = 0
+        AlignRight = 1
+        AlignCenter = 2
+
+    class QUrl:
+        def __init__(self, url=''):
+            self._url = url
+        def toString(self):
+            return str(self._url)
+
+    class QTimer:
+        def __init__(self, *a, **k):
+            pass
+
+    class QAction:
+        def __init__(self, *a, **k):
+            pass
+
+# If the PyQt6 package stubs are actually available in the environment (e.g., the
+# local `PyQt6_local` stubs were registered in `PyQt6`), prefer those concrete
+# implementations over the simple fallbacks above. This helps keep behavior
+# consistent when the project's PyQt6 shim is present.
+try:
+    import PyQt6
+    if hasattr(PyQt6, 'QtWidgets'):
+        try:
+            QW = PyQt6.QtWidgets
+            QWidget = getattr(QW, 'QWidget', QWidget)
+            QVBoxLayout = getattr(QW, 'QVBoxLayout', QVBoxLayout)
+            QLabel = getattr(QW, 'QLabel', QLabel)
+            QGroupBox = getattr(QW, 'QGroupBox', QGroupBox)
+            QHBoxLayout = getattr(QW, 'QHBoxLayout', QHBoxLayout)
+            QCheckBox = getattr(QW, 'QCheckBox', QCheckBox)
+            QPushButton = getattr(QW, 'QPushButton', QPushButton)
+            QMenu = getattr(QW, 'QMenu', QMenu)
+            QInputDialog = getattr(QW, 'QInputDialog', QInputDialog)
+            QMessageBox = getattr(QW, 'QMessageBox', QMessageBox)
+            QSizePolicy = getattr(QW, 'QSizePolicy', QSizePolicy)
+        except Exception:
+            pass
+    if hasattr(PyQt6, 'QtWebEngineWidgets'):
+        try:
+            QWebEngineView = getattr(PyQt6.QtWebEngineWidgets, 'QWebEngineView', QWebEngineView)
+        except Exception:
+            pass
+    if hasattr(PyQt6, 'QtWebEngineCore'):
+        try:
+            QWebEngineScript = getattr(PyQt6.QtWebEngineCore, 'QWebEngineScript', QWebEngineScript)
+        except Exception:
+            pass
+    if hasattr(PyQt6, 'QtCore'):
+        try:
+            QC = PyQt6.QtCore
+            pyqtSlot = getattr(QC, 'pyqtSlot', pyqtSlot)
+            pyqtSignal = getattr(QC, 'pyqtSignal', pyqtSignal)
+            Qt = getattr(QC, 'Qt', Qt)
+            QUrl = getattr(QC, 'QUrl', QUrl)
+            QTimer = getattr(QC, 'QTimer', QTimer)
+        except Exception:
+            pass
+    if hasattr(PyQt6, 'QtGui'):
+        try:
+            QAction = getattr(PyQt6.QtGui, 'QAction', QAction)
+        except Exception:
+            pass
+    HAS_PYQT = True
+except Exception:
+    pass
 
 # Project-specific imports
 from core.badge_manager import get_badge_manager
@@ -406,6 +516,14 @@ class ChatPage(QWidget):
     def initUI(self):
         """Initialize the chat page UI"""
         main_layout = QVBoxLayout(self)
+        try:
+            # Debug: show layout details when running in headless tests
+            import inspect, sys
+            # print type/dir to stdout for pytest capture if this branch errors
+            print('DEBUG: main_layout type=', type(main_layout), 'module=', getattr(type(main_layout),'__module__', None))
+            print('DEBUG: has setContentsMargins=', hasattr(main_layout, 'setContentsMargins'))
+        except Exception:
+            pass
         main_layout.setContentsMargins(10, 2, 10, 2)
         main_layout.setSpacing(2)
         
@@ -472,7 +590,20 @@ class ChatPage(QWidget):
         settings_layout.addWidget(self.badges_checkbox)
         
         # Background style dropdown
-        from PyQt6.QtWidgets import QComboBox, QLabel as QLabelWidget
+        # Ensure QComboBox is defined in this scope (may come from PyQt6 stubs)
+        QComboBox = globals().get('QComboBox', None)
+        try:
+            from PyQt6.QtWidgets import QComboBox as _QComboBox, QLabel as QLabelWidget
+            QComboBox = _QComboBox
+        except Exception:
+            # Fall back to already-resolved QLabel/QComboBox stubs
+            try:
+                import PyQt6
+                if hasattr(PyQt6, 'QtWidgets'):
+                    QComboBox = getattr(PyQt6.QtWidgets, 'QComboBox', QComboBox)
+            except Exception:
+                pass
+            QLabelWidget = QLabel
         bg_label = QLabelWidget("Visibility:")
         bg_label.setStyleSheet("color: #ffffff; font-size: 12px; margin-left: 10px;")
         settings_layout.addWidget(bg_label)
@@ -560,7 +691,14 @@ class ChatPage(QWidget):
         
         settings_group.setLayout(settings_layout)
         # Wrap settings in a horizontal scroll area so controls can overflow horizontally
-        from PyQt6.QtWidgets import QScrollArea
+        try:
+            from PyQt6.QtWidgets import QScrollArea
+        except Exception:
+            try:
+                import PyQt6
+                QScrollArea = getattr(PyQt6.QtWidgets, 'QScrollArea', None)
+            except Exception:
+                QScrollArea = globals().get('QScrollArea', None)
         settings_container = QWidget()
         sc_layout = QHBoxLayout(settings_container)
         sc_layout.setContentsMargins(0, 0, 0, 0)

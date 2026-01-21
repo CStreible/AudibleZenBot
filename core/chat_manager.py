@@ -5,6 +5,7 @@ Chat Manager - Manages connections and messages from all platforms
 import asyncio
 import time
 import os
+import threading
 from typing import Dict, Optional
 from platform_connectors.qt_compat import QObject, pyqtSignal, QThread, QTimer, pyqtSlot
 from core.logger import get_logger
@@ -13,6 +14,7 @@ from core.logger import get_logger
 logger = get_logger('ChatManager')
 
 from core.config import ConfigManager
+from core.env import is_ci
 
 
 class ChatManager(QObject):
@@ -92,7 +94,7 @@ class ChatManager(QObject):
             # heavy connector classes which spawn threads or perform network
             # requests. Honor `AUDIBLEZENBOT_CI=1` to skip creating real
             # connectors; tests can opt-in to create lightweight stubs.
-            if os.environ.get('AUDIBLEZENBOT_CI', '0') == '1':
+            if is_ci():
                 logger.info(f"CI mode active; skipping instantiation of connector for {pid}")
                 continue
 
@@ -288,7 +290,7 @@ class ChatManager(QObject):
             return False
 
         try:
-            # Pass ngrok_manager to connector if available
+            # Prepare connector (may modify connector state quickly)
             if self.ngrok_manager and hasattr(connector, 'ngrok_manager'):
                 connector.ngrok_manager = self.ngrok_manager
 
@@ -314,32 +316,43 @@ class ChatManager(QObject):
             elif token and hasattr(connector, 'set_api_key'):
                 connector.set_api_key(token)
 
-            # Start connection in background
-            logger.info(f"Calling connect() for {platform_id}")
-            connector.connect(username)
+            # Run the potentially blocking connect() + polling in a background thread
+            def _connect_worker():
+                try:
+                    logger.info(f"Background: Calling connect() for {platform_id}")
+                    connector.connect(username)
 
-            # Wait briefly for the connector to report its actual connected state.
-            # Worker threads may take a short time to emit status; poll up to 3s.
-            import time
-            waited = 0.0
-            timeout = 3.0
-            interval = 0.1
-            try:
-                while waited < timeout:
-                    if getattr(connector, 'connected', False):
-                        break
-                    time.sleep(interval)
-                    waited += interval
-            except KeyboardInterrupt:
-                logger.info(f"connectPlatform interrupted while waiting for {platform_id}")
-                return False
+                    # Poll for up to 3s for connector.connected to become True
+                    waited = 0.0
+                    timeout = 3.0
+                    interval = 0.1
+                    while waited < timeout:
+                        try:
+                            if getattr(connector, 'connected', False):
+                                break
+                        except Exception:
+                            pass
+                        time.sleep(interval)
+                        waited += interval
 
-            connected_state = bool(getattr(connector, 'connected', False))
-            self.connection_status_changed.emit(platform_id, connected_state)
-            self.streamer_connection_changed.emit(platform_id, connected_state, username)
+                    connected_state = bool(getattr(connector, 'connected', False))
+                    try:
+                        self.connection_status_changed.emit(platform_id, connected_state)
+                    except Exception:
+                        logger.debug(f"Failed to emit connection_status_changed for {platform_id}")
+                    try:
+                        self.streamer_connection_changed.emit(platform_id, connected_state, username)
+                    except Exception:
+                        logger.debug(f"Failed to emit streamer_connection_changed for {platform_id}")
+                except Exception as e:
+                    logger.error(f"Background connect error for {platform_id}: {e}")
+
+            t = threading.Thread(target=_connect_worker, daemon=True)
+            t.start()
+            # Return immediately so UI thread isn't blocked
             return True
         except Exception as e:
-            logger.error(f"Error connecting to {platform_id}: {e}")
+            logger.error(f"Error scheduling background connect for {platform_id}: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -454,7 +467,7 @@ class ChatManager(QObject):
             # short-circuit the connection process while preserving in-memory
             # config state so callers that expect a truthy return value still
             # proceed during tests.
-            if os.environ.get('AUDIBLEZENBOT_CI', '0') == '1':
+            if is_ci():
                 logger.info(f"CI mode active; skipping bot connector creation for {platform_id}")
                 if self.config:
                     # Load credentials into config memory but do not attempt network
@@ -496,7 +509,8 @@ class ChatManager(QObject):
             if platform_id == 'twitch':
                 ctor = getattr(self, 'TwitchConnector', None)
                 if ctor is None:
-                    raise RuntimeError('TwitchConnector not available')
+                    logger.warning('TwitchConnector not available; bot credentials saved but connector not instantiated')
+                    return True
                 bot_connector = ctor(self.config, is_bot_account=True)
             elif platform_id == 'youtube':
                 ctor = getattr(self, 'YouTubeConnector', None)
