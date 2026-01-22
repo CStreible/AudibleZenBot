@@ -16,6 +16,7 @@ logger = get_logger('ChatManager')
 
 from core.config import ConfigManager
 from core.env import is_ci
+from datetime import datetime, timezone
 
 
 class ChatManager(QObject):
@@ -137,6 +138,10 @@ class ChatManager(QObject):
         # Setup connectors
         for platform_id, connector in self.connectors.items():
             # Connect connector signals to ChatManager slots so Qt can queue across threads
+            try:
+                logger.debug(f"[TRACE] Connecting connector for {platform_id}: connector_id={id(connector)} has_meta={hasattr(connector, 'message_received_with_metadata')} has_legacy={hasattr(connector,'message_received')}")
+            except Exception:
+                pass
             if hasattr(connector, 'message_received_with_metadata'):
                 connector.message_received_with_metadata.connect(self._onConnectorMessageWithMetadata)
                 try:
@@ -159,6 +164,14 @@ class ChatManager(QObject):
                 self._assert_connector_contract(platform_id, connector)
             except Exception:
                 logger.warning(f"Connector contract assertion failed for {platform_id}")
+
+        # Emit an info-level diagnostic listing connector instance ids so
+        # runtime diagnostics can correlate emitter ids from EventSub logs
+        try:
+            mapping = {pid: id(conn) for pid, conn in self.connectors.items()}
+            logger.info(f"[ChatManager][DIAG] connectors mapping: {mapping}")
+        except Exception:
+            pass
 
     def _assert_connector_contract(self, platform_id: str, connector: object):
         """Runtime check to ensure connectors implement at least one of the
@@ -407,12 +420,53 @@ class ChatManager(QObject):
         md = dict(metadata)
         if 'message_id' in md and md['message_id'] is not None:
             md['message_id'] = str(md['message_id'])
-        # normalize timestamp keys
-        for tkey in ('tmi-sent-ts', 'timestamp'):
+        # normalize timestamp keys: prefer `timestamp`, fall back to `tmi-sent-ts`
+        ts_val = None
+        for tkey in ('timestamp', 'tmi-sent-ts'):
             if tkey in md and md[tkey] is not None:
-                # accept numeric or string timestamps
-                if not isinstance(md[tkey], (int, str)):
-                    md[tkey] = str(md[tkey])
+                ts_val = md[tkey]
+                break
+
+        # Parse numeric or ISO-like string timestamps into a datetime (UTC)
+        parsed_ts = None
+        try:
+            if ts_val is None:
+                parsed_ts = datetime.now(timezone.utc)
+            elif isinstance(ts_val, (int, float)):
+                # Heuristic: treat large ints as epoch seconds or milliseconds
+                if ts_val > 1e12:
+                    # milliseconds
+                    parsed_ts = datetime.fromtimestamp(ts_val / 1000.0, tz=timezone.utc)
+                else:
+                    parsed_ts = datetime.fromtimestamp(ts_val, tz=timezone.utc)
+            elif isinstance(ts_val, str):
+                txt = ts_val
+                # Normalize trailing Z to +00:00 for fromisoformat
+                if txt.endswith('Z'):
+                    txt = txt[:-1] + '+00:00'
+                try:
+                    parsed_ts = datetime.fromisoformat(txt)
+                    if parsed_ts.tzinfo is None:
+                        parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
+                except Exception:
+                    # Fallback: try to parse as float epoch string
+                    try:
+                        f = float(txt)
+                        if f > 1e12:
+                            parsed_ts = datetime.fromtimestamp(f / 1000.0, tz=timezone.utc)
+                        else:
+                            parsed_ts = datetime.fromtimestamp(f, tz=timezone.utc)
+                    except Exception:
+                        parsed_ts = datetime.now(timezone.utc)
+        except Exception:
+            parsed_ts = datetime.now(timezone.utc)
+
+        # Store canonical datetime under 'timestamp'
+        try:
+            md['timestamp'] = parsed_ts
+        except Exception:
+            pass
+
         return md
         
         try:

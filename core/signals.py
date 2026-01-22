@@ -19,6 +19,8 @@ try:
         emotes_rendered_ext = pyqtSignal(object)
         # Emitted when an emote image is cached to disk
         emote_image_cached_ext = pyqtSignal(object)
+        # Emitted when emote-set metadata is available (before images)
+        emote_set_metadata_ready_ext = pyqtSignal(object)
         # Emote set throttler activity (structured payload)
         emote_set_batch_processed_ext = pyqtSignal(object)
 
@@ -32,6 +34,7 @@ try:
             'emotes_channel_warmed_ext',
             'emotes_rendered_ext',
             'emote_image_cached_ext',
+            'emote_set_metadata_ready_ext',
             'emote_set_batch_processed_ext',
         ]
         for _name in _signal_names:
@@ -93,6 +96,8 @@ except Exception:
             self.emotes_rendered_ext = _SignalStub()
             # Emit when an emote image is cached
             self.emote_image_cached_ext = _SignalStub()
+            # Emit when emote-set metadata is available (before images)
+            self.emote_set_metadata_ready_ext = _SignalStub()
             # Throttler activity
             self.emote_set_batch_processed_ext = _SignalStub()
 

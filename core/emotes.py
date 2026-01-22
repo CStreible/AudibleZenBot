@@ -8,6 +8,7 @@ This intentionally keeps the implementation small and defensive so tests
 can reliably import and exercise `render_message` without network access.
 """
 import html
+import json
 import re
 import time
 import threading
@@ -367,6 +368,131 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
         if not message:
             return '', False
 
+        # If EventSub provided structured fragments in metadata, prefer
+        # rendering from fragments. This allows precise emote/mention
+        # rendering and lets us fetch/cache emote assets on demand.
+        try:
+            frags = None
+            if metadata and isinstance(metadata, dict):
+                frags = metadata.get('fragments') or metadata.get('message_fragments')
+            if frags and isinstance(frags, list):
+                from core.twitch_emotes import get_manager as _get_twitch_manager
+                mgr = _get_twitch_manager() if _get_twitch_manager is not None else None
+
+                parts = []
+                has_img = False
+                broadcaster_id = None
+                try:
+                    broadcaster_id = metadata.get('room-id') or metadata.get('room_id') or metadata.get('channel_id')
+                except Exception:
+                    broadcaster_id = None
+
+                for frag in frags:
+                    try:
+                        ftype = frag.get('type') if isinstance(frag, dict) else None
+                        # Warn about unknown fragment types to aid diagnosis
+                        try:
+                            if ftype and ftype not in ('text', 'emote', 'cheermote'):
+                                try:
+                                    logger.warning(f"emotes: unknown fragment type: {ftype} fragment={json.dumps(frag, default=str)}")
+                                except Exception:
+                                    logger.warning(f"emotes: unknown fragment type: {ftype}")
+                        except Exception:
+                            pass
+                        if not ftype or ftype == 'text':
+                            parts.append(html.escape((frag.get('text') if isinstance(frag, dict) else str(frag)) or ''))
+                            continue
+
+                        if ftype == 'emote':
+                            # Emote fragment handling: try cache, then fetch emote set
+                            emobj = frag.get('emote') if isinstance(frag, dict) else {}
+                            # Emote id may be under several keys
+                            emote_id = None
+                            try:
+                                emote_id = str(emobj.get('id') or emobj.get('emote_id') or frag.get('id')) if isinstance(emobj, dict) else None
+                            except Exception:
+                                emote_id = None
+
+                            emote_set = None
+                            try:
+                                emote_set = emobj.get('emote_set_id') or emobj.get('emote_set') or emobj.get('emote_set_ids')
+                            except Exception:
+                                emote_set = None
+
+                            uri = None
+                            try:
+                                if mgr and emote_id:
+                                    uri = mgr.get_emote_data_uri(emote_id, broadcaster_id=broadcaster_id)
+                            except Exception:
+                                uri = None
+
+                            # If not found and emote_set present, synchronously fetch set and prefetch images
+                            if not uri and emote_set and str(emote_set) not in ('', '0'):
+                                try:
+                                    # Ensure manager has data for the set
+                                    mgr.fetch_emote_sets([emote_set])
+                                except Exception:
+                                    pass
+                                try:
+                                    # Collect ids that belong to this set and prefetch their images
+                                    ids = []
+                                    try:
+                                        for k, v in (mgr.id_map.items() if getattr(mgr, 'id_map', None) else []):
+                                            try:
+                                                # normalize possible fields
+                                                s = v.get('emote_set_id') or v.get('emote_set') or v.get('emote_set_ids')
+                                                if not s:
+                                                    continue
+                                                # s can be list or string
+                                                if isinstance(s, (list, tuple)):
+                                                    if str(emote_set) in [str(x) for x in s]:
+                                                        ids.append(k)
+                                                else:
+                                                    if str(s) == str(emote_set):
+                                                        ids.append(k)
+                                            except Exception:
+                                                continue
+                                    except Exception:
+                                        ids = []
+                                    if ids:
+                                        try:
+                                            mgr._prefetch_emote_images(ids)
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                                # Retry locating the emote image after prefetch
+                                try:
+                                    if mgr and emote_id:
+                                        uri = mgr.get_emote_data_uri(emote_id, broadcaster_id=broadcaster_id)
+                                except Exception:
+                                    uri = None
+
+                            if uri:
+                                has_img = True
+                                parts.append(f'<img src="{uri}" alt="{html.escape(frag.get("text") or "emote")}" />')
+                            else:
+                                # Fallback: use emote text
+                                try:
+                                    logger.warning(f"emotes: could not resolve emote id={emote_id} set={emote_set}; falling back to text")
+                                except Exception:
+                                    pass
+                                parts.append(html.escape(frag.get('text') or ''))
+                            continue
+
+                        # Other fragment types (mention, cheermote) - fallback to text for now
+                        parts.append(html.escape((frag.get('text') if isinstance(frag, dict) else str(frag)) or ''))
+                    except Exception:
+                        try:
+                            parts.append(html.escape(str(frag)))
+                        except Exception:
+                            parts.append('')
+
+                return (''.join(parts), bool(has_img))
+        except Exception:
+            # If fragments rendering fails for any reason, fall back to legacy rendering
+            pass
         # lazy imports to avoid import cycles in tests
         try:
             from core.twitch_emotes import get_manager as get_twitch_manager

@@ -59,6 +59,16 @@ class TwitchConnector(BasePlatformConnector):
                 return inst
         # Otherwise create a fresh instance
         obj = super().__new__(cls)
+        # When creating a fresh streamer connector instance, log a short
+        # creation stack trace so we can later correlate which code path
+        # instantiated unexpected extra connectors at runtime.
+        try:
+            if not is_bot_account:
+                import traceback
+                stack = ''.join(traceback.format_stack(limit=12))
+                logger.info(f"[TwitchConnector][TRACE] __new__: created streamer connector id={id(obj)} stack:\n{stack}")
+        except Exception:
+            pass
         if not is_bot_account:
             cls._streamer_instance = obj
         return obj
@@ -157,7 +167,15 @@ class TwitchConnector(BasePlatformConnector):
                 if self.is_bot_account:
                     self.config.set_platform_config('twitch', 'bot_token', token)
                 else:
+                    # Persist under canonical key and the legacy/ui-facing key
                     self.config.set_platform_config('twitch', 'oauth_token', token)
+                    try:
+                        # Keep legacy `streamer_token` in sync so UI code that
+                        # reads/writes `streamer_token` doesn't cause the
+                        # token to appear missing after an OAuth flow.
+                        self.config.set_platform_config('twitch', 'streamer_token', token)
+                    except Exception:
+                        pass
         else:
             # If config is blank, use default
             config_token = self.config.get_platform_config(section).get('oauth_token', '') if self.config else ''
@@ -304,6 +322,11 @@ class TwitchConnector(BasePlatformConnector):
                     self.client_id,
                     username
                 )
+                # Ensure worker has back-reference to the connector instance
+                try:
+                    self.eventsub_worker.connector = self
+                except Exception:
+                    pass
                 self.eventsub_worker_thread = QThread()
                 self.eventsub_worker.moveToThread(self.eventsub_worker_thread)
                 # Wire EventSub signals similar to normal path
@@ -335,6 +358,10 @@ class TwitchConnector(BasePlatformConnector):
                 self.client_id,
                 username
             )
+            try:
+                self.eventsub_worker.connector = self
+            except Exception:
+                pass
             self.eventsub_worker_thread = QThread()
             self.eventsub_worker.moveToThread(self.eventsub_worker_thread)
             self.eventsub_worker.redemption_signal.connect(self.onRedemption)
@@ -584,6 +611,10 @@ class TwitchConnector(BasePlatformConnector):
                                             parent_connector.client_id,
                                             getattr(parent_connector, 'username', None)
                                         )
+                                        try:
+                                            parent_connector.eventsub_worker.connector = parent_connector
+                                        except Exception:
+                                            pass
                                         parent_connector.eventsub_worker_thread = QThread()
                                         parent_connector.eventsub_worker.moveToThread(parent_connector.eventsub_worker_thread)
                                         parent_connector.eventsub_worker.redemption_signal.connect(parent_connector.onRedemption)
@@ -671,6 +702,10 @@ class TwitchConnector(BasePlatformConnector):
                                 self.client_id,
                                 getattr(self, 'username', None)
                             )
+                            try:
+                                self.eventsub_worker.connector = self
+                            except Exception:
+                                pass
                             self.eventsub_worker_thread = QThread()
                             self.eventsub_worker.moveToThread(self.eventsub_worker_thread)
                             self.eventsub_worker.redemption_signal.connect(self.onRedemption)
@@ -2745,11 +2780,26 @@ class TwitchEventSubWorker(QThread):
                             message_text = ''
                     else:
                         message_text = event.get('message') or event.get('text') or event.get('body') or event.get('content') or ''
+                        # Some EventSub payloads place a structured message object
+                        # in `message` containing `text` and `fragments` keys. If
+                        # so, extract the readable text and prefer the embedded
+                        # fragments for richer rendering.
+                        try:
+                            if isinstance(message_text, dict):
+                                # Extract fragments from nested message if present
+                                if not fragments and 'fragments' in message_text and isinstance(message_text.get('fragments'), list):
+                                    fragments = message_text.get('fragments')
+                                message_text = message_text.get('text', '') or ''
+                        except Exception:
+                            pass
                     username = event.get('user_name') or event.get('user_login') or event.get('display_name') or event.get('broadcaster_user_name') or 'Unknown'
                     message_id = event.get('id') or event.get('message_id') or event.get('msg_id')
                     timestamp = event.get('timestamp') or event.get('created_at') or None
 
-                    logger.info(f"[EventSub] Chat message from {username}: {message_text}")
+                    try:
+                        logger.info(f"[EventSub] Chat message from {username} (connector_id={id(self)} is_bot={getattr(self,'is_bot_account', False)}): {message_text}")
+                    except Exception:
+                        logger.info(f"[EventSub] Chat message from {username}: {message_text}")
                     try:
                         from .connector_utils import emit_chat
                         metadata = {
@@ -2759,14 +2809,61 @@ class TwitchEventSubWorker(QThread):
                             'badges': [],
                             'fragments': fragments if fragments is not None else []
                         }
-                        emit_chat(self, 'twitch', username, message_text, metadata)
+                        # Transient diagnostic: log whether the connector exposes the
+                        # metadata-aware signal and attempt a best-effort receivers
+                        # introspection. This helps diagnose cases where the EventSub
+                        # worker logs a message but the ChatManager never receives it.
+                        try:
+                            # Prefer to emit via the parent connector if available.
+                            emit_target = getattr(self, 'connector', self)
+                            has_sig = hasattr(emit_target, 'message_received_with_metadata')
+                            receivers_info = None
+                            try:
+                                sig_obj = getattr(emit_target, 'message_received_with_metadata', None)
+                                if sig_obj is not None:
+                                    try:
+                                        receivers_info = sig_obj.receivers()
+                                    except Exception:
+                                        receivers_info = 'unknown'
+                            except Exception:
+                                receivers_info = 'error'
+                            try:
+                                logger.info(f"[EventSub] Emitting via emit_chat: connector_id={id(emit_target)} has_signal={has_sig} receivers={receivers_info} metadata_keys={list(metadata.keys())}")
+                            except Exception:
+                                logger.info(f"[EventSub] Emitting via emit_chat: has_signal={has_sig} receivers={receivers_info} metadata_keys={list(metadata.keys())}")
+                        except Exception:
+                            # Non-fatal; continue to emit
+                            emit_target = getattr(self, 'connector', self)
+
+                        emit_chat(emit_target, 'twitch', username, message_text, metadata)
                     except Exception as e:
                         logger.exception(f"[EventSub] Failed to emit chat message: {e}")
+                else:
+                    # Unknown/unsupported subscription type -- log full payload for diagnosis
+                    try:
+                        payload = data.get('payload', {})
+                        # Avoid dumping excessively large binary fields; serialize safely
+                        payload_text = json.dumps(payload, default=str)
+                        logger.warning(f"[EventSub] Unhandled notification type: {subscription_type} - payload: {payload_text}")
+                    except Exception:
+                        try:
+                            logger.warning(f"[EventSub] Unhandled notification type: {subscription_type} - payload could not be serialized")
+                        except Exception:
+                            pass
             
             elif message_type == 'session_reconnect':
                 # Server requesting reconnect
                 reconnect_url = data.get('payload', {}).get('session', {}).get('reconnect_url')
                 logger.info(f"[EventSub] Server requested reconnect to: {reconnect_url}")
+            else:
+                # Unknown top-level message type
+                try:
+                    logger.warning(f"[EventSub] Unhandled message_type: {message_type} - raw: {json.dumps(data, default=str)}")
+                except Exception:
+                    try:
+                        logger.warning(f"[EventSub] Unhandled message_type: {message_type} (could not serialize full message)")
+                    except Exception:
+                        pass
             
         except Exception as e:
             logger.exception(f"[EventSub] Error handling message: {e}")

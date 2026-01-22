@@ -359,6 +359,8 @@ class ChatPage(QWidget):
     message_rendered = pyqtSignal(str)
     # Emitted when the WebEngine page is ready to receive JS (document.readyState)
     page_ready = pyqtSignal()
+    # Emitted when a background render is ready to be inserted into the DOM
+    render_ready = pyqtSignal(str, str, bool)
     """Chat page displaying messages from all platforms"""
     
     def __init__(self, chat_manager, config=None, parent=None):
@@ -406,6 +408,11 @@ class ChatPage(QWidget):
         self.pending_js_count = 0
         self.max_pending_js = 20  # Increased limit for high-volume chat (was 10)
         self._js_retry_count = {}  # Track retries for failed executions
+        # Immediate execution rate-limiting for META_PRIORITY items
+        self._immediate_call_timestamps = []
+        self._immediate_rate_limit = 20  # max immediate runs per second
+        # Track message_ids already queued to avoid duplicate DOM insertions
+        self._queued_message_ids = set()
         
         # Overlay server will be set by main.py
         self.overlay_server = None
@@ -425,6 +432,68 @@ class ChatPage(QWidget):
         # Connect to deletion signal if available
         if hasattr(self.chat_manager, 'message_deleted'):
             self.chat_manager.message_deleted.connect(self.onPlatformMessageDeleted)
+
+        # Connect background render completion to DOM insertion handler
+        try:
+            # Ensure the signal is delivered to the main thread via queued connection
+            self.render_ready.connect(self._on_render_ready, Qt.QueuedConnection)
+        except Exception:
+            try:
+                self.render_ready.connect(self._on_render_ready)
+            except Exception:
+                pass
+
+        # Subscribe to emote cached events so we can patch placeholders when
+        # emote images are written to disk by the emote manager. Use explicit
+        # connect calls and emit a short diagnostic to confirm the subscription
+        # succeeded (helps correlate META_CACHE_EMIT -> META_HANDLER_CALLED).
+        try:
+            from core.signals import signals as emote_signals
+            try:
+                emote_signals.emote_image_cached_ext.connect(self._on_emote_image_cached)
+            except Exception as e:
+                try:
+                    logger.debug(f"[TRACE] failed connect emote_image_cached_ext: {e}")
+                except Exception:
+                    pass
+            try:
+                emote_signals.emote_set_metadata_ready_ext.connect(self._on_emote_set_metadata_ready)
+                # Subscription diagnostic: write a log entry so we can correlate
+                try:
+                    import time, os
+                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        df.write(f"{time.time():.3f} META_SUBSCRIBE_CONNECTED emote_signals_present=True\n")
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    logger.debug(f"[TRACE] failed connect emote_set_metadata_ready_ext: {e}")
+                except Exception:
+                    pass
+        except Exception as e:
+            try:
+                logger.debug(f"[TRACE] import core.signals failed: {e}")
+            except Exception:
+                pass
+
+        # Threading: allow background rendering of messages so UI remains responsive
+        self._render_threads = []
+        # Queue for worker -> main-thread DOM insertions (thread-safe)
+        try:
+            import threading as _threading
+            self._worker_queue = []
+            self._worker_queue_lock = _threading.Lock()
+            self._worker_queue_timer = QTimer(self)
+            self._worker_queue_timer.setInterval(50)
+            self._worker_queue_timer.timeout.connect(self._drain_worker_queue)
+            self._worker_queue_timer.start()
+        except Exception:
+            # Best-effort; if threading or timers unavailable, fall back to signals only
+            self._worker_queue = None
+            self._worker_queue_lock = None
+            self._worker_queue_timer = None
     
     def replace_emotes_with_images(self, message: str, emotes_tag: str) -> str:
         """
@@ -687,6 +756,24 @@ class ChatPage(QWidget):
             }
         """)
         clear_btn.clicked.connect(self.clearChat)
+        
+        # Dump chat HTML button (debug helper)
+        dump_btn = QPushButton("Dump Chat")
+        dump_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #5bc0de;
+                color: #ffffff;
+                border: none;
+                padding: 5px 15px;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #31b0d5;
+            }
+        """)
+        dump_btn.clicked.connect(lambda: self.dump_chat_body())
+        settings_layout.addWidget(dump_btn)
         settings_layout.addWidget(clear_btn)
         
         settings_group.setLayout(settings_layout)
@@ -758,6 +845,13 @@ class ChatPage(QWidget):
                     max-width: 100%;
                     height: auto;
                     vertical-align: middle;
+                }
+
+                /* Placeholder emote styling while warming */
+                .emote.placeholder {
+                    opacity: 0.6;
+                    filter: grayscale(1);
+                    transition: opacity 200ms linear, filter 200ms linear;
                 }
                 
                 /* Slide in from bottom animation */
@@ -975,6 +1069,15 @@ class ChatPage(QWidget):
                 mid = None
             with open(dbg, 'a', encoding='utf-8', errors='replace') as df:
                 df.write(f"{time.time():.3f} RECEIVED platform={platform} username={username} message_id={repr(mid)} preview={repr(preview)} metadata_keys={list(metadata.keys()) if isinstance(metadata, dict) else None}\n")
+                # Persistent diagnostic: record that we queued a DOM insertion
+                try:
+                    import time, os
+                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df2:
+                        df2.write(f"{time.time():.3f} QUEUE message_id={mid} has_img={metadata.get('has_img', False)}\n")
+                except Exception:
+                    pass
         except Exception:
             pass
         # Early normalization: some connectors embed IRC tag blob into `username` (e.g. '... :realuser')
@@ -1067,8 +1170,29 @@ class ChatPage(QWidget):
             else:
                 logger.debug(f"No platform message_id available to delete from {platform}")
         
-        # Generate unique message ID
-        message_id = f"msg_{self.message_count}"
+        # Prefer using the platform-provided message_id when available
+        platform_msg_id = None
+        try:
+            if isinstance(metadata, dict):
+                platform_msg_id = metadata.get('message_id') or metadata.get('id')
+        except Exception:
+            platform_msg_id = None
+
+        if platform_msg_id:
+            # Use the platform id directly to avoid accidental dedupe of distinct messages
+            message_id = str(platform_msg_id)
+            try:
+                # still advance counter to keep it moving for non-platform IDs
+                self.message_count += 1
+            except Exception:
+                pass
+        else:
+            # Generate unique synthetic message ID
+            message_id = f"msg_{self.message_count}"
+            try:
+                self.message_count += 1
+            except Exception:
+                pass
         
         # Store message data for moderation
         self.message_data[message_id] = {
@@ -1151,19 +1275,19 @@ class ChatPage(QWidget):
         # Format message as HTML with conditional spacing
         # Order: icon, timestamp, badges, username, message
         # Only add spaces between elements that are actually displayed
-        parts = []
+        components = []
         
         # Platform icon (first)
         if icon_html:
-            parts.append(icon_html)
+            components.append(icon_html)
 
         # Timestamp
         if time_str:
-            parts.append(f'<span style="color: #888888; font-size: 11px;">[{time_str}]</span>')
+            components.append(f'<span style="color: #888888; font-size: 11px;">[{time_str}]</span>')
 
         # Badges
         if badges_html:
-            parts.append(badges_html)
+            components.append(badges_html)
 
         # Prepare emotes_tag (may be populated from metadata or recovered by heuristic)
         emotes_tag = None
@@ -1222,7 +1346,7 @@ class ChatPage(QWidget):
         # Escape username to prevent raw HTML from being injected (connectors may include tag blobs)
         safe_username = html.escape(username or '')
         username_html = f'<span style="color: {user_color}; font-weight: bold;">{safe_username}</span>'
-        parts.append(username_html)
+        components.append(username_html)
 
         # Message - replace emotes where possible (use unified renderer)
         # Common metadata keys for emotes across connectors
@@ -1233,55 +1357,634 @@ class ChatPage(QWidget):
                 emotes_tag = metadata.get(k)
                 break
 
+        # If structured fragments are available from EventSub, prefer them
+        # and ignore legacy `emotes_tag` so the fragment renderer takes priority.
+        try:
+            if isinstance(metadata, dict) and metadata.get('fragments'):
+                emotes_tag = None
+        except Exception:
+            pass
+
         
 
+        # Prefer rendering fragments with local cached images when possible
+        message_html = None
+        has_img = False
         try:
-            from core.emotes import render_message
-            message_html, has_img = render_message(message, emotes_tag, metadata)
-            if not message_html:
-                message_html = html.escape(message)
+            frags = None
+            if isinstance(metadata, dict):
+                frags = metadata.get('fragments') or metadata.get('message_fragments')
+            if frags and isinstance(frags, list):
+                try:
+                    # Attempt to render using local cached emote files
+                    from core.twitch_emotes import get_manager as _get_twitch_manager
+                    mgr = _get_twitch_manager() if _get_twitch_manager is not None else None
+                except Exception:
+                    mgr = None
+
+                frag_parts = []
+                try:
+                    broadcaster_id = None
+                    try:
+                        broadcaster_id = metadata.get('room-id') or metadata.get('room_id') or metadata.get('channel_id')
+                    except Exception:
+                        broadcaster_id = None
+
+                    for frag in frags:
+                        try:
+                            if not isinstance(frag, dict):
+                                frag_parts.append(html.escape(str(frag)))
+                                continue
+                            ftype = frag.get('type')
+                            if not ftype or ftype == 'text':
+                                frag_parts.append(html.escape(frag.get('text') or ''))
+                                continue
+
+                            # Warn on unexpected fragment types to help diagnose new/unknown types
+                            try:
+                                if ftype not in ('text', 'emote', 'cheermote'):
+                                    try:
+                                        logger.warning(f"ChatPage: unknown fragment type: {ftype} fragment={json.dumps(frag, default=str)}")
+                                    except Exception:
+                                        logger.warning(f"ChatPage: unknown fragment type: {ftype}")
+                            except Exception:
+                                pass
+
+                            if ftype == 'emote':
+                                emobj = frag.get('emote') or {}
+                                emote_id = None
+                                try:
+                                    emote_id = str(emobj.get('id') or emobj.get('emote_id') or frag.get('id')) if isinstance(emobj, dict) else None
+                                except Exception:
+                                    emote_id = None
+
+                                uri_used = None
+                                try:
+                                    # If we don't have an explicit emote id but the fragment
+                                    # references an emote set, attempt to fetch that set
+                                    # and resolve the emote id by name from the cache.
+                                    if not emote_id:
+                                        try:
+                                            # Possible keys that may reference an emote set
+                                            set_ids = []
+                                            sid = None
+                                            if isinstance(emobj, dict):
+                                                sid = emobj.get('emote_set_id') or emobj.get('emote_set') or emobj.get('set_id')
+                                            sid = sid or frag.get('emote_set_id') or frag.get('emote_set') or frag.get('set_id')
+                                            if sid:
+                                                if isinstance(sid, (list, tuple)):
+                                                    set_ids = [str(s) for s in sid if s]
+                                                elif isinstance(sid, str) and ',' in sid:
+                                                    set_ids = [p.strip() for p in sid.split(',') if p.strip()]
+                                                elif sid:
+                                                    set_ids = [str(sid)]
+
+                                            # Emote name we can use to resolve after warming cache
+                                            emote_name = None
+                                            try:
+                                                emote_name = (emobj.get('name') if isinstance(emobj, dict) else None) or frag.get('text') or frag.get('name')
+                                            except Exception:
+                                                emote_name = frag.get('text') if isinstance(frag, dict) else None
+
+                                            if set_ids and mgr:
+                                                try:
+                                                    # Enqueue warming of emote sets for background processing.
+                                                    # Always call the scheduler from a background thread
+                                                    # to avoid risk of synchronous network fetches blocking
+                                                    # the UI when the throttler isn't active.
+                                                    try:
+                                                        import threading as _threading
+                                                        _threading.Thread(target=lambda: (mgr.schedule_emote_set_fetch(set_ids)), daemon=True).start()
+                                                    except Exception:
+                                                        # Last-resort fallback: try to schedule directly
+                                                        try:
+                                                            mgr.schedule_emote_set_fetch(set_ids)
+                                                        except Exception:
+                                                            # If scheduling fails, spawn a fetch thread instead
+                                                            try:
+                                                                import threading as _threading
+                                                                _threading.Thread(target=lambda: (mgr.fetch_emote_sets(set_ids)), daemon=True).start()
+                                                            except Exception:
+                                                                pass
+                                                except Exception:
+                                                    pass
+
+                                            # Try to resolve id by name synchronously (manager will warm if needed)
+                                            if mgr and emote_name:
+                                                try:
+                                                    resolved = mgr.get_emote_id_by_name(emote_name, broadcaster_id=broadcaster_id)
+                                                    if resolved:
+                                                        emote_id = str(resolved)
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            pass
+
+                                    if mgr and emote_id:
+                                        # If manager doesn't have details for this emote id,
+                                        # try to warm any referenced emote_set_id so the
+                                        # manager's `id_map` gets populated.
+                                        emobj2 = mgr.id_map.get(str(emote_id))
+                                        if not emobj2:
+                                            try:
+                                                set_ids = []
+                                                sid = None
+                                                if isinstance(emobj, dict):
+                                                    sid = emobj.get('emote_set_id') or emobj.get('emote_set') or emobj.get('set_id')
+                                                sid = sid or frag.get('emote_set_id') or frag.get('emote_set') or frag.get('set_id')
+                                                if sid:
+                                                    if isinstance(sid, (list, tuple)):
+                                                        set_ids = [str(s) for s in sid if s]
+                                                    elif isinstance(sid, str) and ',' in sid:
+                                                        set_ids = [p.strip() for p in sid.split(',') if p.strip()]
+                                                    elif sid:
+                                                        set_ids = [str(sid)]
+
+                                                if set_ids:
+                                                    try:
+                                                        mgr.schedule_emote_set_fetch(set_ids)
+                                                    except Exception:
+                                                        try:
+                                                            mgr.fetch_emote_sets(set_ids)
+                                                        except Exception:
+                                                            pass
+                                            except Exception:
+                                                pass
+                                            # try again after warming
+                                            emobj2 = mgr.id_map.get(str(emote_id)) or {}
+                                        else:
+                                            emobj2 = emobj2 or {}
+                                        url = mgr._select_image_url(emobj2) if emobj2 else None
+                                        ext = 'gif' if url and url.lower().endswith('.gif') else 'png'
+                                        name = emobj2.get('name') or emobj2.get('emote_name') or emobj2.get('code') or ''
+                                        base_part = f"twitch_{emote_id}_{name}" if name else f"twitch_{emote_id}"
+                                        safe_base = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in base_part)
+                                        if len(safe_base) > 50:
+                                            safe_base = safe_base[:50]
+                                        import hashlib as _hashlib
+                                        h = _hashlib.sha1((name or str(emote_id)).encode('utf-8')).hexdigest()[:8]
+                                        safe_fname = f"{safe_base}_{h}.{ext}"
+                                        fpath = None
+                                        try:
+                                            cache_dir = getattr(mgr, 'cache_dir', None) or os.path.join('resources', 'emotes')
+                                            fpath = os.path.join(cache_dir, safe_fname)
+                                        except Exception:
+                                            fpath = None
+
+                                        if fpath and os.path.exists(fpath):
+                                            # Use file:// URL for local file (WebEngine can load local files)
+                                            # Normalize to forward slashes for URL
+                                            abs_path = os.path.abspath(fpath).replace('\\', '/')
+                                            uri_used = f'file:///{abs_path}'
+                                        else:
+                                            # Fallback to data URI via manager
+                                            try:
+                                                uri_used = mgr.get_emote_data_uri(emote_id, broadcaster_id=broadcaster_id) if mgr else None
+                                            except Exception:
+                                                uri_used = None
+                                except Exception:
+                                    uri_used = None
+
+                                if uri_used:
+                                    has_img = True
+                                    # Log emote resolution for diagnostics (main thread)
+                                    try:
+                                        import time, os
+                                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                            emid = emote_id or (emobj.get('id') if isinstance(emobj, dict) else None)
+                                            df.write(f"{time.time():.3f} QUEUE_EMOTE_URI message_id={message_id} emote_id={emid} uri={uri_used}\n")
+                                    except Exception:
+                                        pass
+                                    frag_parts.append(f'<img src="{uri_used}" alt="{html.escape(frag.get("text") or "emote")}" style="width:1.2em; height:1.2em; vertical-align:middle; margin:0 2px;" />')
+                                else:
+                                    frag_parts.append(html.escape(frag.get('text') or ''))
+                                continue
+
+                            # Other fragment types
+                            frag_parts.append(html.escape(frag.get('text') or ''))
+                        except Exception:
+                            try:
+                                frag_parts.append(html.escape(str(frag)))
+                            except Exception:
+                                frag_parts.append('')
+
+                    message_html = ''.join(frag_parts)
+                except Exception:
+                    message_html = None
+
         except Exception:
-            # If the unified renderer fails for any reason, fall back to legacy replacement
+            message_html = None
+
+        # If we didn't render from fragments above, fall back to unified renderer
+        if not message_html:
             try:
-                logger.exception('core.emotes.render_message failed, falling back')
+                from core.emotes import render_message
+                message_html, has_img = render_message(message, emotes_tag, metadata)
+                if not message_html:
+                    message_html = html.escape(message)
             except Exception:
-                pass
-            message_html = self.replace_emotes_with_images(message, emotes_tag)
+                # If the unified renderer fails for any reason, fall back to legacy replacement
+                try:
+                    logger.exception('core.emotes.render_message failed, falling back')
+                except Exception:
+                    pass
+                message_html = self.replace_emotes_with_images(message, emotes_tag)
 
-        parts.append(message_html)
+        # Do not append `message_html` here — the background render worker
+        # will re-render and append message text to avoid duplicate content
+        # in cases where both main-thread and worker rendering occur.
 
-        # Function to actually inject HTML and send to overlay
-        def emit_message(final_parts, final_html_snippet, final_has_img):
-            combined = ' '.join(final_parts)
-            wrapped = f'<div class="message" data-message-id="{message_id}" style="{bg_style} padding: 2px 6px; border-radius: 4px; margin-bottom: 2px; cursor: pointer;">{combined}</div>'
+        # Background render worker will produce `wrapped` HTML and emit `render_ready`.
+        def _render_worker(components_snapshot, bg_style_snapshot, message_id_snapshot, metadata_snapshot, platform_snapshot, username_snapshot, message_snapshot, user_color_snapshot):
+            try:
+                # Persist diagnostic: worker started
+                try:
+                    import time, os
+                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        df.write(f"{time.time():.3f} WORKER_START message_id={message_id_snapshot}\n")
+                except Exception:
+                    pass
+                final_parts = list(components_snapshot)
+                # Re-run fragment/emote rendering logic in background
+                final_message_html = None
+                final_has_img = False
+                try:
+                    # Use same fragment rendering block as above but operate on local copies
+                    frags_local = None
+                    if isinstance(metadata_snapshot, dict):
+                        frags_local = metadata_snapshot.get('fragments') or metadata_snapshot.get('message_fragments')
+                    if frags_local and isinstance(frags_local, list):
+                        try:
+                            from core.twitch_emotes import get_manager as _get_twitch_manager
+                            mgr_local = _get_twitch_manager() if _get_twitch_manager is not None else None
+                        except Exception:
+                            mgr_local = None
 
-            js_code_local = f"""
-                var chatBody = document.getElementById('chat-body');
-                if (chatBody) {{
-                    chatBody.insertAdjacentHTML('beforeend', `{wrapped}`);
-                    var messages = chatBody.querySelectorAll('.message');
-                    var newMessage = messages[messages.length - 1];
-                    newMessage.classList.add('message-slide-in');
-                    setTimeout(function() {{
-                        newMessage.classList.remove('message-slide-in');
-                        newMessage.classList.add('message-wiggle');
-                        setTimeout(function() {{
-                            newMessage.classList.remove('message-wiggle');
-                        }}, 2000);
-                    }}, 800);
-                    window.scrollTo(0, document.body.scrollHeight);
-                }}
-                true;
-            """
+                        # If caller requested synchronous per-message warming, attempt
+                        # to prefetch all emote sets referenced by this message
+                        try:
+                            ensure = bool(metadata_snapshot.get('ensure_emotes')) if isinstance(metadata_snapshot, dict) else False
+                        except Exception:
+                            ensure = False
 
-            self._queueJavaScriptExecution(js_code_local, message_id)
+                        if ensure and mgr_local:
+                            try:
+                                all_set_ids = set()
+                                for _frag in frags_local:
+                                    try:
+                                        if not isinstance(_frag, dict):
+                                            continue
+                                        sid = None
+                                        emobj_frag = _frag.get('emote') or {}
+                                        sid = emobj_frag.get('emote_set_id') or emobj_frag.get('emote_set') or emobj_frag.get('set_id')
+                                        sid = sid or _frag.get('emote_set_id') or _frag.get('emote_set') or _frag.get('set_id')
+                                        if sid:
+                                            if isinstance(sid, (list, tuple)):
+                                                for s in sid:
+                                                    if s:
+                                                        all_set_ids.add(str(s))
+                                            elif isinstance(sid, str) and ',' in sid:
+                                                for p in sid.split(','):
+                                                    p = p.strip()
+                                                    if p:
+                                                        all_set_ids.add(str(p))
+                                            else:
+                                                all_set_ids.add(str(sid))
+                                    except Exception:
+                                        continue
 
-            # Send to overlay only when images are available
-            is_event_local = metadata.get('event_type') is not None
-            if self.overlay_server and not is_event_local and final_has_img:
-                badges = metadata.get('badges', [])
-                color = user_color if self.show_user_colors else None
-                self.overlay_server.add_message(platform, username, message, message_id, badges, color)
+                                if all_set_ids:
+                                    import time, os
+                                    try:
+                                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                            df.write(f"{time.time():.3f} PREFETCH_START message_id={message_id_snapshot} sets={','.join(list(all_set_ids))}\n")
+                                            try:
+                                                df.flush(); os.fsync(df.fileno())
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
+
+                                    start_ts = time.time()
+                                    try:
+                                        mgr_local.fetch_emote_sets(list(all_set_ids))
+                                    except Exception:
+                                        pass
+                                    duration = max(0, int((time.time() - start_ts) * 1000))
+                                    try:
+                                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                            df.write(f"{time.time():.3f} PREFETCH_END message_id={message_id_snapshot} sets={','.join(list(all_set_ids))} duration_ms={duration}\n")
+                                            try:
+                                                df.flush(); os.fsync(df.fileno())
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+
+                        frag_parts_local = []
+                        try:
+                            broadcaster_id_local = None
+                            try:
+                                broadcaster_id_local = metadata_snapshot.get('room-id') or metadata_snapshot.get('room_id') or metadata_snapshot.get('channel_id')
+                            except Exception:
+                                broadcaster_id_local = None
+
+                            for frag_local in frags_local:
+                                try:
+                                    if not isinstance(frag_local, dict):
+                                        frag_parts_local.append(html.escape(str(frag_local)))
+                                        continue
+                                    ftype_local = frag_local.get('type')
+                                    if not ftype_local or ftype_local == 'text':
+                                        frag_parts_local.append(html.escape(frag_local.get('text') or ''))
+                                        continue
+
+                                    if ftype_local == 'emote':
+                                        emobj_local = frag_local.get('emote') or {}
+                                        emote_id_local = None
+                                        try:
+                                            emote_id_local = str(emobj_local.get('id') or emobj_local.get('emote_id') or frag_local.get('id')) if isinstance(emobj_local, dict) else None
+                                        except Exception:
+                                            emote_id_local = None
+
+                                        uri_used_local = None
+                                        try:
+                                            # Attempt emote_set warming and resolution (best-effort)
+                                            if not emote_id_local:
+                                                try:
+                                                    set_ids_local = []
+                                                    sid_local = None
+                                                    if isinstance(emobj_local, dict):
+                                                        sid_local = emobj_local.get('emote_set_id') or emobj_local.get('emote_set') or emobj_local.get('set_id')
+                                                    sid_local = sid_local or frag_local.get('emote_set_id') or frag_local.get('emote_set') or frag_local.get('set_id')
+                                                    if sid_local:
+                                                        if isinstance(sid_local, (list, tuple)):
+                                                            set_ids_local = [str(s) for s in sid_local if s]
+                                                        elif isinstance(sid_local, str) and ',' in sid_local:
+                                                            set_ids_local = [p.strip() for p in sid_local.split(',') if p.strip()]
+                                                        elif sid_local:
+                                                            set_ids_local = [str(sid_local)]
+
+                                                    emote_name_local = None
+                                                    try:
+                                                        emote_name_local = (emobj_local.get('name') if isinstance(emobj_local, dict) else None) or frag_local.get('text') or frag_local.get('name')
+                                                    except Exception:
+                                                        emote_name_local = frag_local.get('text') if isinstance(frag_local, dict) else None
+
+                                                    if set_ids_local and mgr_local:
+                                                        try:
+                                                            mgr_local.fetch_emote_sets(set_ids_local)
+                                                        except Exception:
+                                                            pass
+
+                                                    if mgr_local and emote_name_local:
+                                                        try:
+                                                            resolved_local = mgr_local.get_emote_id_by_name(emote_name_local, broadcaster_id=broadcaster_id_local)
+                                                            if resolved_local:
+                                                                emote_id_local = str(resolved_local)
+                                                        except Exception:
+                                                            pass
+                                                except Exception:
+                                                    pass
+
+                                            if mgr_local and emote_id_local:
+                                                emobj2_local = mgr_local.id_map.get(str(emote_id_local)) or {}
+                                                url_local = mgr_local._select_image_url(emobj2_local) if emobj2_local else None
+                                                ext_local = 'gif' if url_local and url_local.lower().endswith('.gif') else 'png'
+                                                try:
+                                                    cache_dir_local = getattr(mgr_local, 'cache_dir', None) or os.path.join('resources', 'emotes')
+                                                except Exception:
+                                                    cache_dir_local = os.path.join('resources', 'emotes')
+                                                safe_fname_local = f"twitch_{emote_id_local}.{ext_local}"
+                                                fpath_local = os.path.join(cache_dir_local, safe_fname_local)
+
+                                                if fpath_local and os.path.exists(fpath_local):
+                                                    abs_path_local = os.path.abspath(fpath_local).replace('\\', '/')
+                                                    uri_used_local = f'file:///{abs_path_local}'
+                                                else:
+                                                    try:
+                                                        uri_used_local = mgr_local.get_emote_data_uri(emote_id_local, broadcaster_id=broadcaster_id_local) if mgr_local else None
+                                                    except Exception:
+                                                        uri_used_local = None
+                                        except Exception:
+                                            uri_used_local = None
+
+                                        if uri_used_local:
+                                            final_has_img = True
+                                            # Log emote resolution for diagnostics
+                                            try:
+                                                import time, os
+                                                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                                                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                                    emid = emote_id_local or (emobj_local.get('id') if isinstance(emobj_local, dict) else None)
+                                                    df.write(f"{time.time():.3f} QUEUE_EMOTE_URI message_id={message_id_snapshot} emote_id={emid} uri={uri_used_local}\n")
+                                            except Exception:
+                                                pass
+                                            frag_parts_local.append(f'<img src="{uri_used_local}" alt="{html.escape(frag_local.get("text") or "emote")}" style="width:1.2em; height:1.2em; vertical-align:middle; margin:0 2px;" />')
+                                        else:
+                                            # Insert a lightweight placeholder image so the
+                                            # message can be rendered immediately and later
+                                            # patched when the emote image is cached.
+                                            try:
+                                                placeholder = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
+                                                emid_for_attr = html.escape(str(emote_id_local)) if emote_id_local else html.escape(str(frag_local.get('text') or ''))
+                                                img_html = f'<img data-emote-id="{emid_for_attr}" src="{placeholder}" alt="{html.escape(frag_local.get("text") or "emote")}" style="width:1.2em; height:1.2em; vertical-align:middle; margin:0 2px;" class="emote placeholder" />'
+                                                frag_parts_local.append(img_html)
+                                                # Instrumentation: record placeholder insertion
+                                                try:
+                                                    import time, os
+                                                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                                                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                                        df.write(f"{time.time():.3f} QUEUE_EMOTE_URI placeholder message_id={message_id_snapshot} emote_id={emote_id_local}\n")
+                                                        try:
+                                                            df.flush(); os.fsync(df.fileno())
+                                                        except Exception:
+                                                            pass
+                                                except Exception:
+                                                    pass
+                                                # Best-effort: trigger background warming for this emote
+                                                try:
+                                                        if mgr_local and emote_id_local:
+                                                            try:
+                                                                # Determine any emote_set_id available from fragment or cached emobj
+                                                                sid_local = None
+                                                                try:
+                                                                    sid_local = None
+                                                                    if isinstance(emobj2_local, dict):
+                                                                        sid_local = emobj2_local.get('emote_set_id') or emobj2_local.get('emote_set') or emobj2_local.get('set_id')
+                                                                    # frag_local may include an 'emote' object with emote_set_id
+                                                                    if not sid_local and isinstance(frag_local, dict):
+                                                                        em_in_frag = frag_local.get('emote') if isinstance(frag_local.get('emote'), dict) else None
+                                                                        sid_local = sid_local or (em_in_frag.get('emote_set_id') if em_in_frag else None) or frag_local.get('emote_set_id') or frag_local.get('emote_set') or frag_local.get('set_id')
+                                                                except Exception:
+                                                                    sid_local = None
+
+                                                                # Use public helper to attempt immediate prefetch (background safe)
+                                                                if hasattr(mgr_local, 'prefetch_emote_by_id'):
+                                                                    try:
+                                                                        if sid_local:
+                                                                            mgr_local.prefetch_emote_by_id(emote_id_local, background=True, emote_set_ids=[sid_local])
+                                                                        else:
+                                                                            mgr_local.prefetch_emote_by_id(emote_id_local, background=True)
+                                                                    except TypeError:
+                                                                        # Older manager signature may not accept emote_set_ids
+                                                                        mgr_local.prefetch_emote_by_id(emote_id_local, background=True)
+                                                                else:
+                                                                    # fallback to internal prefetch if helper missing
+                                                                    import threading as _th
+                                                                    _th.Thread(target=lambda: (mgr_local._prefetch_emote_images([emote_id_local]) if hasattr(mgr_local, '_prefetch_emote_images') else None), daemon=True).start()
+                                                            except Exception:
+                                                                pass
+                                                except Exception:
+                                                    pass
+                                            except Exception:
+                                                try:
+                                                    frag_parts_local.append(html.escape(frag_local.get('text') or ''))
+                                                except Exception:
+                                                    frag_parts_local.append('')
+                                        continue
+
+                                    # Other fragment types
+                                    frag_parts_local.append(html.escape(frag_local.get('text') or ''))
+                                except Exception:
+                                    try:
+                                        frag_parts_local.append(html.escape(str(frag_local)))
+                                    except Exception:
+                                        frag_parts_local.append('')
+
+                            final_message_html = ''.join(frag_parts_local)
+                        except Exception:
+                            final_message_html = None
+
+                except Exception:
+                    final_message_html = None
+
+                if not final_message_html:
+                    try:
+                        from core.emotes import render_message
+                        final_message_html, final_has_img = render_message(message_snapshot, None, metadata_snapshot)
+                        if not final_message_html:
+                            final_message_html = html.escape(message_snapshot)
+                    except Exception:
+                        try:
+                            final_message_html = html.escape(message_snapshot)
+                        except Exception:
+                            final_message_html = ''
+
+                final_parts.append(final_message_html)
+                combined_html = ' '.join(final_parts)
+                wrapped_local = f'<div class="message" data-message-id="{message_id_snapshot}" style="{bg_style_snapshot} padding: 2px 6px; border-radius: 4px; margin-bottom: 2px; cursor: pointer;">{combined_html}</div>'
+
+                # Emit to main thread for DOM insertion
+                try:
+                    # Persist diagnostic: about to emit render_ready
+                    try:
+                        import time, os
+                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} WORKER_EMIT_RENDER_READY message_id={message_id_snapshot} has_img={bool(final_has_img)}\n")
+                    except Exception:
+                        pass
+                    # Attempt to emit the signal for normal operation; if that fails
+                    # (cross-thread issues), fall back to pushing into the worker queue.
+                    emitted_ok = False
+                    try:
+                        self.render_ready.emit(message_id_snapshot, wrapped_local, bool(final_has_img))
+                        emitted_ok = True
+                        # If there's no running Qt event loop (e.g., headless tests where
+                        # initUI was stubbed), the queued connection won't dispatch.
+                        # In that case, call the handler directly as a best-effort fallback.
+                        try:
+                            from PyQt6.QtCore import QCoreApplication
+                            if QCoreApplication.instance() is None:
+                                try:
+                                    self._on_render_ready(message_id_snapshot, wrapped_local, bool(final_has_img))
+                                except Exception:
+                                    pass
+                        except Exception:
+                            # If PyQt6 not available or import fails, silently continue
+                            try:
+                                self._on_render_ready(message_id_snapshot, wrapped_local, bool(final_has_img))
+                            except Exception:
+                                pass
+                    except Exception:
+                        emitted_ok = False
+
+                    # Only push into the worker queue fallback if emitting the
+                    # queued signal failed; otherwise prefer the main-thread
+                    # `render_ready` handler to enqueue JS execution.
+                    try:
+                        if not emitted_ok:
+                            if getattr(self, '_worker_queue', None) is not None and getattr(self, '_worker_queue_lock', None) is not None:
+                                try:
+                                    with self._worker_queue_lock:
+                                        already = False
+                                        try:
+                                            if message_id_snapshot and message_id_snapshot in self._queued_message_ids:
+                                                already = True
+                                        except Exception:
+                                            already = False
+                                        if not already:
+                                            try:
+                                                self._worker_queue.append((wrapped_local, message_id_snapshot, bool(final_has_img)))
+                                                if message_id_snapshot:
+                                                    try:
+                                                        self._queued_message_ids.add(message_id_snapshot)
+                                                    except Exception:
+                                                        pass
+                                                # Best-effort: if the main-thread timer isn't running (tests/headless),
+                                                # try to drain the worker queue immediately so messages are inserted.
+                                                try:
+                                                    if not getattr(self, '_worker_queue_timer', None) or not getattr(self._worker_queue_timer, 'isActive', lambda: True)():
+                                                        # call drain directly as a best-effort fallback
+                                                        try:
+                                                            self._drain_worker_queue()
+                                                        except Exception:
+                                                            pass
+                                                except Exception:
+                                                    pass
+                                            except Exception:
+                                                pass
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+                except Exception:
+                    # If signal emit fails, fall back to queueing JS directly (best-effort)
+                    try:
+                        import time, os, traceback
+                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} WORKER_EMIT_EXCEPTION message_id={message_id_snapshot} err=emit_failed\n")
+                    except Exception:
+                        pass
+                    try:
+                        js_code_fallback = f"var chatBody = document.getElementById('chat-body'); if (chatBody) {{ chatBody.insertAdjacentHTML('beforeend', `{wrapped_local}`); window.scrollTo(0, document.body.scrollHeight); }} true;"
+                        self._invoke_queue_js(js_code_fallback, message_id_snapshot)
+                    except Exception:
+                        pass
+            except Exception:
+                try:
+                    import time, os, traceback
+                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        df.write(f"{time.time():.3f} WORKER_EXCEPTION message_id={message_id_snapshot} err={repr(traceback.format_exc())}\n")
+                except Exception:
+                    pass
 
         # Determine background style (kept here so closure can use bg_style)
         bg_style = ''
@@ -1305,14 +2008,14 @@ class ChatPage(QWidget):
 
             # If we have an image, emit now
             if final_has_img:
-                emit_message(parts, message_html, True)
+                emit_message(components, message_html, True)
                 return
 
             # Otherwise retry up to 5 attempts with 200ms interval
             max_attempts = 5
             if attempt > max_attempts:
                 # Give up and emit without images to avoid message loss
-                emit_message(parts, message_html, False)
+                emit_message(components, message_html, False)
                 return
 
             # Retry attempt (instrumentation removed)
@@ -1322,7 +2025,7 @@ class ChatPage(QWidget):
                 QTimer.singleShot(200, lambda: _retry_emit(attempt + 1))
             except Exception:
                 # If timers aren't available, fallback to immediate emit
-                emit_message(parts, message_html, False)
+                emit_message(components, message_html, False)
 
         def _retry_emit(attempt):
             # Re-run the renderer to check for images again (best-effort)
@@ -1341,12 +2044,45 @@ class ChatPage(QWidget):
                     pass
 
             if m_has_img:
-                emit_message(parts, m_html, True)
+                emit_message(components, m_html, True)
             else:
                 _emit_or_retry(attempt)
 
-        # Kick off initial emit/retry sequence
-        _emit_or_retry(1)
+        # Kick off background render task so UI remains responsive
+        try:
+            import threading as _threading
+            # Ensure worker queue exists even if `initUI` was stubbed in tests
+            try:
+                if not getattr(self, '_worker_queue', None):
+                    self._worker_queue = []
+                    import threading as _threading_local
+                    self._worker_queue_lock = _threading_local.Lock()
+                    self._worker_queue_timer = None
+            except Exception:
+                pass
+            t = _threading.Thread(target=_render_worker, args=(components, bg_style, message_id, metadata, platform, username, message, user_color), daemon=True)
+            t.start()
+            # Persist diagnostic: thread started for render
+            try:
+                import time, os
+                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                    df.write(f"{time.time():.3f} THREAD_START name={t.name} alive={t.is_alive()} message_id={message_id}\n")
+            except Exception:
+                pass
+            self._render_threads.append(t)
+        except Exception:
+            # Fallback to immediate emit if threading unavailable
+            try:
+                import time, os
+                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                    df.write(f"{time.time():.3f} THREAD_FALLBACK_INVOKE message_id={message_id}\n")
+            except Exception:
+                pass
+            _render_worker(components, bg_style, message_id, metadata, platform, username, message, user_color)
     
     def togglePlatformIcons(self, state):
         """Toggle platform icon visibility"""
@@ -1405,7 +2141,245 @@ class ChatPage(QWidget):
     
     def _queueJavaScriptExecution(self, js_code, message_id=None):
         """Queue JavaScript execution to prevent message loss during high volume"""
-        self.js_execution_queue.append((js_code, message_id))
+        # Deduplicate by both internal message_id and platform message_id (if available)
+        try:
+            dedupe_keys = set()
+            if message_id:
+                dedupe_keys.add(message_id)
+                try:
+                    meta = self.message_data.get(message_id, {}).get('metadata', {})
+                    platform_mid = meta.get('message_id') if isinstance(meta, dict) else None
+                    if platform_mid:
+                        dedupe_keys.add(platform_mid)
+                except Exception:
+                    platform_mid = None
+
+            already = any(k in self._queued_message_ids for k in dedupe_keys if k)
+            if already:
+                try:
+                    import time, os
+                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        # Log first available key for readability
+                        log_key = next((k for k in dedupe_keys if k), message_id)
+                        df.write(f"{time.time():.3f} QUEUE_DUPLICATE message_id={log_key}\n")
+                        try:
+                            df.flush(); os.fsync(df.fileno())
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                return
+
+        except Exception:
+            pass
+
+        # Avoid enqueuing duplicate JS entries for the same message_id
+        try:
+            if message_id and any(item[1] == message_id for item in self.js_execution_queue):
+                try:
+                    import time, os
+                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        df.write(f"{time.time():.3f} QUEUE_DUPLICATE message_id={message_id}\n")
+                        try:
+                            df.flush(); os.fsync(df.fileno())
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                return
+
+        except Exception:
+            pass
+
+        # Support metadata-priority items which should be applied promptly
+        try:
+            PRIORITY_MARKER = '/*META_PRIORITY*/'
+            priority = False
+            js_to_enqueue = js_code
+            if isinstance(js_code, str) and js_code.startswith(PRIORITY_MARKER):
+                priority = True
+                js_to_enqueue = js_code[len(PRIORITY_MARKER):]
+        except Exception:
+            priority = False
+            js_to_enqueue = js_code
+
+        if priority:
+            # Try to execute metadata-priority JS immediately if possible to
+            # avoid being delayed by a busy queue. Fall back to inserting
+            # at the front of the queue if immediate execution isn't possible.
+            try:
+                import time, os
+                page = self.chat_display.page() if getattr(self, 'chat_display', None) else None
+                # Diagnostic log for detection
+                try:
+                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        df.write(f"{time.time():.3f} QUEUE_EMOTE_URI_META_DETECTED message_id={message_id} page_present={bool(page)} pending_js={self.pending_js_count} max_pending_js={self.max_pending_js}\n")
+                        try:
+                            df.flush(); os.fsync(df.fileno())
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                # Clean up timestamps older than 1s
+                try:
+                    now = time.time()
+                    self._immediate_call_timestamps = [t for t in self._immediate_call_timestamps if t > now - 1]
+                except Exception:
+                    now = time.time()
+
+                # If we have a page, attempt immediate execution subject to simple rate limiting.
+                if page:
+                    recent = len(self._immediate_call_timestamps)
+                    if recent < getattr(self, '_immediate_rate_limit', 20):
+                        # Instrumentation
+                        try:
+                            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                df.write(f"{time.time():.3f} IMMEDIATE_CALL_ATTEMPT message_id={message_id} recent={recent}\n")
+                                try:
+                                    df.flush(); os.fsync(df.fileno())
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+                        # Run JS directly with a lightweight callback
+                        def _immediate_cb(result):
+                            try:
+                                self.pending_js_count = max(0, self.pending_js_count - 1)
+                            except Exception:
+                                pass
+                            try:
+                                if message_id:
+                                    try:
+                                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                            df.write(f"{time.time():.3f} IMMEDIATE_SUCCESS message_id={message_id}\n")
+                                            try:
+                                                df.flush(); os.fsync(df.fileno())
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self.message_rendered.emit(message_id or '')
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+
+                            # Continue processing queue if items remain
+                            try:
+                                if self.js_execution_queue:
+                                    self._processNextJavaScript()
+                            except Exception:
+                                pass
+
+                        try:
+                            # record timestamp then attempt run
+                            try:
+                                self._immediate_call_timestamps.append(now)
+                            except Exception:
+                                pass
+                            self.pending_js_count += 1
+                            page.runJavaScript(js_to_enqueue, _immediate_cb)
+                            return
+                        except Exception:
+                            # log failure and fall back to queue insertion
+                            try:
+                                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                    df.write(f"{time.time():.3f} IMMEDIATE_CALL_FAIL message_id={message_id}\n")
+                                    try:
+                                        df.flush(); os.fsync(df.fileno())
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                    else:
+                        # Rate limit hit, fall back to front-insert
+                        try:
+                            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                df.write(f"{time.time():.3f} IMMEDIATE_RATE_LIMIT message_id={message_id} recent={recent}\n")
+                                try:
+                                    df.flush(); os.fsync(df.fileno())
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                else:
+                    # No page available to run JS immediately
+                    try:
+                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} IMMEDIATE_NO_PAGE message_id={message_id}\n")
+                            try:
+                                df.flush(); os.fsync(df.fileno())
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+            except Exception:
+                pass
+
+            # Insert at front so small metadata-driven patches run ASAP
+            try:
+                self.js_execution_queue.insert(0, (js_to_enqueue, message_id))
+            except Exception:
+                self.js_execution_queue.append((js_to_enqueue, message_id))
+        else:
+            self.js_execution_queue.append((js_to_enqueue, message_id))
+        # Record both keys (internal and platform) to avoid duplicate insertion
+        try:
+            if message_id:
+                self._queued_message_ids.add(message_id)
+                try:
+                    import time, os
+                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        df.write(f"{time.time():.3f} QUEUE_ADD message_id={message_id}\n")
+                        try:
+                            df.flush(); os.fsync(df.fileno())
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    meta = self.message_data.get(message_id, {}).get('metadata', {})
+                    platform_mid = meta.get('message_id') if isinstance(meta, dict) else None
+                    if platform_mid and str(platform_mid) != str(message_id):
+                        self._queued_message_ids.add(platform_mid)
+                        try:
+                            import time, os
+                            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                df.write(f"{time.time():.3f} QUEUE_ADD message_id={platform_mid}\n")
+                                try:
+                                    df.flush(); os.fsync(df.fileno())
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
         # Warn if queue is getting large
         queue_size = len(self.js_execution_queue)
@@ -1417,8 +2391,34 @@ class ChatPage(QWidget):
         # Queue state updated (instrumentation removed)
 
         # Start processing if not already running and under pending limit
+        try:
+            import time, os
+            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                df.write(f"{time.time():.3f} QUEUE_STATUS is_processing={self.is_processing_js} pending_js_count={self.pending_js_count} max_pending_js={self.max_pending_js} queue_size={queue_size}\n")
+        except Exception:
+            pass
+
         if not self.is_processing_js and self.pending_js_count < self.max_pending_js:
+            try:
+                import time, os
+                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                    df.write(f"{time.time():.3f} INVOKE_PROCESS message_id={message_id}\n")
+            except Exception:
+                pass
             self._processNextJavaScript()
+        else:
+            try:
+                import time, os
+                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                    df.write(f"{time.time():.3f} SKIP_PROCESS message_id={message_id} is_processing={self.is_processing_js} pending_js_count={self.pending_js_count} max_pending_js={self.max_pending_js}\n")
+            except Exception:
+                pass
     
     def _processNextJavaScript(self):
         """Process the next JavaScript execution from queue"""
@@ -1428,6 +2428,15 @@ class ChatPage(QWidget):
         
         self.is_processing_js = True
         js_code, message_id = self.js_execution_queue.pop(0)
+        # Persist diagnostic: processing this queued JS entry
+        try:
+            import time, os
+            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                df.write(f"{time.time():.3f} PROCESS message_id={message_id}\n")
+        except Exception:
+            pass
         
         self.pending_js_count += 1
         retry_count = getattr(self, '_js_retry_count', {})
@@ -1451,10 +2460,86 @@ class ChatPage(QWidget):
                         logger.error(f"✗ JS execution failed permanently for {message_id} - MESSAGE DROPPED")
                         # Clean up retry counter
                         retry_count.pop(message_id, None)
+                        # Persist diagnostic for dropped message
+                        try:
+                            import time, os
+                            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                df.write(f"{time.time():.3f} DROPPED message_id={message_id}\n")
+                                try:
+                                    df.flush()
+                                    os.fsync(df.fileno())
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        try:
+                            # Remove both internal and platform keys
+                            self._queued_message_ids.discard(message_id)
+                            try:
+                                meta = self.message_data.get(message_id, {}).get('metadata', {})
+                                platform_mid = meta.get('message_id') if isinstance(meta, dict) else None
+                                if platform_mid:
+                                    self._queued_message_ids.discard(platform_mid)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
             else:
                 # Success - clean up retry counter
                 if message_id:
                     retry_count.pop(message_id, None)
+                    # Persist diagnostic for successful JS execution
+                    try:
+                        import time, os
+                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} SUCCESS message_id={message_id}\n")
+                            try:
+                                df.flush()
+                                os.fsync(df.fileno())
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        # Remove both internal and platform keys from dedupe set
+                        self._queued_message_ids.discard(message_id)
+                        try:
+                            import time, os
+                            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                df.write(f"{time.time():.3f} QUEUE_REMOVE message_id={message_id}\n")
+                                try:
+                                    df.flush(); os.fsync(df.fileno())
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        try:
+                            meta = self.message_data.get(message_id, {}).get('metadata', {})
+                            platform_mid = meta.get('message_id') if isinstance(meta, dict) else None
+                            if platform_mid:
+                                self._queued_message_ids.discard(platform_mid)
+                                try:
+                                    import time, os
+                                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                        df.write(f"{time.time():.3f} QUEUE_REMOVE message_id={platform_mid}\n")
+                                        try:
+                                            df.flush(); os.fsync(df.fileno())
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
                 # Notify listeners/tests that a message was rendered
                 try:
                     # Emit message_id if available, else empty string
@@ -1469,9 +2554,48 @@ class ChatPage(QWidget):
                 self.is_processing_js = False
         
         try:
-            self.chat_display.page().runJavaScript(js_code, on_complete)
+            # Persist diagnostic: invoked runJavaScript call
+            try:
+                import time, os
+                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                    df.write(f"{time.time():.3f} CALL message_id={message_id}\n")
+                    try:
+                        df.flush()
+                        os.fsync(df.fileno())
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # Ensure we have a page to run JS on; log and raise if missing
+            page = self.chat_display.page() if self.chat_display else None
+            if not page:
+                try:
+                    import time, os
+                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        df.write(f"{time.time():.3f} NO_PAGE message_id={message_id}\n")
+                except Exception:
+                    pass
+                raise RuntimeError("No QWebEnginePage available for runJavaScript")
+            page.runJavaScript(js_code, on_complete)
         except Exception as e:
             logger.error(f"✗ Exception executing JavaScript: {e}")
+            try:
+                import time, os
+                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                    df.write(f"{time.time():.3f} EXCEPTION_JS message_id={message_id} err={repr(e)}\n")
+                    try:
+                        df.flush()
+                        os.fsync(df.fileno())
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             import traceback
             traceback.print_exc()
             # If the underlying QWebEngineView has been deleted, don't retry
@@ -1485,6 +2609,10 @@ class ChatPage(QWidget):
                     pass
                 self.pending_js_count = max(0, self.pending_js_count - 1)
                 self.is_processing_js = False
+                try:
+                    self._queued_message_ids.clear()
+                except Exception:
+                    pass
                 return
 
             # Retry logic for other transient exceptions
@@ -1504,6 +2632,52 @@ class ChatPage(QWidget):
         if not hasattr(self, '_js_retry_count'):
             self._js_retry_count = {}
         self._js_retry_count = retry_count
+
+    def _invoke_queue_js(self, js_code, message_id=None):
+        """Invoke the queued JS execution function safely.
+
+        This helper handles cases where tests monkeypatch `ChatPage._queueJavaScriptExecution`
+        with a plain function (no `self` parameter). It will attempt the normal bound
+        call first, and fall back to calling the class attribute as an unbound
+        function if that raises a TypeError due to signature mismatch.
+        """
+        try:
+            try:
+                return self._queueJavaScriptExecution(js_code, message_id)
+            except TypeError:
+                # Possibly replaced by an unbound function in tests; call via class
+                try:
+                    return type(self)._queueJavaScriptExecution(js_code, message_id)
+                except Exception:
+                    # Last resort: try calling with only js_code
+                    try:
+                        return self._queueJavaScriptExecution(js_code)
+                    except Exception:
+                        return None
+        except Exception:
+            return None
+
+    def _drain_worker_queue(self):
+        """Drain items pushed by background render workers into the main thread."""
+        try:
+            if not getattr(self, '_worker_queue', None):
+                return
+            try:
+                # Pop all available items under lock and process them on main thread
+                with self._worker_queue_lock:
+                    items = list(self._worker_queue)
+                    self._worker_queue.clear()
+            except Exception:
+                items = []
+
+            for wrapped_local, message_id_snapshot, final_has_img in items:
+                try:
+                    js_code_fallback = f"var chatBody = document.getElementById('chat-body'); if (chatBody) {{ chatBody.insertAdjacentHTML('beforeend', `{wrapped_local}`); window.scrollTo(0, document.body.scrollHeight); }} true;"
+                    self._invoke_queue_js(js_code_fallback, message_id_snapshot)
+                except Exception:
+                    pass
+        except Exception:
+            pass
     
     def togglePause(self):
         """Toggle pause/unpause for message display"""
@@ -1520,6 +2694,266 @@ class ChatPage(QWidget):
             while self.message_queue:
                 platform, username, message, metadata = self.message_queue.pop(0)
                 self._displayMessage(platform, username, message, metadata)
+    
+    def _on_render_ready(self, message_id, wrapped_html, final_has_img):
+        """Handle insertion of rendered HTML into the DOM on the main thread."""
+        try:
+            js_code_local = f"var chatBody = document.getElementById('chat-body'); if (chatBody) {{ chatBody.insertAdjacentHTML('beforeend', `{wrapped_html}`); var messages = chatBody.querySelectorAll('.message'); var newMessage = messages[messages.length - 1]; newMessage.classList.add('message-slide-in'); setTimeout(function() {{ newMessage.classList.remove('message-slide-in'); newMessage.classList.add('message-wiggle'); setTimeout(function() {{ newMessage.classList.remove('message-wiggle'); }}, 2000); }}, 800); window.scrollTo(0, document.body.scrollHeight); }} true;"
+            self._invoke_queue_js(js_code_local, message_id)
+
+            # After inserting the message, proactively check for any placeholders
+            # that might already be cached (race: emote cached before DOM insert).
+            try:
+                page = self.chat_display.page() if self.chat_display else None
+                if page:
+                    js_find = f'''(function() {{ var node = document.querySelector('.message[data-message-id="{message_id}"]'); if(!node) return []; var imgs = node.querySelectorAll('img[data-emote-id]'); return Array.from(imgs).map(i => i.getAttribute('data-emote-id')); }})()'''
+
+                    def _cb(ids):
+                        try:
+                            if not ids:
+                                return
+                            try:
+                                from core.twitch_emotes import get_manager as _get_twitch_manager
+                                mgr = _get_twitch_manager() if _get_twitch_manager is not None else None
+                            except Exception:
+                                mgr = None
+                            if not mgr:
+                                return
+                            for emid in ids:
+                                try:
+                                    if not emid:
+                                        continue
+                                    data_uri = mgr.get_emote_data_uri(str(emid))
+                                    if not data_uri:
+                                        continue
+                                    safe_uri = data_uri.replace('\\', '\\\\').replace('"', '\\"')
+                                    js_set = f'''(function() {{ try {{ var imgs = document.querySelectorAll('.message[data-message-id="{message_id}"] img[data-emote-id="{emid}"]'); for(var i=0;i<imgs.length;i++){{ try{{ imgs[i].src="{safe_uri}"; imgs[i].classList.remove('placeholder'); }}catch(e){{}} }} }}catch(e){{}} }})()'''
+                                    try:
+                                        self._invoke_queue_js(js_set, None)
+                                    except Exception:
+                                        pass
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+                    try:
+                        page.runJavaScript(js_find, _cb)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # (Direct run bypass removed — rely on queued execution and worker queue)
+
+            # Notify overlay_server if available (best-effort)
+            try:
+                meta = self.message_data.get(message_id, {}).get('metadata', {})
+                platform = self.message_data.get(message_id, {}).get('platform')
+                username = self.message_data.get(message_id, {}).get('username')
+                message_text = self.message_data.get(message_id, {}).get('message')
+                is_event_local = meta.get('event_type') is not None
+                if self.overlay_server and not is_event_local and final_has_img:
+                    badges = meta.get('badges', [])
+                    color = meta.get('color') if self.show_user_colors else None
+                    self.overlay_server.add_message(platform, username, message_text, message_id, badges, color)
+            except Exception:
+                pass
+
+            try:
+                self.message_rendered.emit(message_id or '')
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_emote_image_cached(self, payload):
+        """Handle emote cache events and replace placeholder images in-place.
+
+        Payload is expected to be a dict with at least 'emote_id'.
+        """
+        try:
+            if not payload:
+                return
+            emote_id = str(payload.get('emote_id') or payload.get('id') or '')
+            if not emote_id:
+                return
+            # Get manager to convert cached file to data URI (cache-first)
+            try:
+                from core.twitch_emotes import get_manager as _get_twitch_manager
+                mgr = _get_twitch_manager() if _get_twitch_manager is not None else None
+            except Exception:
+                mgr = None
+
+            if not mgr:
+                return
+
+            try:
+                data_uri = mgr.get_emote_data_uri(emote_id)
+            except Exception:
+                data_uri = None
+
+            if not data_uri:
+                return
+
+            # Instrumentation: log update
+            try:
+                import time, os
+                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                    df.write(f"{time.time():.3f} QUEUE_EMOTE_URI update emote_id={emote_id}\n")
+                    try:
+                        df.flush(); os.fsync(df.fileno())
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Escape double-quotes and backslashes in the URI for safe JS embedding
+            try:
+                safe_uri = data_uri.replace('\\', '\\\\').replace('"', '\\"')
+            except Exception:
+                safe_uri = data_uri
+
+            js = f'''(function() {{
+                try {{
+                    var imgs = document.querySelectorAll('img[data-emote-id="{emote_id}"]');
+                    for (var i=0;i<imgs.length;i++) {{
+                        try {{ imgs[i].src = "{safe_uri}"; imgs[i].classList.remove('placeholder'); }} catch(e){{}}
+                    }}
+                }} catch(e) {{}}
+            }})();'''
+
+            # Queue JS execution on main thread
+            try:
+                self._invoke_queue_js(js, None)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_emote_set_metadata_ready(self, payload):
+        """Handle early metadata-ready emits: attempt lightweight patching for emote_ids.
+
+        Payload expected to include an 'emote_ids' iterable or 'emote_ids' key.
+        """
+        try:
+            # Diagnostic: log that handler was invoked and payload summary
+            try:
+                import time, os, json
+                dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                    try:
+                        short = json.dumps(payload) if payload and isinstance(payload, (dict, list, tuple)) else str(payload)
+                    except Exception:
+                        short = str(payload)
+                    df.write(f"{time.time():.3f} META_HANDLER_CALLED payload={short}\n")
+                    try:
+                        df.flush(); os.fsync(df.fileno())
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            if not payload:
+                return
+            emote_ids = payload.get('emote_ids') if isinstance(payload, dict) else None
+            if not emote_ids:
+                # payload may be a tuple/list of ids
+                if isinstance(payload, (list, tuple)):
+                    emote_ids = payload
+                else:
+                    return
+
+            try:
+                from core.twitch_emotes import get_manager as _get_twitch_manager
+                mgr = _get_twitch_manager() if _get_twitch_manager is not None else None
+            except Exception:
+                mgr = None
+
+            if not mgr:
+                return
+
+            import time, os
+            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+
+            for eid in list(emote_ids)[:200]:
+                try:
+                    emote_id = str(eid)
+                    data_uri = None
+                    try:
+                        data_uri = mgr.get_emote_data_uri(emote_id)
+                    except Exception:
+                        data_uri = None
+
+                    if not data_uri:
+                        continue
+
+                    # instrumentation
+                    try:
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} QUEUE_EMOTE_URI meta emote_id={emote_id}\n")
+                            try:
+                                df.flush(); os.fsync(df.fileno())
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                    safe_uri = data_uri.replace('\\', '\\\\').replace('"', '\\"')
+                    # Mark this JS as metadata-priority so it can bypass queue delays
+                    js_body = f'''(function() {{
+                        try {{
+                            var imgs = document.querySelectorAll('img[data-emote-id="{emote_id}"]');
+                            for (var i=0;i<imgs.length;i++) {{
+                                try {{ imgs[i].src = "{safe_uri}"; imgs[i].classList.remove('placeholder'); }} catch(e){{}}
+                            }}
+                        }} catch(e) {{}}
+                    }})();'''
+
+                    js = '/*META_PRIORITY*/' + js_body
+
+                    try:
+                        self._invoke_queue_js(js, None)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def emote_prefetch_sync(self, emote_set_ids=None, broadcaster_id=None, timeout_s=10):
+        """Synchronous, blocking emote set prefetch helper.
+
+        Best-effort: calls the `TwitchEmoteManager.fetch_emote_sets` if a manager
+        is available. This blocks the calling thread until the fetch returns
+        or an exception occurs. Use sparingly; preferred to run inside a
+        background worker thread (the render worker already supports this).
+
+        Returns True on success, False on failure.
+        """
+        try:
+            if not emote_set_ids:
+                return False
+            try:
+                from core.twitch_emotes import get_manager as _get_twitch_manager
+                mgr = _get_twitch_manager() if _get_twitch_manager is not None else None
+            except Exception:
+                mgr = None
+
+            if not mgr:
+                return False
+
+            # Perform blocking fetch
+            try:
+                mgr.fetch_emote_sets(list(emote_set_ids))
+                return True
+            except Exception:
+                return False
+        except Exception:
+            return False
     
     def showContextMenu(self, pos):
         """Show context menu for message moderation"""
@@ -1566,6 +3000,38 @@ class ChatPage(QWidget):
                 ban_action.triggered.connect(lambda: self.banUser(message_id))
                 menu.addAction(ban_action)
                 
+                # View message JSON (pretty-print)
+                def _view_message_json():
+                    try:
+                        msg_obj = self.message_data.get(message_id, {})
+                        pretty = json.dumps(msg_obj, indent=2, ensure_ascii=False, default=str)
+                        try:
+                            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton
+                            dlg = QDialog(self)
+                            dlg.setWindowTitle('Message JSON')
+                            dlg.setMinimumSize(640, 420)
+                            layout = QVBoxLayout(dlg)
+                            te = QTextEdit()
+                            te.setReadOnly(True)
+                            te.setPlainText(pretty)
+                            layout.addWidget(te)
+                            btn = QPushButton('Close')
+                            btn.clicked.connect(dlg.accept)
+                            layout.addWidget(btn)
+                            dlg.exec()
+                        except Exception:
+                            # Fallback for headless/tests: show truncated in info box
+                            QMessageBox.information(self, 'Message JSON', pretty[:2000])
+                    except Exception as e:
+                        try:
+                            logger.exception(f"Error showing message JSON: {e}")
+                        except Exception:
+                            pass
+
+                view_json_action = QAction('View Message JSON', self)
+                view_json_action.triggered.connect(_view_message_json)
+                menu.addAction(view_json_action)
+
                 menu.addSeparator()
                 
                 # Block selected text from this message
@@ -1632,6 +3098,37 @@ class ChatPage(QWidget):
             self.chat_manager.deleteMessage(platform, msg_data['metadata'].get('message_id'))
         
         logger.info(f"Deleted message: {message_id}")
+
+    def dump_chat_body(self, filename=None):
+        """Write the current `#chat-body` innerHTML to a file for debugging."""
+        try:
+            import os
+            if filename is None:
+                filename = os.path.join(os.getcwd(), 'logs', 'chat_body_snapshot.html')
+            js = "document.getElementById('chat-body') ? document.getElementById('chat-body').innerHTML : ''"
+
+            def _cb(html):
+                try:
+                    os.makedirs(os.path.dirname(filename), exist_ok=True)
+                    with open(filename, 'w', encoding='utf-8') as f:
+                        f.write(html or '')
+                except Exception:
+                    pass
+
+            page = self.chat_display.page() if self.chat_display else None
+            if page:
+                try:
+                    page.runJavaScript(js, _cb)
+                except Exception:
+                    # Older Qt versions may not accept callback; try synchronous-ish fallback
+                    try:
+                        html = page.toHtml()
+                        with open(filename, 'w', encoding='utf-8') as f:
+                            f.write(html or '')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     
     def onPlatformMessageDeleted(self, platform: str, platform_message_id: str):
         """Handle message deletion event from platform (moderator or auto-moderation)"""
