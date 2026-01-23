@@ -1,7 +1,20 @@
-from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QRadioButton, QPushButton
-)
-from PyQt6.QtCore import Qt
+"""Variable row widget - lazy-guard PyQt6 imports to support headless imports."""
+HAS_PYQT = True
+try:
+    from PyQt6.QtWidgets import (
+        QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QRadioButton, QPushButton
+    )
+    from PyQt6.QtCore import Qt
+except Exception:
+    HAS_PYQT = False
+    QWidget = object
+    QHBoxLayout = object
+    QVBoxLayout = object
+    QLabel = object
+    QLineEdit = object
+    QRadioButton = object
+    QPushButton = object
+    Qt = object
 
 class VariableRowWidget(QWidget):
     def __init__(self, name='', value='', default='', var_type='string', initialize=False, parent=None):

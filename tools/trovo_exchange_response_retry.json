@@ -1,0 +1,13 @@
+{
+  "ts": 1768943457,
+  "status_code": 500,
+  "text": "{\"status\":-1000,\"error\":\"internalServerError\",\"message\":\"Internal server error.\"}\n",
+  "headers": {
+    "Date": "Tue, 20 Jan 2026 21:10:59 GMT",
+    "Content-Type": "application/json",
+    "Content-Length": "82",
+    "Connection": "keep-alive",
+    "x-envoy-upstream-service-time": "5",
+    "server": "istio-envoy"
+  }
+}

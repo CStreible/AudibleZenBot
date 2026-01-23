@@ -7,12 +7,16 @@ Uses official Kick Developer API: https://docs.kick.com/
 import asyncio
 import json
 import time
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from platform_connectors.base_connector import BasePlatformConnector
-from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.qt_compat import QThread, pyqtSignal
 from core.logger import get_logger
+from platform_connectors.connector_utils import connect_with_retry, startup_allowed, safe_emit
 
 # Structured logger for this module
 logger = get_logger('KickOldPusher')
@@ -20,6 +24,14 @@ try:
     from core.http_session import make_retry_session
 except Exception:
     make_retry_session = None
+import websockets
+try:
+    if not hasattr(websockets, 'connect'):
+        import importlib as _il
+        _stub = _il.import_module('websockets_stub')
+        setattr(websockets, 'connect', getattr(_stub, 'connect'))
+except Exception:
+    pass
 
 
 class KickConnector(BasePlatformConnector):
@@ -134,6 +146,9 @@ class KickConnector(BasePlatformConnector):
         self.worker.error_signal.connect(self.onError)
         
         self.worker_thread.started.connect(self.worker.run)
+        if not startup_allowed():
+            logger.info("[KickOldPusher] CI mode: skipping worker thread start")
+            return
         self.worker_thread.start()
     
     def disconnect(self):
@@ -145,7 +160,7 @@ class KickConnector(BasePlatformConnector):
             self.worker_thread.wait()
         
         self.connected = False
-        self.connection_status.emit(False)
+        safe_emit(self.connection_status, False)
     
     def send_message(self, message: str):
         """Send a message"""
@@ -153,17 +168,25 @@ class KickConnector(BasePlatformConnector):
             self.worker.send_message(message)
     
     def onMessageReceived(self, username: str, message: str):
-        self.message_received.emit(username, message)
+        # Emit using standardized signature: platform, username, message, metadata
+        try:
+            safe_emit(self.message_received, 'kick', username, message, {})
+        except Exception:
+            logger.exception("KickOldPusher: failed to emit standardized message_received signal")
     
     def onMessageReceivedWithMetadata(self, username: str, message: str, metadata: dict):
-        self.message_received_with_metadata.emit(username, message, metadata)
+        # Ensure standardized signature: platform, username, message, metadata
+        try:
+            safe_emit(self.message_received_with_metadata, 'kick', username, message, metadata)
+        except Exception:
+            logger.exception("KickOldPusher: failed to emit standardized message_received_with_metadata signal")
     
     def onStatusChanged(self, connected: bool):
         self.connected = connected
-        self.connection_status.emit(connected)
+        safe_emit(self.connection_status, connected)
     
     def onError(self, error: str):
-        self.error_occurred.emit(error)
+        safe_emit(self.error_occurred, error)
 
 
 class KickWorker(QThread):
@@ -196,8 +219,8 @@ class KickWorker(QThread):
         try:
             self.loop.run_until_complete(self.connect_to_kick())
         except Exception as e:
-            self.error_signal.emit(f"Connection error: {str(e)}")
-            self.status_signal.emit(False)
+            safe_emit(self.error_signal, f"Connection error: {str(e)}")
+            safe_emit(self.status_signal, False)
         finally:
             if self.loop and not self.loop.is_closed():
                 self.loop.close()
@@ -209,8 +232,8 @@ class KickWorker(QThread):
             logger.info(f"Fetching Kick chatroom ID for channel: {self.channel}")
             self.chatroom_id = await self.get_chatroom_id()
             if not self.chatroom_id:
-                self.error_signal.emit(f"Failed to get Kick chatroom ID for {self.channel}")
-                self.status_signal.emit(False)
+                safe_emit(self.error_signal, f"Failed to get Kick chatroom ID for {self.channel}")
+                safe_emit(self.status_signal, False)
                 return
             
             logger.info(f"Got Kick chatroom ID: {self.chatroom_id}")
@@ -231,7 +254,7 @@ class KickWorker(QThread):
             logger.info(f"Connecting to Kick WebSocket: {ws_url}")
             logger.warning("NOTE: Kick WebSocket may fail due to cluster mismatch - this is a known issue")
             
-            async with websockets.connect(ws_url) as websocket:
+            async with connect_with_retry(websockets.connect, ws_url, retries=3) as websocket:
                 self.ws = websocket
                 
                 # Subscribe to chat channel
@@ -246,7 +269,7 @@ class KickWorker(QThread):
                 logger.debug(f"Sent subscription request for chatrooms.{self.chatroom_id}.v2")
 
                 logger.info(f"Connected to Kick channel: {self.channel}")
-                self.status_signal.emit(True)
+                safe_emit(self.status_signal, True)
                 
                 # Listen for messages
                 while self.running:
@@ -264,8 +287,8 @@ class KickWorker(QThread):
             logger.error(f"Kick connection error: {str(e)}")
             import traceback
             traceback.print_exc()
-            self.error_signal.emit(f"Connection error: {str(e)}")
-            self.status_signal.emit(False)
+            safe_emit(self.error_signal, f"Connection error: {str(e)}")
+            safe_emit(self.status_signal, False)
     
     async def get_chatroom_id(self):
         """Get chatroom ID from channel name using cloudscraper to bypass Cloudflare"""
@@ -321,8 +344,8 @@ class KickWorker(QThread):
                 }
                 
                 logger.info(f"[Kick] {username}: {content}")
-                self.message_signal.emit(username, content)
-                self.message_signal_with_metadata.emit(username, content, metadata)
+                from .connector_utils import emit_chat
+                emit_chat(self, 'kick', username, content, metadata)
                 
         except Exception as e:
             logger.error(f"Error handling Kick message: {e}")
@@ -335,3 +358,47 @@ class KickWorker(QThread):
     def stop(self):
         """Stop the worker"""
         self.running = False
+        # Close websocket if present and schedule cooperative shutdown
+        if getattr(self, 'ws', None) and getattr(self, 'loop', None):
+            try:
+                asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
+            except Exception:
+                pass
+
+        try:
+            if getattr(self, 'loop', None) and not (self.loop.is_closed()):
+                try:
+                    asyncio.run_coroutine_threadsafe(self._shutdown_async(), self.loop)
+                except Exception:
+                    pass
+                try:
+                    self.loop.call_soon_threadsafe(self.loop.stop)
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("[KickWorker] Error scheduling shutdown on event loop")
+
+    async def _shutdown_async(self):
+        """Cooperative async shutdown for KickWorker: close websocket and cancel tasks."""
+        try:
+            self.running = False
+            try:
+                if getattr(self, 'ws', None):
+                    await self.ws.close()
+            except Exception:
+                pass
+
+            try:
+                current = asyncio.current_task(loop=self.loop)
+                tasks = [t for t in asyncio.all_tasks(loop=self.loop) if t is not current]
+                if tasks:
+                    for t in tasks:
+                        try:
+                            t.cancel()
+                        except Exception:
+                            pass
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.exception(f"[KickWorker] _shutdown_async error: {e}")

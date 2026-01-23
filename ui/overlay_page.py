@@ -2,15 +2,49 @@
 Overlay Page - Configuration for OBS/Browser overlay
 """
 
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QGroupBox, 
-    QPushButton, QSpinBox, QCheckBox, QComboBox, QLineEdit,
-    QSlider, QFileDialog, QFontComboBox, QColorDialog, QScrollArea
-)
-from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont, QColor
+"""Overlay Page - Configuration for OBS/Browser overlay (PyQt6 imports guarded)
+"""
+HAS_PYQT = True
+try:
+    from PyQt6.QtWidgets import (
+        QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QGroupBox,
+        QPushButton, QSpinBox, QCheckBox, QComboBox, QLineEdit,
+        QSlider, QFileDialog, QFontComboBox, QColorDialog, QScrollArea
+    )
+    from PyQt6.QtCore import Qt, pyqtSlot
+    from PyQt6.QtGui import QFont, QColor
+except Exception:
+    HAS_PYQT = False
+    QWidget = object
+    QVBoxLayout = object
+    QHBoxLayout = object
+    QGridLayout = object
+    QLabel = object
+    QGroupBox = object
+    QPushButton = object
+    QSpinBox = object
+    QCheckBox = object
+    QComboBox = object
+    QLineEdit = object
+    QSlider = object
+    QFileDialog = object
+    QFontComboBox = object
+    QColorDialog = object
+    QScrollArea = object
+    Qt = object
+    def pyqtSlot(*a, **k):
+        def _decorator(f):
+            return f
+        return _decorator
+    QFont = object
+    QColor = object
 from core.overlay_server import OverlayServer
-import cv2
+try:
+    import cv2
+    HAS_CV2 = True
+except Exception:
+    cv2 = None
+    HAS_CV2 = False
 from core.logger import get_logger
 
 # Structured logger for this module
@@ -77,6 +111,10 @@ def enumerate_video_devices():
     devices = []
     logger.debug("Starting camera enumeration...")
     
+    if not HAS_CV2:
+        logger.warning("OpenCV (cv2) not available; skipping camera enumeration")
+        return devices
+
     # First, get Windows camera names
     windows_names = get_windows_camera_names()
     
@@ -84,7 +122,14 @@ def enumerate_video_devices():
         # Try to open up to 10 camera indices
         opencv_cameras = []
         for i in range(10):
-            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)  # Use DirectShow on Windows
+            try:
+                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)  # Use DirectShow on Windows
+            except Exception:
+                # cv2 may not support CAP_DSHOW on this platform; fall back to default
+                try:
+                    cap = cv2.VideoCapture(i)
+                except Exception:
+                    break
             if cap.isOpened():
                 opencv_cameras.append(i)
                 cap.release()

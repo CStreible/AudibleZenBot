@@ -1,0 +1,10 @@
+{
+  "ts": 1768943362,
+  "url": "https://id.twitch.tv/oauth2/token",
+  "data": {
+    "client_id": "h84tx3mvvpk9jyt8rv8p8utfzupz82",
+    "client_secret": "***",
+    "grant_type": "refresh_token",
+    "refresh_token": "vprnovu6d69oewi9b3b1a2ixj3y61yukk8brkh76e1psa0jmfk"
+  }
+}

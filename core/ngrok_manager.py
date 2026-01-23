@@ -6,7 +6,10 @@ Handles starting, stopping, and monitoring ngrok tunnels for webhook-based platf
 import os
 import sys
 import time
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 import subprocess
 from threading import Thread, Lock
 from typing import Dict, Optional, Any
@@ -461,20 +464,37 @@ class NgrokManager(QObject):
                         continue
                     
                     try:
-                        # Query ngrok API
-                        response = requests.get('http://localhost:4040/api/tunnels', timeout=5)
-                        if response.status_code == 200:
-                            api_tunnels = response.json().get('tunnels', [])
-                            active_urls = {t['public_url'] for t in api_tunnels}
-                            
-                            # Check if our tunnels are still active
-                            for port, info in list(self.tunnels.items()):
-                                if info['public_url'] not in active_urls:
-                                    logger.warning(f"Tunnel for port {port} is no longer active")
-                                    self.tunnel_error.emit(port, "Tunnel disconnected")
-                                    
-                    except requests.exceptions.RequestException:
-                        # Ngrok API not available - tunnels might be down
+                        # Ensure `requests` is available at runtime (may have been None
+                        # if import failed during early module import). Attempt lazy
+                        # import so monitor can recover if dependencies were installed
+                        # after startup.
+                        global requests
+                        if requests is None:
+                            try:
+                                import importlib
+                                requests = importlib.import_module('requests')
+                            except Exception:
+                                # Leave requests as None and handle below
+                                pass
+
+                        # Query ngrok API if requests is available
+                        if requests is not None:
+                            response = requests.get('http://localhost:4040/api/tunnels', timeout=5)
+                            if response.status_code == 200:
+                                api_tunnels = response.json().get('tunnels', [])
+                                active_urls = {t['public_url'] for t in api_tunnels}
+
+                                # Check if our tunnels are still active
+                                for port, info in list(self.tunnels.items()):
+                                    if info['public_url'] not in active_urls:
+                                        logger.warning(f"Tunnel for port {port} is no longer active")
+                                        self.tunnel_error.emit(port, "Tunnel disconnected")
+                        else:
+                            # Can't query ngrok API without requests
+                            pass
+                    except Exception:
+                        # Any network/requests error should be ignored here; monitoring
+                        # will retry on the next loop iteration.
                         pass
                         
             except Exception as e:

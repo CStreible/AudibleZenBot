@@ -1,25 +1,129 @@
-# Configuration files
-config.json
-*.pyc
+# Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
 *.log
+local_settings.py
 
-# Virtual environment
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+pipenv-resolver.lock
+
+# virtualenv
 venv/
-env/
-.venv/
+.venv
+.venv-1
 
-# IDE
+# VS Code
 .vscode/
-.idea/
-*.swp
-*.swo
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
-# Distribution
-dist/
+# Logs
+logs/
+
+# Resources and build artifacts
 build/
-*.egg-info/
+dist/
+*.exe
+*.dll
+*.lib
+*.so
+*.dylib
+
+# secrets
+.env
+secrets.json
+
+# requests shim
+requests_stub.py
+requests.py
+
+# compiled Qt resources
+*.rcc
+
+# test output
+integration_test_output.txt
+
+# Misc
+*.swp
+*~
+
+# Ignore local-only scripts
+scripts/manual/
+
+# Ignore PyQt6 stubs included in repo
+PyQt6/

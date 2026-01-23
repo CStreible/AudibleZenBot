@@ -281,6 +281,53 @@ For issues, questions, or suggestions:
 
 ---
 
+## CI / Headless tests
+
+When running tests in Continuous Integration or on a headless machine, set the environment variable `AUDIBLEZENBOT_CI=1` to avoid starting network connectors and other heavy subsystems during import-time. The repository CI workflow uses this flag so GUI tests can instantiate the Qt `MainWindow` without spawning external services.
+
+Examples:
+
+- Run tests locally on Windows (PowerShell):
+
+```powershell
+$env:AUDIBLEZENBOT_CI = '1'
+pytest -q
+```
+
+- Run tests locally on Linux/macOS (bash):
+
+```bash
+export AUDIBLEZENBOT_CI=1
+pytest -q
+```
+
+Note: GUI tests that use PyQt6-WebEngine may require running under Xvfb on CI. The included GitHub Actions workflow runs tests under Xvfb and installs `PyQt6` + `PyQt6-WebEngine`.
+
+---
+
+## Running WebEngine integration tests locally
+
+WebEngine-based integration tests can be flaky on Windows due to Chromium/GL subprocess constraints. Recommended local steps if you need to run them:
+
+- Ensure `AUDIBLEZENBOT_CI` is not set (CI gating runs these tests in CI).
+- Install fonts into your venv Qt folder (helper script included):
+
+```powershell
+# from project root
+.venv-1\Scripts\python.exe scripts\install_dejavu_fonts.py
+```
+
+- Run tests with software rendering flags to reduce GPU/GL issues:
+
+```powershell
+$env:QTWEBENGINE_CHROMIUM_FLAGS='--disable-gpu --disable-gpu-compositing --no-sandbox --use-gl=swiftshader'
+$env:QT_OPENGL='software'
+.venv-1\Scripts\python.exe -m pytest tests/test_integration_chatpage.py -q
+```
+
+If local runs remain unstable, prefer running the full integration suite in CI (the workflow uses Xvfb and verified Chromium flags).
+
+
 <div align="center">
 
 **Made with ❤️ for the streaming community**
@@ -290,3 +337,5 @@ Version 1.0.0 | December 30, 2025
 [⬆ Back to Top](#audiblezenbot)
 
 </div>
+
+
