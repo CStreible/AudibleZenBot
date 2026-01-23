@@ -171,13 +171,14 @@ class InMemoryEmoteMap:
                         uri = None
 
                     if uri:
-                        return m.group(1).replace(token, f'<img src="{uri}" alt="{html.escape(token)}" />')
+                        return m.group(0).replace(token, f'<img src="{uri}" alt="{html.escape(token)}" />')
                     return m.group(0)
 
-                try:
-                    return temp_pattern.sub(_fallback_repl, text)
-                except Exception:
-                    return text
+                    try:
+                        res = temp_pattern.sub(_fallback_repl, text)
+                        return res
+                    except Exception:
+                        return text
             except Exception:
                 logger.debug('emotes: replace_tokens fallback failed')
                 return text
@@ -204,11 +205,21 @@ class InMemoryEmoteMap:
             except Exception:
                 pass
 
+            try:
+                pass
+            except Exception:
+                pass
             if uri:
-                return m.group(1).replace(token, f'<img src="{uri}" alt="{html.escape(token)}" />')
+                    try:
+                        repl = m.group(0).replace(token, f'<img src="{uri}" alt="{html.escape(token)}" />')
+                        return repl
+                    except Exception:
+                        return m.group(0)
             return m.group(0)
 
-        return self.pattern.sub(_repl, text)
+        res = self.pattern.sub(_repl, text)
+        pass
+        return res
 
     def _ensure_data_uri(self, name, info):
         """Return a data URI for emote `name` using info dict.
@@ -219,6 +230,7 @@ class InMemoryEmoteMap:
             logger.debug(f'emotes: _ensure_data_uri entry name={name!r} info_keys={list(info.keys()) if info else None} broadcaster_id={self.broadcaster_id!r}')
         except Exception:
             pass
+        pass
         if not info:
             return None
         url = info.get('url')
@@ -254,6 +266,31 @@ class InMemoryEmoteMap:
         except Exception:
             url = url
 
+        # Prefer manager-provided name-based URI lookup when available
+        try:
+            name_lookup = getattr(self.t_mgr, 'get_emote_data_uri_by_name', None)
+            if callable(name_lookup):
+                try:
+                    try:
+                        logger.debug(f'emotes: _ensure_data_uri calling name_lookup for name={name!r} broadcaster_id={self.broadcaster_id!r}')
+                    except Exception:
+                        pass
+                    try:
+                        uri = name_lookup(name, broadcaster_id=self.broadcaster_id)
+                    except Exception:
+                        uri = None
+                    try:
+                        logger.debug(f'emotes: _ensure_data_uri name_lookup returned {bool(uri)} for name={name!r}')
+                    except Exception:
+                        pass
+                    if uri:
+                        return uri
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # If we still don't have a URL, give up — network fetch requires a URL
         if not url:
             return None
 
@@ -283,27 +320,6 @@ class InMemoryEmoteMap:
                     b = f.read()
                 mime = 'image/gif' if fpath.lower().endswith('.gif') else 'image/png'
                 return f'data:{mime};base64,' + base64.b64encode(b).decode()
-        except Exception:
-            pass
-
-        # Prefer manager-provided name-based URI lookup when available
-        try:
-            name_lookup = getattr(self.t_mgr, 'get_emote_data_uri_by_name', None)
-            if callable(name_lookup):
-                try:
-                    try:
-                        logger.debug(f'emotes: _ensure_data_uri calling name_lookup for name={name!r} broadcaster_id={self.broadcaster_id!r}')
-                    except Exception:
-                        pass
-                    uri = name_lookup(name, broadcaster_id=self.broadcaster_id)
-                    try:
-                        logger.debug(f'emotes: _ensure_data_uri name_lookup returned {bool(uri)} for name={name!r}')
-                    except Exception:
-                        pass
-                    if uri:
-                        return uri
-                except Exception:
-                    pass
         except Exception:
             pass
 

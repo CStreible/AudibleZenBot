@@ -267,6 +267,12 @@ class TwitchEmoteManager:
                             # Cache by id only
                             self.id_map[str(emid)] = e
                             try:
+                                name = e.get('name')
+                                if name:
+                                    self.name_map[str(name)] = str(emid)
+                            except Exception:
+                                pass
+                            try:
                                 logger = get_logger('twitch_emotes')
                                 logger.debug(f"fetch_global_emotes: caching emote id={emid} name={e.get('name')}")
                             except Exception:
@@ -351,6 +357,12 @@ class TwitchEmoteManager:
                             if emid:
                                 # Cache emote by id only
                                 self.id_map[str(emid)] = e
+                                try:
+                                    name = e.get('name')
+                                    if name:
+                                        self.name_map[str(name)] = str(emid)
+                                except Exception:
+                                    pass
                                 ids_to_prefetch.append(str(emid))
                         except Exception:
                             continue
@@ -404,122 +416,24 @@ class TwitchEmoteManager:
                         logger.debug(f"throttler: dequeued batch={batch} qsize={qsize}")
                     except Exception:
                         pass
-
-                    # Fast-path: if the queued item is an explicit batch marker
-                    # tuple (created by `schedule_emote_set_fetch`), invoke
-                    # `self.fetch_emote_sets` with full retry/backoff semantics
-                    # so instance-bound monkeypatches (MagicMock, etc.) are
-                    # observed.
                     try:
-                        if isinstance(batch, tuple) and len(batch) == 2 and batch[0] == '__emote_batch__':
-                            try:
-                                print("DBG_FASTPATH_INVOKE", repr(batch))
-                            except Exception:
-                                pass
-                            batch_list = batch[1]
-                            # Retry loop mirroring the main path
-                            max_attempts = int(getattr(self, '_max_retries', 3) or 3)
-                            attempt = 0
-                            base = float(getattr(self, '_backoff_base', 0.05) or 0.05)
-                            start_ts = time.time()
-                            last_err = None
-                            try:
-                                try:
-                                    print("DBG_FASTPATH_LOOP_CHECK", attempt, max_attempts, getattr(self, '_throttler_stop', None).is_set())
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pass
-                            while attempt <= max_attempts and not self._throttler_stop.is_set():
-                                try:
-                                    try:
-                                        before_keys = set(self.id_map.keys())
-                                    except Exception:
-                                        before_keys = set()
-                                    try:
-                                        try:
-                                            print("DBG_INVOKE_BATCH_ATTEMPT", attempt, repr(batch_list))
-                                        except Exception:
-                                            pass
-                                        try:
-                                            try:
-                                                print("DBG_FETCH_ATTR_AT_INVOKE", repr(getattr(self, 'fetch_emote_sets', None)))
-                                            except Exception:
-                                                pass
-                                            # Call the instance's fetch_emote_sets so
-                                            # monkeypatched fetchers are used.
-                                            self.fetch_emote_sets(batch_list)
-                                        except Exception as e:
-                                            try:
-                                                print("DBG_FETCH_ATTR_EXCEPTION", repr(e))
-                                            except Exception:
-                                                pass
-                                            raise
-                                        last_err = None
-                                        break
-                                    except Exception as e:
-                                        last_err = e
-                                        code = getattr(e, 'code', None)
-                                        is_rate = code in ('rate_limited', 'network')
-                                        if is_rate and attempt < max_attempts:
-                                            jitter = random.uniform(-0.3, 0.3)
-                                            sleep_for = base * (2 ** attempt) * (1.0 + jitter)
-                                            try:
-                                                time.sleep(max(0, sleep_for))
-                                            except Exception:
-                                                pass
-                                            attempt += 1
-                                            continue
-                                        else:
-                                            break
-                                except Exception:
-                                    break
-
-                            try:
-                                new_keys = sorted(list(set(self.id_map.keys()) - before_keys))
-                            except Exception:
-                                new_keys = []
-                            try:
-                                if new_keys and emote_signals is not None and hasattr(emote_signals, 'emote_set_metadata_ready_ext'):
-                                    try:
-                                        payload_meta = {'timestamp': int(time.time()), 'set_ids': [], 'emote_ids': new_keys}
-                                        emote_signals.emote_set_metadata_ready_ext.emit(payload_meta)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                            try:
-                                duration_ms = int((time.time() - start_ts) * 1000)
-                                payload = {'status': 'ok' if last_err is None else 'error', 'source': 'emote_set_throttler', 'timestamp': int(time.time()), 'duration_ms': duration_ms, 'emote_set_count': len(batch_list), 'attempts': int(getattr(self, '_last_request_attempts', attempt + 1) or (attempt + 1)), 'cache_dir': self.cache_dir}
-                                if last_err is not None:
-                                    try:
-                                        payload.update({'error': str(last_err), 'error_code': getattr(last_err, 'code', None), 'traceback': traceback.format_exc()})
-                                    except Exception:
-                                        payload.update({'error': str(last_err)})
-                                if emote_signals is not None and hasattr(emote_signals, 'emote_set_batch_processed_ext'):
-                                    try:
-                                        emote_signals.emote_set_batch_processed_ext.emit(payload)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                            continue
+                        pass
                     except Exception:
                         pass
 
+                    # If the queued item is an explicit batch marker tuple
+                    # created by `schedule_emote_set_fetch`, convert it into
+                    # a plain batch list so the normal aggregation + retry
+                    # logic below will handle invocation of
+                    # `self.fetch_emote_sets` (which will use instance-bound
+                    # monkeypatches such as MagicMock).
+                    if isinstance(batch, tuple) and len(batch) == 2 and batch[0] == '__emote_batch__':
                         try:
-                            if callable(batch):
-                                try:
-                                    print("DBG_BATCH_IS_CALLABLE", repr(batch))
-                                except Exception:
-                                    pass
-                            else:
-                                try:
-                                    print("DBG_BATCH_NOT_CALLABLE", type(batch), repr(batch))
-                                except Exception:
-                                    pass
+                            batch = batch[1]
                         except Exception:
                             pass
+
+                        pass
 
                     # Try to combine multiple queued batches into one request up to batch size
                     try:
@@ -553,6 +467,7 @@ class TwitchEmoteManager:
                         # of set_id -> interested emote ids (may be empty lists).
                         combined = []
                         interest_map = {}
+                        pass
                         if callable_task is None:
                             try:
                                 for it in raw_items:
@@ -573,14 +488,18 @@ class TwitchEmoteManager:
                             except Exception:
                                 combined = [str(x) for x in raw_items]
                                 interest_map = {}
+                            pass
+                        else:
+                            pass
 
                         # Retry with exponential backoff on transient failures and emit structured logs
                         max_attempts = int(getattr(self, '_max_retries', 3) or 3)
                         attempt = 0
                         base = float(getattr(self, '_backoff_base', 0.05) or 0.05)
                         start_ts = time.time()
-                    except Exception:
-                        # If combining failed, skip this batch iteration
+                        pass
+                    except Exception as _comb_e:
+                        # If combining failed, log the exception and skip
                         continue
 
                     last_err = None
@@ -601,55 +520,87 @@ class TwitchEmoteManager:
                                     pass
                             except Exception:
                                 pass
-                            try:
-                                try:
-                                    print("DBG_CALLABLE_TASK_VALUE", repr(callable_task))
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pass
+                            pass
 
                             # If this iteration corresponds to a previously
                             # enqueued bound callable, invoke it (it already
                             # captured the intended batch). Otherwise call the
                             # manager's `fetch_emote_sets` with the combined ids.
                             if callable_task is not None:
+                                # If the queued item is a callable wrapper, run a
+                                # dedicated retry loop against the original batch
+                                # that the wrapper captured (available at
+                                # `callable_task._batch`). This ensures we use the
+                                # instance's current `fetch_emote_sets` callable
+                                # and apply the same backoff/retry semantics.
                                 try:
-                                    # snapshot before keys for emitted metadata
                                     try:
-                                        before_keys = set(self.id_map.keys())
+                                        batch_arg = getattr(callable_task, '_batch', None)
                                     except Exception:
-                                        before_keys = set()
-                                    try:
-                                        print("DBG_INVOKE_CALLABLE", repr(callable_task))
-                                    except Exception:
+                                        batch_arg = None
+                                        if batch_arg is None:
+                                            # Nothing meaningful to do; invoke the
+                                            # callable directly and let it raise if
+                                            # needed so outer logic can handle it.
+                                            callable_task()
+                                    else:
+                                        # Manual retry loop for the callable's batch
+                                        max_attempts = int(getattr(self, '_max_retries', 3) or 3)
+                                        attempt = 0
+                                        base = float(getattr(self, '_backoff_base', 0.05) or 0.05)
+                                        last_err_local = None
                                         pass
-                                    callable_task()
-                                    try:
-                                        print("DBG_INVOKE_CALLABLE_DONE")
-                                    except Exception:
-                                        pass
-                                except Exception as ie:
-                                    try:
-                                        print("DBG_CALLABLE_EXCEPTION", repr(ie))
-                                    except Exception:
-                                        pass
+                                        while attempt <= max_attempts and not self._throttler_stop.is_set():
+                                            try:
+                                                pass
+                                                fetch_fn = getattr(self, 'fetch_emote_sets', None)
+                                                pass
+                                                if not callable(fetch_fn):
+                                                    raise RuntimeError('no fetch_emote_sets callable')
+                                                fetch_fn(batch_arg)
+                                                pass
+                                                last_err_local = None
+                                                break
+                                            except Exception as _ce:
+                                                last_err_local = _ce
+                                                pass
+                                                code = getattr(_ce, 'code', None)
+                                                is_rate = code in ('rate_limited', 'network')
+                                                if is_rate and attempt < max_attempts:
+                                                    jitter = random.uniform(-0.3, 0.3)
+                                                    sleep_for = base * (2 ** attempt) * (1.0 + jitter)
+                                                    pass
+                                                    try:
+                                                        time.sleep(max(0, sleep_for))
+                                                    except Exception:
+                                                        pass
+                                                    attempt += 1
+                                                    continue
+                                                else:
+                                                    pass
+                                                    break
+                                except Exception:
+                                    # Propagate to outer handler
                                     raise
                             else:
                                 try:
                                     before_keys = set(self.id_map.keys())
                                 except Exception:
                                     before_keys = set()
-                                self.fetch_emote_sets(combined)
-                            try:
-                                print("DBG_CALL_START", repr(getattr(self, 'fetch_emote_sets', None)), "combined=", combined)
-                            except Exception:
+                                # Resolve and call the instance attribute here as
+                                # well so that the immediate (non-callable_task)
+                                # path also observes monkeypatches applied to the
+                                # manager instance.
+                                try:
+                                    fetch_fn = getattr(self, 'fetch_emote_sets', None)
+                                except Exception:
+                                    fetch_fn = None
+                                if not callable(fetch_fn):
+                                    raise RuntimeError('no fetch_emote_sets callable')
                                 pass
-                            self.fetch_emote_sets(combined)
-                            try:
-                                print("DBG_CALL_DONE")
-                            except Exception:
+                                fetch_fn(combined)
                                 pass
+                            pass
                             last_err = None
                             try:
                                 new_keys = sorted(list(set(self.id_map.keys()) - before_keys))
@@ -668,7 +619,7 @@ class TwitchEmoteManager:
                                         payload_meta = {'timestamp': int(time.time()), 'set_ids': combined, 'emote_ids': new_keys}
                                         # Emit-side diagnostic for UI log correlation
                                         try:
-                                            import os, time, json
+                                            import os, json
                                             dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
                                             os.makedirs(os.path.dirname(dlog), exist_ok=True)
                                             with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
@@ -784,6 +735,7 @@ class TwitchEmoteManager:
                         logger.exception(f"Uncaught exception in emote throttler worker: {e}")
                     except Exception:
                         pass
+                    pass
                     try:
                         if emote_signals is not None and hasattr(emote_signals, 'emote_set_batch_processed_ext'):
                             try:
@@ -859,21 +811,37 @@ class TwitchEmoteManager:
                         # will invoke the exact callable the test monkeypatches.
                         try:
                             f_current = getattr(self, 'fetch_emote_sets', None)
+                            # Build a small callable that resolves the
+                            # instance attribute at invocation time so that
+                            # any monkeypatch applied to `mgr.fetch_emote_sets`
+                            # is visible when the worker executes it.
+                            def make_task(batch_arg):
+                                def _task():
+                                    try:
+                                        fetch_fn = getattr(self, 'fetch_emote_sets', None)
+                                        if not callable(fetch_fn):
+                                            raise RuntimeError('no fetch_emote_sets callable')
+                                        fetch_fn(batch_arg)
+                                    except Exception:
+                                        # Propagate to outer retry handler
+                                        raise
+
+                                # Attach the original batch to the callable so the
+                                # worker can access it for retry logic without
+                                # relying on the aggregated `combined` variable.
+                                try:
+                                    _task._batch = list(batch_arg)
+                                except Exception:
+                                    pass
+                                return _task
+
                             try:
-                                print("DBG_BINDING_fetch_emote_sets", repr(f_current))
+                                bound_callable = make_task(list(batch))
                             except Exception:
-                                pass
-                            # Enqueue an explicit marker tuple containing the
-                            # batch list. The worker will call `self.fetch_emote_sets`
-                            # with this batch, ensuring the instance-bound patch
-                            # is used and retry/backoff semantics apply.
-                            bound_callable = ('__emote_batch__', batch)
+                                bound_callable = None
                         except Exception:
                             # Fallback: enqueue raw batch if we couldn't build wrapper
                             bound_callable = None
-                        try:
-                            print("DBG_ENQUEUE_BOUND_CALLABLE", repr(bound_callable))
-                        except Exception:
                             pass
                         self._emote_set_queue.put(bound_callable)
                     except Exception:
@@ -951,7 +919,7 @@ class TwitchEmoteManager:
                                 payload_meta = {'timestamp': int(time.time()), 'set_ids': normalized, 'emote_ids': new_keys}
                                 # Emit-side diagnostic for UI log correlation
                                 try:
-                                    import os, time, json
+                                    import os, json
                                     dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
                                     os.makedirs(os.path.dirname(dlog), exist_ok=True)
                                     with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
@@ -1047,6 +1015,12 @@ class TwitchEmoteManager:
                         emid = e.get('id')
                         if emid:
                             self.id_map[str(emid)] = e
+                            try:
+                                name = e.get('name')
+                                if name:
+                                    self.name_map[str(name)] = str(emid)
+                            except Exception:
+                                pass
                         sid = e.get('emote_set_id') or e.get('emote_set') or e.get('emote_set_ids')
                         if sid:
                             if isinstance(sid, (list, tuple)):
