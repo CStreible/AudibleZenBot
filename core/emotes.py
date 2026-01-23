@@ -467,7 +467,20 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
                         except Exception:
                             pass
                         if not ftype or ftype == 'text':
-                            parts.append(html.escape((frag.get('text') if isinstance(frag, dict) else str(frag)) or ''))
+                            # Escape fragment text and autolink any http(s) URLs
+                            try:
+                                txt = (frag.get('text') if isinstance(frag, dict) else str(frag)) or ''
+                                esc = html.escape(txt)
+                                url_re = re.compile(r'(https?://[^\s<]+)')
+                                def _linkify(m):
+                                    u = m.group(1)
+                                    href = html.escape(u, quote=True)
+                                    disp = html.escape(u)
+                                    return f'<a href="{href}" target="_blank" rel="noopener noreferrer">{disp}</a>'
+                                linked = url_re.sub(_linkify, esc)
+                                parts.append(linked)
+                            except Exception:
+                                parts.append(html.escape((frag.get('text') if isinstance(frag, dict) else str(frag)) or ''))
                             continue
 
                         if ftype == 'emote':
@@ -759,10 +772,23 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
             # Now escape any text except the inserted <img> tags.
             try:
                 subparts = re.split(r'(<img[^>]*>)', replaced)
+                # Convert plain-text subparts: escape and autolink URLs
+                url_re = re.compile(r'(https?://[^\s<]+)')
                 for j, sp in enumerate(subparts):
                     if sp.startswith('<img'):
                         continue
-                    subparts[j] = html.escape(sp)
+                    try:
+                        # First escape the text to avoid XSS
+                        esc = html.escape(sp)
+                        # Replace URLs in the escaped text with anchor tags
+                        def _linkify(m):
+                            u = m.group(1)
+                            href = html.escape(u, quote=True)
+                            disp = html.escape(u)
+                            return f'<a href="{href}" target="_blank" rel="noopener noreferrer">{disp}</a>'
+                        subparts[j] = url_re.sub(_linkify, esc)
+                    except Exception:
+                        subparts[j] = html.escape(sp)
                 parts[i] = ''.join(subparts)
             except Exception:
                 parts[i] = html.escape(replaced)

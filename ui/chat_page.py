@@ -870,6 +870,36 @@ class ChatPage(QWidget):
         
         # Chat messages area (QWebEngineView for animated GIF support)
         self.chat_display = QWebEngineView()
+        # Use a custom page to open external links in the default browser
+        try:
+            from PyQt6.QtWebEngineWidgets import QWebEnginePage
+            import webbrowser
+
+            class _ExternalLinkPage(QWebEnginePage):
+                def acceptNavigationRequest(self, url, navType, isMainFrame=None):
+                    try:
+                        # For link clicks (and any navigation to an external origin)
+                        # open in the user's default browser instead of inside the view.
+                        u = url.toString()
+                        if u and (u.startswith('http://') or u.startswith('https://')):
+                            try:
+                                webbrowser.open(u)
+                                return False
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        return super().acceptNavigationRequest(url, navType, isMainFrame)
+                    except Exception:
+                        return True
+
+            try:
+                self.chat_display.setPage(_ExternalLinkPage(self.chat_display))
+            except Exception:
+                pass
+        except Exception:
+            pass
         # Ensure the chat display expands to fill available space in the page
         try:
             self.chat_display.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
