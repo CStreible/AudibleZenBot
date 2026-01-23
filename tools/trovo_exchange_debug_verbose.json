@@ -1,0 +1,15 @@
+{
+  "ts": 1769186304,
+  "url": "https://open-api.trovo.live/openplatform/exchangetoken",
+  "headers": {
+    "Accept": "application/json",
+    "client-id": "b239c1cc698e04e93a164df321d142b3"
+  },
+  "data": {
+    "client_id": "b239c1cc698e04e93a164df321d142b3",
+    "client_secret": "***",
+    "grant_type": "authorization_code",
+    "code": "code",
+    "redirect_uri": "https://mistilled-declan-unendable.ngrok-free.dev/callback"
+  }
+}

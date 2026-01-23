@@ -2,7 +2,10 @@
 YouTube OAuth2 Authorization Flow (Automated with Local Server)
 Gets OAuth token for YouTube Data API v3 access
 """
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 import webbrowser
 from urllib.parse import urlencode, parse_qs, urlparse
 from http.server import BaseHTTPRequestHandler
@@ -93,9 +96,12 @@ def exchange_code_for_token(auth_code):
     
     logger.debug(f"Exchanging code with redirect_uri: {YOUTUBE_REDIRECT_URI}")
     try:
-        session = make_retry_session() if make_retry_session else requests.Session()
+        session = make_retry_session() if make_retry_session else (requests.Session() if requests is not None else None)
+        if session is None:
+            logger.error("[YouTube OAuth] 'requests' library not available in environment")
+            return None
         resp = session.post(YOUTUBE_TOKEN_URL, headers=headers, data=data, timeout=10)
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logger.exception(f"[YouTube OAuth] Network error exchanging code: {e}")
         return None
     if resp.status_code == 200:

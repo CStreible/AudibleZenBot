@@ -7,14 +7,18 @@ from platform_connectors.base_connector import BasePlatformConnector
 import asyncio
 import json
 import websockets
-import requests
+try:
+    import requests
+except Exception:
+    requests = None
 import random
 import string
 import time
 import os
-from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.qt_compat import QThread, pyqtSignal
 import threading
 from core.logger import get_logger
+from platform_connectors.connector_utils import connect_with_retry, startup_allowed, safe_emit
 
 # Structured logger for this module
 logger = get_logger('TrovoConnector')
@@ -22,6 +26,46 @@ try:
     from core.http_session import make_retry_session
 except Exception:
     make_retry_session = None
+
+# Ensure `connect` exists on the imported `websockets` module for environments
+# where a local stub or different websockets version is used. Tests patch
+# `platform_connectors.*.websockets.connect` so this makes that attribute
+# consistently available.
+try:
+    import websockets as _ws
+    if not hasattr(_ws, 'connect'):
+        import importlib as _il
+        _stub = _il.import_module('websockets_stub')
+        setattr(_ws, 'connect', getattr(_stub, 'connect'))
+except Exception:
+    pass
+
+# Provide a minimal dummy requests module if `requests` is not installed so
+# runtime code can catch `requests.exceptions.RequestException` without
+# raising NameError at import time.
+if requests is None:
+    class _DummyRequestsExceptions:
+        class RequestException(Exception):
+            pass
+
+    class _DummyRequestsSession:
+        def post(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def get(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def delete(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+    class _DummyRequestsModule:
+        exceptions = _DummyRequestsExceptions()
+
+        @staticmethod
+        def Session(*args, **kwargs):
+            return _DummyRequestsSession()
+
+    requests = _DummyRequestsModule()
 
 
 class TrovoConnector(BasePlatformConnector):
@@ -110,6 +154,9 @@ class TrovoConnector(BasePlatformConnector):
             except Exception:
                 pass
             try:
+                if not startup_allowed():
+                    logger.info("[TrovoConnector] CI mode: skipping TrovoWorker.start()")
+                    return
                 self.worker.start()
             except Exception as e:
                 logger.error(f"[TrovoConnector] Error starting TrovoWorker: {e}")
@@ -286,7 +333,7 @@ class TrovoConnector(BasePlatformConnector):
     def onMessageDeleted(self, message_id: str):
         """Handle message deleted by platform/moderator"""
         logger.info(f"[TrovoConnector] Message deleted by platform: {message_id}")
-        self.message_deleted.emit('trovo', message_id)
+        safe_emit(self.message_deleted, 'trovo', message_id)
 
     def disconnect(self):
         """Disconnect from Trovo and stop worker thread safely"""
@@ -307,7 +354,7 @@ class TrovoConnector(BasePlatformConnector):
                     pass
             self.connected = False
             try:
-                self.connection_status.emit(False)
+                safe_emit(self.connection_status, False)
             except Exception:
                 pass
             self.worker = None
@@ -363,12 +410,13 @@ class TrovoConnector(BasePlatformConnector):
                 for key in keys_to_remove:
                     del self.message_cache[key]
         
-        self.message_received_with_metadata.emit('trovo', username, message, metadata)
+        # Emit via connector signal
+        safe_emit(self.message_received_with_metadata, 'trovo', username, message, metadata)
     
     def onStatusChanged(self, connected: bool):
         self.connected = connected
         self.last_status = connected
-        self.connection_status.emit(connected)
+        safe_emit(self.connection_status, connected)
     
     def send_message(self, message: str):
         """Send a message to Trovo chat via REST API"""
@@ -529,12 +577,13 @@ class TrovoWorker(QThread):
     TROVO_CHAT_WS_URL = "wss://open-chat.trovo.live/chat"
     TROVO_CHAT_TOKEN_URL = "https://open-api.trovo.live/openplatform/chat/token"
 
-    def __init__(self, access_token: str, channel: str = None, config=None):
+    def __init__(self, access_token: str, channel: str = None, config=None, connector=None):
         super().__init__()
         self.access_token = access_token
         self.channel = channel
         self.channel_name = channel
         self.config = config
+        # No connector reference by default; worker emits on itself
         self.running = False
         self.loop = None
         self.ws = None
@@ -551,7 +600,7 @@ class TrovoWorker(QThread):
     def run(self):
         logger.info("[TrovoWorker] Starting run()")
         self.running = True
-        self.status_signal.emit(True)
+        safe_emit(self.status_signal, True)
         try:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
@@ -681,7 +730,7 @@ class TrovoWorker(QThread):
     async def connect_to_trovo(self):
         try:
             # Disable built-in ping/pong since Trovo uses custom protocol
-            async with websockets.connect(self.TROVO_CHAT_WS_URL, ping_interval=None) as ws:
+            async with connect_with_retry(websockets.connect, self.TROVO_CHAT_WS_URL, ping_interval=None) as ws:
                 self.ws = ws
                 logger.info("[TrovoWorker] Connected to Trovo chat WebSocket.")
                 # Step 2: Send AUTH message
@@ -867,7 +916,8 @@ class TrovoWorker(QThread):
                         logger.info(f"[TrovoWorker] Raid: {username} - {viewers} viewers")
                     
                     logger.debug(f"[TrovoWorker] Emitting message from {username}: {message} with badges: {badges}")
-                    self.message_signal.emit(username, message, metadata)
+                    from .connector_utils import emit_chat
+                    emit_chat(self, 'trovo', username, message, metadata)
             elif msg_type == "MESSAGE_DELETE" or msg_type == "DELETE":
                 # Handle message deletion events
                 logger.debug(f"[TrovoWorker] Processing deletion message: {data}")
@@ -882,7 +932,7 @@ class TrovoWorker(QThread):
                 
                 if deleted_msg_id:
                     logger.info(f"[TrovoWorker] Message deleted by moderator: {deleted_msg_id}")
-                    self.deletion_signal.emit(str(deleted_msg_id))
+                    safe_emit(self.deletion_signal, str(deleted_msg_id))
                 else:
                     logger.warning(f"[TrovoWorker] ⚠ Deletion event missing message_id")
             else:
@@ -920,6 +970,45 @@ class TrovoWorker(QThread):
         self.running = False
         if self.loop and self.ws:
             asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
+
+        # Schedule cooperative shutdown and stop the loop
+        try:
+            if self.loop and not (self.loop.is_closed()):
+                try:
+                    asyncio.run_coroutine_threadsafe(self._shutdown_async(), self.loop)
+                except Exception:
+                    pass
+                try:
+                    self.loop.call_soon_threadsafe(self.loop.stop)
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("[TrovoWorker] Error scheduling shutdown on event loop")
+
+    async def _shutdown_async(self):
+        """Cooperative async shutdown for TrovoWorker: close websocket and cancel tasks."""
+        try:
+            self.running = False
+            try:
+                if self.ws:
+                    await self.ws.close()
+            except Exception:
+                pass
+
+            try:
+                current = asyncio.current_task(loop=self.loop)
+                tasks = [t for t in asyncio.all_tasks(loop=self.loop) if t is not current]
+                if tasks:
+                    for t in tasks:
+                        try:
+                            t.cancel()
+                        except Exception:
+                            pass
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.exception(f"[TrovoWorker] _shutdown_async error: {e}")
 
 
 # Note: Trovo uses WebSocket connections

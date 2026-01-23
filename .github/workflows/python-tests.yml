@@ -1,0 +1,86 @@
+name: Python tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_integration:
+        description: 'Run integration tests (requires headless display/Xvfb)'
+        required: false
+        default: 'false'
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.11']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Skip full requirements install in unit job; keep tests fast and cross-platform.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio PyQt6 requests websockets flask
+
+      - name: Run tests with pytest
+        run: |
+          python -m pytest -q --ignore-glob=tests/test_manual_*.py tests
+        env:
+          CI: true
+
+  integration:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_integration == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') }}
+    # Use Ubuntu 22.04 to ensure legacy audio packages like libasound2 are available
+    runs-on: ubuntu-22.04
+    needs: test
+    strategy:
+      matrix:
+        python-version: [3.12]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install system packages for headless Qt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libnss3 libxss1 libgtk-3-0 libgbm1 libasound2 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 fonts-liberation libegl1-mesa libgl1-mesa-glx
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            # Filter out Windows-only packages (pywin32, WMI) when running on Linux runners
+            grep -v -E '^(pywin32|WMI)(==|$)' requirements.txt > /tmp/reqs || true
+            pip install -r /tmp/reqs
+          fi
+      - name: Prepare logs dir
+        run: mkdir -p logs || true
+      - name: Run integration tests under Xvfb
+        run: |
+          # ensure pytest and PyQt6 are available for integration tests
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio PyQt6
+          xvfb-run -s "-screen 0 1280x720x24" bash -lc "python -m pytest -q --ignore-glob=tests/test_manual_*.py tests 2>&1 | tee integration_test_output.txt"
+        env:
+          CI: true
+      - name: Upload integration artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs
+          path: |
+            integration_test_output.txt
+            logs/**

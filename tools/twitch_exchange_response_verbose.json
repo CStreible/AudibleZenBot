@@ -1,0 +1,14 @@
+{
+  "ts": 1768943362,
+  "status_code": 200,
+  "text": "{\"access_token\":\"wpgnvsoi3kvza0gpwzyx69n1k2ikzm\",\"expires_in\":14382,\"refresh_token\":\"vprnovu6d69oewi9b3b1a2ixj3y61yukk8brkh76e1psa0jmfk\",\"scope\":[\"bits:read\",\"channel:manage:broadcast\",\"channel:read:redemptions\",\"channel:read:subscriptions\",\"chat:edit\",\"chat:read\",\"moderator:read:followers\",\"user:read:email\"],\"token_type\":\"bearer\"}\n",
+  "headers": {
+    "Date": "Tue, 20 Jan 2026 21:09:25 GMT",
+    "Content-Type": "application/json",
+    "Content-Length": "334",
+    "Connection": "keep-alive",
+    "Server": "nginx",
+    "Access-Control-Allow-Origin": "*",
+    "X-Ctxlog-Logid": "1-696fef04-5ac8c6e7437b015d00f9f815"
+  }
+}

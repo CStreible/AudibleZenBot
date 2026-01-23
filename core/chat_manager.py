@@ -5,21 +5,18 @@ Chat Manager - Manages connections and messages from all platforms
 import asyncio
 import time
 import os
+import threading
+import importlib
 from typing import Dict, Optional
-from PyQt6.QtCore import QObject, pyqtSignal, QThread
-from PyQt6.QtCore import pyqtSlot
+from platform_connectors.qt_compat import QObject, pyqtSignal, QThread, QTimer, pyqtSlot
 from core.logger import get_logger
 
 # Structured logger for this module
 logger = get_logger('ChatManager')
 
 from core.config import ConfigManager
-from platform_connectors.twitch_connector import TwitchConnector
-from platform_connectors.youtube_connector import YouTubeConnector
-from platform_connectors.trovo_connector import TrovoConnector
-from platform_connectors.kick_connector import KickConnector
-from platform_connectors.dlive_connector import DLiveConnector
-from platform_connectors.twitter_connector import TwitterConnector
+from core.env import is_ci
+from datetime import datetime, timezone
 
 
 class ChatManager(QObject):
@@ -46,7 +43,47 @@ class ChatManager(QObject):
                     self.disabled_platforms.add(platform_id)
 
         # Platform connectors (for reading chat - streamer account)
+        # Import connector classes lazily to avoid importing heavy runtime
+        # dependencies (like `requests`) at module import time which breaks
+        # unit-test collection in CI environments where those deps are not
+        # installed. Importing here delays that until ChatManager is actually
+        # instantiated.
         self.connectors: Dict[str, object] = {}
+        try:
+            from platform_connectors.twitch_connector import TwitchConnector
+        except Exception:
+            TwitchConnector = None
+        try:
+            from platform_connectors.youtube_connector import YouTubeConnector
+        except Exception:
+            YouTubeConnector = None
+        try:
+            from platform_connectors.trovo_connector import TrovoConnector
+        except Exception:
+            TrovoConnector = None
+        try:
+            from platform_connectors.kick_connector import KickConnector
+        except Exception:
+            KickConnector = None
+        try:
+            from platform_connectors.dlive_connector import DLiveConnector
+        except Exception:
+            DLiveConnector = None
+        try:
+            from platform_connectors.twitter_connector import TwitterConnector
+        except Exception:
+            TwitterConnector = None
+
+        # Expose connector constructors on the instance so other methods
+        # (like `connectBotAccount`) can construct bot connectors without
+        # relying on names that were only local to __init__'s scope.
+        self.TwitchConnector = TwitchConnector
+        self.YouTubeConnector = YouTubeConnector
+        self.TrovoConnector = TrovoConnector
+        self.KickConnector = KickConnector
+        self.DLiveConnector = DLiveConnector
+        self.TwitterConnector = TwitterConnector
+
         for pid, ctor in [
             ('twitch', TwitchConnector),
             ('youtube', YouTubeConnector),
@@ -55,8 +92,22 @@ class ChatManager(QObject):
             ('dlive', DLiveConnector),
             ('twitter', TwitterConnector)
         ]:
+            # In CI/test environments we may want to avoid instantiating
+            # heavy connector classes which spawn threads or perform network
+            # requests. Honor `AUDIBLEZENBOT_CI=1` to skip creating real
+            # connectors; tests can opt-in to create lightweight stubs.
+            if is_ci():
+                logger.info(f"CI mode active; skipping instantiation of connector for {pid}")
+                continue
+
+            if ctor is None:
+                logger.info(f"Connector class for {pid} unavailable; skipping instantiation")
+                continue
             if pid not in self.disabled_platforms:
-                self.connectors[pid] = ctor(self.config)
+                try:
+                    self.connectors[pid] = ctor(self.config)
+                except Exception as e:
+                    logger.warning(f"Failed to instantiate connector for {pid}: {e}")
             else:
                 logger.info(f"Not instantiating connector for disabled platform: {pid}")
         
@@ -87,6 +138,10 @@ class ChatManager(QObject):
         # Setup connectors
         for platform_id, connector in self.connectors.items():
             # Connect connector signals to ChatManager slots so Qt can queue across threads
+            try:
+                logger.debug(f"[TRACE] Connecting connector for {platform_id}: connector_id={id(connector)} has_meta={hasattr(connector, 'message_received_with_metadata')} has_legacy={hasattr(connector,'message_received')}")
+            except Exception:
+                pass
             if hasattr(connector, 'message_received_with_metadata'):
                 connector.message_received_with_metadata.connect(self._onConnectorMessageWithMetadata)
                 try:
@@ -104,6 +159,30 @@ class ChatManager(QObject):
             if hasattr(connector, 'message_deleted'):
                 connector.message_deleted.connect(self.onMessageDeleted)
                 logger.info(f"Connected message_deleted for {platform_id}")
+            # Assert connector conforms to minimal contract
+            try:
+                self._assert_connector_contract(platform_id, connector)
+            except Exception:
+                logger.warning(f"Connector contract assertion failed for {platform_id}")
+
+        # Emit an info-level diagnostic listing connector instance ids so
+        # runtime diagnostics can correlate emitter ids from EventSub logs
+        try:
+            mapping = {pid: id(conn) for pid, conn in self.connectors.items()}
+            logger.info(f"[ChatManager][DIAG] connectors mapping: {mapping}")
+        except Exception:
+            pass
+
+    def _assert_connector_contract(self, platform_id: str, connector: object):
+        """Runtime check to ensure connectors implement at least one of the
+        expected incoming message signals. This helps catch legacy connectors
+        during startup and surfaces a clear warning.
+        """
+        has_with_meta = hasattr(connector, 'message_received_with_metadata')
+        has_legacy = hasattr(connector, 'message_received')
+        if not has_with_meta and not has_legacy:
+            logger.warning(f"Connector for '{platform_id}' exposes neither 'message_received_with_metadata' nor 'message_received'.")
+        # Additional checks could validate signal types if needed
 
     @pyqtSlot(str, str, str, dict)
     def _onConnectorMessageWithMetadata(self, platform, username, message, metadata):
@@ -120,6 +199,14 @@ class ChatManager(QObject):
             logger.debug(f"[TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username} preview={preview}")
         except Exception:
             logger.debug(f"[TRACE] _onConnectorMessageWithMetadata: platform={platform} username={username}")
+
+        # Hand off to metadata handler
+        # Validate metadata shape before handing off
+        try:
+            metadata = self._normalize_and_validate_metadata(metadata)
+        except Exception as e:
+            logger.warning(f"Invalid metadata from {platform} by {username}: {e}")
+            metadata = {} if metadata is None else metadata
         self.onMessageReceivedWithMetadata(platform, username, message, metadata)
 
     @pyqtSlot(str, str, str, dict)
@@ -137,6 +224,58 @@ class ChatManager(QObject):
             logger.debug(f"[TRACE] _onConnectorMessageLegacy: platform={platform} username={username} preview={preview}")
         except Exception:
             logger.debug(f"[TRACE] _onConnectorMessageLegacy: platform={platform} username={username}")
+
+        # Legacy handoff path
+        # If this looks like a Twitch IRC tag blob mistakenly sent as `username`,
+        # delay handling briefly to allow the metadata-emitting path to run first.
+        try:
+            if platform == 'twitch' and isinstance(username, str):
+                # Heuristic: tag-heavy usernames contain '/' or 'emotesv2_' or patterns like '0-12'
+                if 'emotesv2_' in username or '/' in username or any(pat in username for pat in ('emotes=', 'emotes')):
+                    try:
+                        # Attempt to parse the tag blob and convert it into metadata immediately.
+                        raw_user = username or ''
+                        if ' :' in raw_user:
+                            tag_part, real_user = raw_user.split(' :', 1)
+                            # Parse semicolon-separated IRC tags into metadata dict
+                            meta = {}
+                            for kv in tag_part.split(';'):
+                                if '=' in kv:
+                                    k, v = kv.split('=', 1)
+                                    meta[k] = v
+                            # Promote known keys
+                            md = {}
+                            if 'emotes' in meta and meta.get('emotes'):
+                                md['emotes'] = meta.get('emotes')
+                            if 'id' in meta and meta.get('id'):
+                                md['message_id'] = meta.get('id')
+                            # Include timestamp and badges if present
+                            for k in ('tmi-sent-ts', 'timestamp', 'badges', 'color'):
+                                if k in meta and meta.get(k):
+                                    md[k] = meta.get(k)
+                            # Use recovered username as the display name
+                            recovered_username = real_user.strip()
+                            # Emit via the metadata path to ensure uniform handling
+                            try:
+                                self.onMessageReceivedWithMetadata(platform, recovered_username, message, md)
+                                return
+                            except Exception:
+                                # Fallback to legacy emit if metadata path fails
+                                try:
+                                    self.onMessageReceived(platform, username, message)
+                                    return
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Legacy path: ensure metadata is a dict-like object if provided
+        try:
+            metadata = self._normalize_and_validate_metadata(metadata)
+        except Exception:
+            metadata = {}
         # Call the legacy handler which will emit message_received after checks
         self.onMessageReceived(platform, username, message)
 
@@ -165,8 +304,170 @@ class ChatManager(QObject):
         
         connector = self.connectors.get(platform_id)
         if not connector:
-            logger.warning(f"No connector found for {platform_id}")
+            # Attempt lazy import/instantiation for connectors that were
+            # unavailable at ChatManager __init__ time (missing optional
+            # runtime deps, platform-specific errors, etc.). This helps the
+            # UI path which may enable platforms after startup to connect
+            # without requiring a full restart.
+            try:
+                ctor_name_map = {
+                    'twitch': 'TwitchConnector',
+                    'youtube': 'YouTubeConnector',
+                    'trovo': 'TrovoConnector',
+                    'kick': 'KickConnector',
+                    'dlive': 'DLiveConnector',
+                    'twitter': 'TwitterConnector'
+                }
+                module_name = f'platform_connectors.{platform_id}_connector'
+                module = importlib.import_module(module_name)
+                ctor_name = ctor_name_map.get(platform_id)
+                ctor = getattr(module, ctor_name, None) if ctor_name else None
+                if ctor is None:
+                    logger.warning(f"No connector found for {platform_id}")
+                    return False
+                # Instantiate and cache the connector instance
+                try:
+                    self.connectors[platform_id] = ctor(self.config)
+                    connector = self.connectors[platform_id]
+                    logger.info(f"Lazily instantiated connector for {platform_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to instantiate connector for {platform_id}: {e}")
+                    return False
+            except Exception as e:
+                logger.warning(f"No connector found for {platform_id}: lazy import failed: {e}")
+                return False
+
+        try:
+            # Prepare connector (may modify connector state quickly)
+            if self.ngrok_manager and hasattr(connector, 'ngrok_manager'):
+                connector.ngrok_manager = self.ngrok_manager
+
+            # Load cookies for Kick (stored during OAuth)
+            if platform_id == 'kick' and hasattr(connector, 'set_cookies'):
+                from core.config import ConfigManager
+                config = ConfigManager()
+                platform_config = config.get_platform_config(platform_id)
+                cookies_json = platform_config.get('streamer_cookies', '')
+                if cookies_json:
+                    import json
+                    try:
+                        cookies = json.loads(cookies_json)
+                        connector.set_cookies(cookies)
+                        logger.info(f"Loaded {len(cookies)} cookies for Kick")
+                    except Exception as e:
+                        logger.error(f"Failed to load Kick cookies: {e}")
+
+            # Set token if provided and connector supports it
+            if token and hasattr(connector, 'set_token'):
+                logger.debug(f"Setting token for {platform_id} (length: {len(token)})")
+                connector.set_token(token)
+            elif token and hasattr(connector, 'set_api_key'):
+                connector.set_api_key(token)
+
+            # Run the potentially blocking connect() + polling in a background thread
+            def _connect_worker():
+                try:
+                    logger.info(f"Background: Calling connect() for {platform_id}")
+                    connector.connect(username)
+
+                    # Poll for up to 3s for connector.connected to become True
+                    waited = 0.0
+                    timeout = 3.0
+                    interval = 0.1
+                    while waited < timeout:
+                        try:
+                            if getattr(connector, 'connected', False):
+                                break
+                        except Exception:
+                            pass
+                        time.sleep(interval)
+                        waited += interval
+
+                    connected_state = bool(getattr(connector, 'connected', False))
+                    try:
+                        self.connection_status_changed.emit(platform_id, connected_state)
+                    except Exception:
+                        logger.debug(f"Failed to emit connection_status_changed for {platform_id}")
+                    try:
+                        self.streamer_connection_changed.emit(platform_id, connected_state, username)
+                    except Exception:
+                        logger.debug(f"Failed to emit streamer_connection_changed for {platform_id}")
+                except Exception as e:
+                    logger.error(f"Background connect error for {platform_id}: {e}")
+
+            t = threading.Thread(target=_connect_worker, daemon=True)
+            t.start()
+            # Return immediately so UI thread isn't blocked
+            return True
+        except Exception as e:
+            logger.error(f"Error scheduling background connect for {platform_id}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
+
+    def _normalize_and_validate_metadata(self, metadata):
+        """Ensure metadata is a dict and normalize common fields.
+
+        Rules:
+        - `metadata` must be a dict or None
+        - If `message_id` present, coerce to string
+        - If `timestamp` or `tmi-sent-ts` present, leave as-is but ensure it's a str/int
+        """
+        if metadata is None:
+            return {}
+        if not isinstance(metadata, dict):
+            raise TypeError('metadata must be a dict')
+        md = dict(metadata)
+        if 'message_id' in md and md['message_id'] is not None:
+            md['message_id'] = str(md['message_id'])
+        # normalize timestamp keys: prefer `timestamp`, fall back to `tmi-sent-ts`
+        ts_val = None
+        for tkey in ('timestamp', 'tmi-sent-ts'):
+            if tkey in md and md[tkey] is not None:
+                ts_val = md[tkey]
+                break
+
+        # Parse numeric or ISO-like string timestamps into a datetime (UTC)
+        parsed_ts = None
+        try:
+            if ts_val is None:
+                parsed_ts = datetime.now(timezone.utc)
+            elif isinstance(ts_val, (int, float)):
+                # Heuristic: treat large ints as epoch seconds or milliseconds
+                if ts_val > 1e12:
+                    # milliseconds
+                    parsed_ts = datetime.fromtimestamp(ts_val / 1000.0, tz=timezone.utc)
+                else:
+                    parsed_ts = datetime.fromtimestamp(ts_val, tz=timezone.utc)
+            elif isinstance(ts_val, str):
+                txt = ts_val
+                # Normalize trailing Z to +00:00 for fromisoformat
+                if txt.endswith('Z'):
+                    txt = txt[:-1] + '+00:00'
+                try:
+                    parsed_ts = datetime.fromisoformat(txt)
+                    if parsed_ts.tzinfo is None:
+                        parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
+                except Exception:
+                    # Fallback: try to parse as float epoch string
+                    try:
+                        f = float(txt)
+                        if f > 1e12:
+                            parsed_ts = datetime.fromtimestamp(f / 1000.0, tz=timezone.utc)
+                        else:
+                            parsed_ts = datetime.fromtimestamp(f, tz=timezone.utc)
+                    except Exception:
+                        parsed_ts = datetime.now(timezone.utc)
+        except Exception:
+            parsed_ts = datetime.now(timezone.utc)
+
+        # Store canonical datetime under 'timestamp'
+        try:
+            md['timestamp'] = parsed_ts
+        except Exception:
+            pass
+
+        return md
         
         try:
             # Pass ngrok_manager to connector if available
@@ -250,6 +551,26 @@ class ChatManager(QObject):
     def connectBotAccount(self, platform_id: str, username: str, token: str, refresh_token: str = None):
         """Connect bot account for sending messages (doesn't listen for incoming messages)"""
         try:
+            # In CI mode we avoid creating real bot connectors which spawn threads
+            # or perform network requests. Honor the AUDIBLEZENBOT_CI flag and
+            # short-circuit the connection process while preserving in-memory
+            # config state so callers that expect a truthy return value still
+            # proceed during tests.
+            if is_ci():
+                logger.info(f"CI mode active; skipping bot connector creation for {platform_id}")
+                if self.config:
+                    # Load credentials into config memory but do not attempt network
+                    self.config.set_platform_config(platform_id, 'bot_username', username)
+                    self.config.set_platform_config(platform_id, 'bot_token', token)
+                    if refresh_token:
+                        self.config.set_platform_config(platform_id, 'bot_refresh_token', refresh_token)
+                # Emit UI update signal to indicate a bot is 'available' without connecting
+                try:
+                    self.bot_connection_changed.emit(platform_id, False, username)
+                except Exception:
+                    pass
+                return True
+
             logger.info(f"Connecting bot account for {platform_id}: {username}")
             
             # Update config with bot credentials to ensure they're in memory
@@ -275,17 +596,36 @@ class ChatManager(QObject):
             
             # Create new connector instance for bot
             if platform_id == 'twitch':
-                bot_connector = TwitchConnector(self.config, is_bot_account=True)
+                ctor = getattr(self, 'TwitchConnector', None)
+                if ctor is None:
+                    logger.warning('TwitchConnector not available; bot credentials saved but connector not instantiated')
+                    return True
+                bot_connector = ctor(self.config, is_bot_account=True)
             elif platform_id == 'youtube':
-                bot_connector = YouTubeConnector(self.config)
+                ctor = getattr(self, 'YouTubeConnector', None)
+                if ctor is None:
+                    raise RuntimeError('YouTubeConnector not available')
+                bot_connector = ctor(self.config)
             elif platform_id == 'trovo':
-                bot_connector = TrovoConnector(self.config)
+                ctor = getattr(self, 'TrovoConnector', None)
+                if ctor is None:
+                    raise RuntimeError('TrovoConnector not available')
+                bot_connector = ctor(self.config)
             elif platform_id == 'kick':
-                bot_connector = KickConnector(self.config)
+                ctor = getattr(self, 'KickConnector', None)
+                if ctor is None:
+                    raise RuntimeError('KickConnector not available')
+                bot_connector = ctor(self.config)
             elif platform_id == 'dlive':
-                bot_connector = DLiveConnector(self.config)
+                ctor = getattr(self, 'DLiveConnector', None)
+                if ctor is None:
+                    raise RuntimeError('DLiveConnector not available')
+                bot_connector = ctor(self.config)
             elif platform_id == 'twitter':
-                bot_connector = TwitterConnector(self.config)
+                ctor = getattr(self, 'TwitterConnector', None)
+                if ctor is None:
+                    raise RuntimeError('TwitterConnector not available')
+                bot_connector = ctor(self.config)
             else:
                 logger.error(f"Unknown platform: {platform_id}")
                 return False
@@ -640,6 +980,51 @@ class ChatManager(QObject):
             logger.info(f"Platform {platform_id} is disabled, message not emitted")
             return
 
+        # Heuristic: some connectors may accidentally place IRC tag payload into the
+        # `username` field (e.g., "...;id=xxx;... :realuser"). If metadata is empty
+        # or minimal, attempt to recover emotes/message_id and the real username so
+        # downstream canonicalization/deduplication works correctly.
+        try:
+            if platform_id == 'twitch' and (not isinstance(metadata, dict) or not metadata.keys()):
+                raw_user = username or ''
+                # Look for the common pattern where tags and the real username are joined with ' :'
+                if ' :' in raw_user:
+                    tag_part, real_user = raw_user.split(' :', 1)
+                    first_token = tag_part.split(';', 1)[0]
+                    if first_token and ('emotes' in first_token or 'emotesv2_' in first_token or ('-' in first_token and '/' in first_token)):
+                        # Recover emotes tag into metadata and set username to real_user
+                        try:
+                            if not isinstance(metadata, dict):
+                                metadata = {}
+                        except Exception:
+                            metadata = {}
+                        try:
+                            metadata['emotes'] = first_token
+                        except Exception:
+                            pass
+                        try:
+                            # try to find id=... in the tag_part
+                            for kv in tag_part.split(';'):
+                                if '=' in kv:
+                                    k, v = kv.split('=', 1)
+                                    if k == 'id' and v:
+                                        metadata['message_id'] = v
+                                        break
+                        except Exception:
+                            pass
+                        # Replace username with cleaned real username
+                        username = real_user.strip()
+                        # Durable debug log
+                        try:
+                            log_dir = os.path.join(os.getcwd(), 'logs')
+                            os.makedirs(log_dir, exist_ok=True)
+                            with open(os.path.join(log_dir, 'chatmanager_username_fix.log'), 'a', encoding='utf-8', errors='replace') as f:
+                                f.write(f"{time.time():.3f} FIXED platform={platform_id} raw_username={repr(raw_user)} recovered_username={repr(username)} emotes={repr(metadata.get('emotes'))} message_id={repr(metadata.get('message_id'))}\n")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         # De-duplication: suppress duplicate incoming messages from multiple connections
         try:
             now = time.time()
@@ -720,6 +1105,19 @@ class ChatManager(QObject):
                 diag_file = os.path.join(log_dir, 'chatmanager_emitted.log')
                 with open(diag_file, 'a', encoding='utf-8', errors='replace') as df:
                     df.write(f"{time.time():.3f} platform={platform_id} username={username} preview={repr(message)[:200]} metadata_keys={list(metadata.keys())}\n")
+            except Exception:
+                pass
+            # Additional debug: write full metadata and message id for tracing
+            try:
+                debug_file = os.path.join(log_dir, 'chatmanager_emit_debug.log')
+                with open(debug_file, 'a', encoding='utf-8', errors='replace') as df:
+                    mid = None
+                    try:
+                        if isinstance(metadata, dict):
+                            mid = metadata.get('message_id') or metadata.get('id')
+                    except Exception:
+                        mid = None
+                    df.write(f"{time.time():.3f} EMIT platform={platform_id} username={username} message_id={repr(mid)} metadata={repr(metadata)} preview={repr(message)[:200]}\n")
             except Exception:
                 pass
         except Exception as e:

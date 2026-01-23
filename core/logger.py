@@ -7,6 +7,31 @@ import os
 from datetime import datetime
 from typing import Optional
 import re
+import logging
+
+
+def _configure_standard_logging(manager: 'LogManager'):
+    """Configure Python's standard `logging` to route through the app's
+    stdout/stderr stream so third-party logs are captured and formatted
+    similarly to the project's `SimpleLogger` output.
+
+    This creates a StreamHandler that writes to `sys.stdout` and applies
+    a formatter matching `[{name}][{LEVEL}] message` so LogManager's
+    filtering continues to work on the combined output.
+    """
+    try:
+        root = logging.getLogger()
+        # Avoid adding multiple handlers on repeated calls
+        if any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+            return
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter('[%(name)s][%(levelname)s] %(message)s')
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+        # Default to INFO unless overridden in config
+        root.setLevel(logging.INFO)
+    except Exception:
+        pass
 
 
 class TeeOutput:
@@ -153,6 +178,11 @@ class LogManager:
             if k not in self.level_map:
                 # default: allow INFO+ and suppress DEBUG/TRACE/DIAG
                 self.level_map[k] = True if k in ('INFO', 'WARN', 'ERROR', 'CRITICAL') else False
+        # Configure Python stdlib logging to route through TeeOutput
+        try:
+            _configure_standard_logging(self)
+        except Exception:
+            pass
 
     def should_emit(self, message: str) -> bool:
         """Decide whether a message should be emitted to console/log based on
@@ -162,97 +192,84 @@ class LogManager:
         try:
             if not message:
                 return True
-            # Always allow errors and critical runtime markers
+
             lowered = message.lower()
+            # Always allow obvious error indicators and tracebacks to surface
             if any(tag in lowered for tag in ['unhandled exception', '[error]', '[✗', 'traceback']):
                 return True
 
-            # Check message log level (expects format [Component][LEVEL] ...)
+            # Parse bracketed tokens like [Component][LEVEL]
+            level = None
+            comp = None
             try:
                 tokens = re.findall(r'\[([^\]]+)\]', message)
-                level = None
                 if len(tokens) >= 2:
-                    # tokens[1] expected to be level like DEBUG, INFO
                     level = tokens[1].strip().upper()
-                if level:
-                    # Map WARN to WARN key used in UI/config
-                    if level == 'WARNING':
-                        level = 'WARN'
-                    # If global-level is disabled, consult per-category overrides before rejecting
-                    if not self.level_map.get(level, True):
-                        # determine component/category
-                        comp = None
-                        try:
-                            start = message.find('[')
-                            end = message.find(']', start + 1)
-                            if start != -1 and end != -1:
-                                comp = message[start+1:end].strip().lower()
-                        except Exception:
-                            comp = None
-
-                        # check per-category level override
-                        if comp:
-                            # direct match
-                            cat_map = self.category_levels.get(comp, {}) if isinstance(self.category_levels, dict) else {}
-                            if isinstance(cat_map, dict) and cat_map.get(level):
-                                return True
-                            # parent (e.g., connectors.twitch -> connectors)
-                            if '.' in comp:
-                                parent = comp.split('.')[0]
-                                parent_map = self.category_levels.get(parent, {})
-                                if isinstance(parent_map, dict) and parent_map.get(level):
-                                    return True
-                            # try connectors.<comp>
-                            connectors_map = self.category_levels.get(f'connectors.{comp}', {})
-                            if isinstance(connectors_map, dict) and connectors_map.get(level):
-                                return True
-                        # no per-category override found -> respect global suppression
-                        return False
+                if len(tokens) >= 1:
+                    comp = tokens[0].strip().lower()
             except Exception:
-                pass
+                level = None
+                comp = None
+
+            # Normalize level naming
+            if level == 'WARNING':
+                level = 'WARN'
+
+            # If level is known, enforce global level_map first and allow
+            # category overrides only when configured.
+            if level:
+                if not self.level_map.get(level, True):
+                    # consult per-category overrides
+                    if comp:
+                        # direct component override
+                        cat_map = self.category_levels.get(comp, {}) if isinstance(self.category_levels, dict) else {}
+                        if isinstance(cat_map, dict) and cat_map.get(level):
+                            return True
+                        # parent group override (e.g., connectors)
+                        if '.' in comp:
+                            parent = comp.split('.')[0]
+                            parent_map = self.category_levels.get(parent, {})
+                            if isinstance(parent_map, dict) and parent_map.get(level):
+                                return True
+                        # try connectors.<comp>
+                        connectors_map = self.category_levels.get(f'connectors.{comp}', {})
+                        if isinstance(connectors_map, dict) and connectors_map.get(level):
+                            return True
+                    # no overrides -> suppress this level
+                    return False
 
             # If global debug is enabled, allow everything
             if self.debug_map.get('all') or self.debug_map.get('global'):
                 return True
 
-            # If message contains verbose tags, consult per-component flags
+            # For verbose levels/tags (TRACE/DIAG/DEBUG), require explicit
+            # per-component or debug_map enablement
             verbose_tags = ['[trace]', '[diag]', '[debug]']
-            if not any(t in lowered for t in verbose_tags):
-                # Not a verbose message; allow by default
-                return True
+            is_verbose = False
+            if level in ('TRACE', 'DIAG', 'DEBUG'):
+                is_verbose = True
+            elif any(t in lowered for t in verbose_tags):
+                is_verbose = True
 
-            # Extract first bracketed token as component, e.g. [ChatManager][TRACE]
-            comp = None
-            try:
-                # Find first occurrence like [Name]
-                start = message.find('[')
-                end = message.find(']', start + 1)
-                if start != -1 and end != -1:
-                    comp = message[start+1:end].strip().lower()
-            except Exception:
-                comp = None
-
-            # Support dotted component names like connectors.twitch
-            if comp:
-                # direct component match
-                if self.debug_map.get(comp):
-                    return True
-                # try parent group (e.g. connectors.twitch -> connectors)
-                parts = comp.split('.')
-                if len(parts) > 1:
-                    parent = parts[0]
-                    if self.debug_map.get(parent):
+            if is_verbose:
+                # If component-level debug enabled, allow
+                if comp:
+                    if self.debug_map.get(comp):
                         return True
-                # also allow explicit mapping like 'twitch' to 'connectors.twitch'
-                if self.debug_map.get(f"connectors.{comp}"):
-                    return True
+                    # parent (e.g., connectors.twitch -> connectors)
+                    parts = comp.split('.')
+                    if len(parts) > 1 and self.debug_map.get(parts[0]):
+                        return True
+                    # allow mapping connectors.<comp>
+                    if self.debug_map.get(f'connectors.{comp}'):
+                        return True
+                # nothing enabled -> suppress verbose
+                return False
 
-            # No explicit enable for this component; suppress verbose line
-                return True
-
-            # No explicit enable for this component; suppress verbose line
-            return False
+            # Non-verbose messages default to allowed (INFO/WARN/ERROR/CRITICAL)
+            return True
         except Exception:
+            # On unexpected errors, be permissive to avoid hiding useful logs
             return True
     
     def start_logging(self):

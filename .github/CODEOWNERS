@@ -1,0 +1,6 @@
+# Code owners: set repository owner for all paths
+* @CStreible
+
+# Optionally, specialize:
+# /core/ @CStreible
+# /platform_connectors/ @CStreible
