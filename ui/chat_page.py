@@ -277,6 +277,35 @@ def get_username_color(username: str) -> str:
     color_index = hash_int % len(USERNAME_COLORS)
     
     return USERNAME_COLORS[color_index]
+
+
+def build_data_uri_for_emote(emid, mgr=None):
+    """Try to build a data URI for an emote using the manager, falling back
+    to reading the local cache files `resources/emotes/twitch_<id>.(png|gif)`.
+    Returns the data URI string or None if unavailable."""
+    try:
+        data_uri = None
+        if mgr is not None:
+            try:
+                data_uri = mgr.get_emote_data_uri(str(emid))
+            except Exception:
+                data_uri = None
+
+        if data_uri:
+            return data_uri
+
+        import base64
+        cache_dir = getattr(mgr, 'cache_dir', None) or os.path.join('resources', 'emotes')
+        for _ext in ('png', 'gif'):
+            try_path = os.path.join(cache_dir, f"twitch_{emid}.{_ext}")
+            if os.path.exists(try_path):
+                with open(try_path, 'rb') as _f:
+                    _b = _f.read()
+                _mime = 'image/gif' if try_path.lower().endswith('.gif') else 'image/png'
+                return f'data:{_mime};base64,' + base64.b64encode(_b).decode()
+    except Exception:
+        pass
+    return None
     
 
 def get_badge_html(badge_str: str, platform: str = 'twitch') -> str:
@@ -3043,9 +3072,107 @@ class ChatPage(QWidget):
                         except Exception:
                             pass
 
+                        # If any probed images are file:// and have naturalWidth==0, try immediate replacement
+                        try:
+                            if results and isinstance(results, (list, tuple)):
+                                try:
+                                    from core.twitch_emotes import get_manager as _get_twitch_manager
+                                    mgr = _get_twitch_manager() if _get_twitch_manager is not None else None
+                                except Exception:
+                                    mgr = None
+                                if mgr:
+                                    import time, os
+                                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                                    for ent in results:
+                                        try:
+                                            if not ent:
+                                                continue
+                                            cur = ent.get('currentSrc') or ''
+                                            nw = int(ent.get('naturalWidth') or 0)
+                                            emid = ent.get('dataEmoteId') or ent.get('dataEmoteID') or ent.get('dataEmote')
+                                            if not emid:
+                                                continue
+                                            if cur.startswith('file:///') and nw == 0:
+                                                data_uri = build_data_uri_for_emote(emid, mgr)
+                                                if not data_uri:
+                                                    continue
+                                                safe_uri = data_uri.replace('\\', '\\\\').replace('"', '\\"')
+                                                js_set = f'''(function() {{ try {{ var imgs = document.querySelectorAll('.message[data-message-id="{message_id}"] img[data-emote-id="{emid}"]'); for(var i=0;i<imgs.length;i++){{ (function(img){{ try{{ var newImg = new Image(); newImg.onload = function(){{ try{{ img.src="{safe_uri}"; img.classList.remove('placeholder'); }}catch(e){{}} }}; newImg.onerror = function(){{}}; newImg.src="{safe_uri}"; }}catch(e){{}} }})(imgs[i]); }} }}catch(e){{}} }})()'''
+                                                try:
+                                                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                                        df.write(f"{time.time():.3f} RETRY_EMOTE_REPLACE message_id={message_id} emote_id={emid} via_probe\n")
+                                                        try:
+                                                            df.flush(); os.fsync(df.fileno())
+                                                        except Exception:
+                                                            pass
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    self._invoke_queue_js(js_set, None)
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            pass
+                        except Exception:
+                            pass
+                        except Exception:
+                            pass
+
                     try:
                         # Use runJavaScript directly with a short delayed callback to allow resources to start loading
                         QTimer.singleShot(80, lambda: page.runJavaScript(js_probe, _probe_cb))
+
+                        # Schedule a follow-up check to catch images that failed to decode from file:///
+                        try:
+                            js_check_missing = f'''(function() {{ var node = document.querySelector('.message[data-message-id="{message_id}"]'); if(!node) return []; var imgs = node.querySelectorAll('img[data-emote-id]'); return Array.from(imgs).filter(i => (!i.complete) || (i.naturalWidth===0)).map(i=>i.getAttribute('data-emote-id')); }})()'''
+
+                            def _missing_cb(bad_ids):
+                                try:
+                                    if not bad_ids:
+                                        return
+                                    try:
+                                        from core.twitch_emotes import get_manager as _get_twitch_manager
+                                        mgr = _get_twitch_manager() if _get_twitch_manager is not None else None
+                                    except Exception:
+                                        mgr = None
+                                    if not mgr:
+                                        return
+                                    import time, os
+                                    dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                                    os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                                    for emid in bad_ids:
+                                        try:
+                                            if not emid:
+                                                continue
+                                            data_uri = build_data_uri_for_emote(emid, mgr)
+                                            if not data_uri:
+                                                continue
+                                            safe_uri = data_uri.replace('\\', '\\\\').replace('"', '\\"')
+                                            js_set = f'''(function() {{ try {{ var imgs = document.querySelectorAll('.message[data-message-id="{message_id}"] img[data-emote-id="{emid}"]'); for(var i=0;i<imgs.length;i++){{ (function(img){{ try{{ var newImg = new Image(); newImg.onload = function(){{ try{{ img.src="{safe_uri}"; img.classList.remove('placeholder'); }}catch(e){{}} }}; newImg.onerror = function(){{}}; newImg.src="{safe_uri}"; }}catch(e){{}} }})(imgs[i]); }} }}catch(e){{}} }})()'''
+                                            try:
+                                                # Instrumentation
+                                                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                                    df.write(f"{time.time():.3f} RETRY_EMOTE_REPLACE message_id={message_id} emote_id={emid}\n")
+                                                    try:
+                                                        df.flush(); os.fsync(df.fileno())
+                                                    except Exception:
+                                                        pass
+                                            except Exception:
+                                                pass
+                                            try:
+                                                self._invoke_queue_js(js_set, None)
+                                            except Exception:
+                                                pass
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                            # Run after a slightly longer delay to allow system to attempt file-based loads
+                            QTimer.singleShot(360, lambda: page.runJavaScript(js_check_missing, _missing_cb))
+                        except Exception:
+                            pass
                     except Exception:
                         try:
                             page.runJavaScript(js_probe, _probe_cb)
