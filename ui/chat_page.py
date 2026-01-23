@@ -1449,7 +1449,16 @@ class ChatPage(QWidget):
                                 emobj = frag.get('emote') or {}
                                 emote_id = None
                                 try:
-                                    emote_id = str(emobj.get('id') or emobj.get('emote_id') or frag.get('id')) if isinstance(emobj, dict) else None
+                                    # Prefer explicit nested emote id from fragment payload
+                                    if isinstance(emobj, dict):
+                                        emobj_id = emobj.get('id') or emobj.get('emote_id')
+                                    else:
+                                        emobj_id = None
+                                    if emobj_id:
+                                        emote_id = str(emobj_id)
+                                    else:
+                                        # Fallback to top-level fragment id if present
+                                        emote_id = str(frag.get('id')) if frag.get('id') else None
                                 except Exception:
                                     emote_id = None
 
@@ -1551,14 +1560,9 @@ class ChatPage(QWidget):
                                             emobj2 = emobj2 or {}
                                         url = mgr._select_image_url(emobj2) if emobj2 else None
                                         ext = 'gif' if url and url.lower().endswith('.gif') else 'png'
-                                        name = emobj2.get('name') or emobj2.get('emote_name') or emobj2.get('code') or ''
-                                        base_part = f"twitch_{emote_id}_{name}" if name else f"twitch_{emote_id}"
-                                        safe_base = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in base_part)
-                                        if len(safe_base) > 50:
-                                            safe_base = safe_base[:50]
-                                        import hashlib as _hashlib
-                                        h = _hashlib.sha1((name or str(emote_id)).encode('utf-8')).hexdigest()[:8]
-                                        safe_fname = f"{safe_base}_{h}.{ext}"
+                                        # Use id-only stable filename to match TwitchEmoteManager
+                                        # cache naming (twitch_<id>.<ext>).
+                                        safe_fname = f"twitch_{emote_id}.{ext}"
                                         fpath = None
                                         try:
                                             cache_dir = getattr(mgr, 'cache_dir', None) or os.path.join('resources', 'emotes')
@@ -1747,7 +1751,14 @@ class ChatPage(QWidget):
                                         emobj_local = frag_local.get('emote') or {}
                                         emote_id_local = None
                                         try:
-                                            emote_id_local = str(emobj_local.get('id') or emobj_local.get('emote_id') or frag_local.get('id')) if isinstance(emobj_local, dict) else None
+                                            if isinstance(emobj_local, dict):
+                                                emobj_id_local = emobj_local.get('id') or emobj_local.get('emote_id')
+                                            else:
+                                                emobj_id_local = None
+                                            if emobj_id_local:
+                                                emote_id_local = str(emobj_id_local)
+                                            else:
+                                                emote_id_local = str(frag_local.get('id')) if frag_local.get('id') else None
                                         except Exception:
                                             emote_id_local = None
 
@@ -1777,7 +1788,23 @@ class ChatPage(QWidget):
 
                                                     if set_ids_local and mgr_local:
                                                         try:
-                                                            mgr_local.fetch_emote_sets(set_ids_local)
+                                                            # If we can determine an emote id and its cache file exists, skip fetching the emote set
+                                                            skip_fetch = False
+                                                            try:
+                                                                if emote_id_local:
+                                                                    try:
+                                                                        cache_dir_check = getattr(mgr_local, 'cache_dir', None) or os.path.join('resources', 'emotes')
+                                                                        p_png = os.path.join(cache_dir_check, f"twitch_{emote_id_local}.png")
+                                                                        p_gif = os.path.join(cache_dir_check, f"twitch_{emote_id_local}.gif")
+                                                                        if os.path.exists(p_png) or os.path.exists(p_gif):
+                                                                            skip_fetch = True
+                                                                    except Exception:
+                                                                        skip_fetch = False
+                                                            except Exception:
+                                                                skip_fetch = False
+
+                                                            if not skip_fetch:
+                                                                mgr_local.fetch_emote_sets(set_ids_local)
                                                         except Exception:
                                                             pass
 
@@ -1803,8 +1830,25 @@ class ChatPage(QWidget):
                                                 fpath_local = os.path.join(cache_dir_local, safe_fname_local)
 
                                                 if fpath_local and os.path.exists(fpath_local):
-                                                    abs_path_local = os.path.abspath(fpath_local).replace('\\', '/')
-                                                    uri_used_local = f'file:///{abs_path_local}'
+                                                    # Prefer inline data URI to avoid WebEngine local-file decoding issues;
+                                                    # fallback to file:/// if data URI cannot be produced.
+                                                    try:
+                                                        data_uri_local = None
+                                                        try:
+                                                            data_uri_local = mgr_local.get_emote_data_uri(emote_id_local, broadcaster_id=broadcaster_id_local)
+                                                        except Exception:
+                                                            data_uri_local = None
+                                                        if data_uri_local:
+                                                            uri_used_local = data_uri_local
+                                                        else:
+                                                            abs_path_local = os.path.abspath(fpath_local).replace('\\', '/')
+                                                            uri_used_local = f'file:///{abs_path_local}'
+                                                    except Exception:
+                                                        try:
+                                                            abs_path_local = os.path.abspath(fpath_local).replace('\\', '/')
+                                                            uri_used_local = f'file:///{abs_path_local}'
+                                                        except Exception:
+                                                            uri_used_local = None
                                                 else:
                                                     try:
                                                         uri_used_local = mgr_local.get_emote_data_uri(emote_id_local, broadcaster_id=broadcaster_id_local) if mgr_local else None
@@ -1823,9 +1867,28 @@ class ChatPage(QWidget):
                                                 with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
                                                     emid = emote_id_local or (emobj_local.get('id') if isinstance(emobj_local, dict) else None)
                                                     df.write(f"{time.time():.3f} QUEUE_EMOTE_URI message_id={message_id_snapshot} emote_id={emid} uri={uri_used_local}\n")
+                                                    # Also log the filename/path that will be rendered (if available)
+                                                    try:
+                                                        rendered_fname = None
+                                                        if uri_used_local and uri_used_local.startswith('file:///'):
+                                                            rendered_fname = uri_used_local[len('file:///'):]
+                                                        else:
+                                                            # fallback to the computed safe filename if we have an emote id
+                                                            try:
+                                                                rendered_fname = os.path.join(cache_dir_local, safe_fname_local) if (cache_dir_local and emote_id_local) else None
+                                                            except Exception:
+                                                                rendered_fname = None
+                                                    except Exception:
+                                                        rendered_fname = None
+                                                    df.write(f"{time.time():.3f} RENDER_EMOTE_FILE message_id={message_id_snapshot} emote_id={emid} filename={rendered_fname} uri={uri_used_local}\n")
                                             except Exception:
                                                 pass
-                                            frag_parts_local.append(f'<img src="{uri_used_local}" alt="{html.escape(frag_local.get("text") or "emote")}" style="width:1.2em; height:1.2em; vertical-align:middle; margin:0 2px;" />')
+                                            # Ensure we include a data-emote-id so later cache-update logic can target this element
+                                            try:
+                                                em_attr = html.escape(str(emote_id_local)) if emote_id_local else html.escape(str(emobj_local.get('id') if isinstance(emobj_local, dict) else ''))
+                                            except Exception:
+                                                em_attr = html.escape(str(emote_id_local)) if emote_id_local else ''
+                                            frag_parts_local.append(f'<img data-emote-id="{em_attr}" src="{uri_used_local}" alt="{html.escape(frag_local.get("text") or "emote")}" style="width:1.2em; height:1.2em; vertical-align:middle; margin:0 2px;" />')
                                         else:
                                             # Insert a lightweight placeholder image so the
                                             # message can be rendered immediately and later
@@ -1834,20 +1897,31 @@ class ChatPage(QWidget):
                                                 placeholder = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
                                                 emid_for_attr = html.escape(str(emote_id_local)) if emote_id_local else html.escape(str(frag_local.get('text') or ''))
                                                 img_html = f'<img data-emote-id="{emid_for_attr}" src="{placeholder}" alt="{html.escape(frag_local.get("text") or "emote")}" style="width:1.2em; height:1.2em; vertical-align:middle; margin:0 2px;" class="emote placeholder" />'
-                                                frag_parts_local.append(img_html)
-                                                # Instrumentation: record placeholder insertion
+                                                # Instrumentation: record placeholder insertion and the filename we would use
                                                 try:
                                                     import time, os
                                                     dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
                                                     os.makedirs(os.path.dirname(dlog), exist_ok=True)
                                                     with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
                                                         df.write(f"{time.time():.3f} QUEUE_EMOTE_URI placeholder message_id={message_id_snapshot} emote_id={emote_id_local}\n")
+                                                        # record the intended filename (if computable)
+                                                        try:
+                                                            intended_fname = None
+                                                            if emote_id_local:
+                                                                try:
+                                                                    intended_fname = os.path.join(cache_dir_local, safe_fname_local)
+                                                                except Exception:
+                                                                    intended_fname = None
+                                                            df.write(f"{time.time():.3f} RENDER_EMOTE_FILE-placeholder message_id={message_id_snapshot} emote_id={emote_id_local} filename={intended_fname} uri=placeholder\n")
+                                                        except Exception:
+                                                            pass
                                                         try:
                                                             df.flush(); os.fsync(df.fileno())
                                                         except Exception:
                                                             pass
                                                 except Exception:
                                                     pass
+                                                frag_parts_local.append(img_html)
                                                 # Best-effort: trigger background warming for this emote
                                                 try:
                                                         if mgr_local and emote_id_local:
@@ -2948,6 +3022,37 @@ class ChatPage(QWidget):
         try:
             js_code_local = f"var chatBody = document.getElementById('chat-body'); if (chatBody) {{ chatBody.insertAdjacentHTML('beforeend', `{wrapped_html}`); var messages = chatBody.querySelectorAll('.message'); var newMessage = messages[messages.length - 1]; newMessage.classList.add('message-slide-in'); setTimeout(function() {{ newMessage.classList.remove('message-slide-in'); newMessage.classList.add('message-wiggle'); setTimeout(function() {{ newMessage.classList.remove('message-wiggle'); }}, 2000); }}, 800); window.scrollTo(0, document.body.scrollHeight); }} true;"
             self._invoke_queue_js(js_code_local, message_id)
+
+            # After insertion, probe the inserted message's <img> elements
+            try:
+                page = self.chat_display.page() if self.chat_display else None
+                if page:
+                    js_probe = f'''(function() {{ var node = document.querySelector('.message[data-message-id="{message_id}"]'); if(!node) return []; var imgs = node.querySelectorAll('img'); return Array.from(imgs).map(i=>({{src:i.src, currentSrc:i.currentSrc, complete:i.complete, naturalWidth:i.naturalWidth, naturalHeight:i.naturalHeight, dataEmoteId:i.getAttribute('data-emote-id')}})); }})()'''
+
+                    def _probe_cb(results):
+                        try:
+                            import time, os, json
+                            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                df.write(f"{time.time():.3f} RENDER_PROBE message_id={message_id} probe={json.dumps(results)}\n")
+                                try:
+                                    df.flush(); os.fsync(df.fileno())
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+                    try:
+                        # Use runJavaScript directly with a short delayed callback to allow resources to start loading
+                        QTimer.singleShot(80, lambda: page.runJavaScript(js_probe, _probe_cb))
+                    except Exception:
+                        try:
+                            page.runJavaScript(js_probe, _probe_cb)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
             # After inserting the message, proactively check for any placeholders
             # that might already be cached (race: emote cached before DOM insert).
