@@ -10,7 +10,7 @@ import time
 import requests
 import json
 from typing import Optional
-from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.qt_compat import QThread, pyqtSignal
 from platform_connectors.base_connector import BasePlatformConnector
 from core.badge_manager import get_badge_manager
 import websockets
@@ -59,6 +59,16 @@ class TwitchConnector(BasePlatformConnector):
                 return inst
         # Otherwise create a fresh instance
         obj = super().__new__(cls)
+        # When creating a fresh streamer connector instance, log a short
+        # creation stack trace so we can later correlate which code path
+        # instantiated unexpected extra connectors at runtime.
+        try:
+            if not is_bot_account:
+                import traceback
+                stack = ''.join(traceback.format_stack(limit=12))
+                logger.info(f"[TwitchConnector][TRACE] __new__: created streamer connector id={id(obj)} stack:\n{stack}")
+        except Exception:
+            pass
         if not is_bot_account:
             cls._streamer_instance = obj
         return obj
@@ -157,7 +167,15 @@ class TwitchConnector(BasePlatformConnector):
                 if self.is_bot_account:
                     self.config.set_platform_config('twitch', 'bot_token', token)
                 else:
+                    # Persist under canonical key and the legacy/ui-facing key
                     self.config.set_platform_config('twitch', 'oauth_token', token)
+                    try:
+                        # Keep legacy `streamer_token` in sync so UI code that
+                        # reads/writes `streamer_token` doesn't cause the
+                        # token to appear missing after an OAuth flow.
+                        self.config.set_platform_config('twitch', 'streamer_token', token)
+                    except Exception:
+                        pass
         else:
             # If config is blank, use default
             config_token = self.config.get_platform_config(section).get('oauth_token', '') if self.config else ''
@@ -295,72 +313,42 @@ class TwitchConnector(BasePlatformConnector):
         except Exception:
             pass
 
-        self.worker = TwitchWorker(
-            username,  # Channel to join
-            self.oauth_token,
-            self.client_id,
-            self.refresh_token,
-            self.client_secret,
-            nick=nick_for_auth,  # Nick for authentication
-            connector=self  # Pass connector reference for API calls
-        )
-        try:
-            logger.debug(f"[TwitchConnector][TRACE] Created worker id={id(self.worker)} for connector_id={id(self)} is_bot={self.is_bot_account}")
-        except Exception:
-            pass
-        # Ensure worker holds a direct reference to this connector object
-        try:
-            self.worker.connector = self
-            # If this is a bot connector and ChatManager attached a streamer_connector,
-            # wire incoming metadata to the streamer's handler so messages parsed by
-            # the bot connection still reach the UI.
-            streamer_conn = getattr(self, 'streamer_connector', None)
-            if self.is_bot_account and streamer_conn and hasattr(streamer_conn, 'onMessageReceivedWithMetadata'):
+        # Always use EventSub for incoming chat messages for streamer connectors
+        if not self.is_bot_account:
+            logger.info(f"[TwitchConnector] Starting EventSub worker for channel chat (streamer): {username}")
+            try:
+                self.eventsub_worker = TwitchEventSubWorker(
+                    self.oauth_token,
+                    self.client_id,
+                    username
+                )
+                # Ensure worker has back-reference to the connector instance
                 try:
-                    self.worker.set_metadata_callback(streamer_conn.onMessageReceivedWithMetadata)
-                    # Mark worker as allowed to forward to streamer (explicit wiring)
-                    try:
-                        self.worker._forward_to_streamer = True
-                    except Exception:
-                        pass
-                    logger.debug(f"[TwitchConnector][TRACE] bot-worker wired to streamer handler: worker_id={id(self.worker)} streamer_connector_id={id(streamer_conn)} forward_flag_set={getattr(self.worker, '_forward_to_streamer', False)}")
+                    self.eventsub_worker.connector = self
                 except Exception:
                     pass
-            else:
-                # For streamer connectors, ensure the worker has the connector's handler
-                if not self.is_bot_account:
-                    try:
-                        self.worker.set_metadata_callback(self.onMessageReceivedWithMetadata)
-                    except Exception:
-                        pass
-            logger.debug(f"[TwitchConnector][TRACE] post-create wiring: worker_id={id(self.worker)} connector_id={id(self)}")
-        except Exception:
-            pass
-        self.worker_thread = QThread()
-        
-        self.worker.moveToThread(self.worker_thread)
-        # For bot accounts we do NOT connect incoming message callbacks because
-        # bot connectors are intended for sending only; otherwise IRC echoes
-        # from the channel can be parsed by the bot connector and emit
-        # messages that the UI isn't subscribed to (causing missing UI updates).
-        if not self.is_bot_account:
-            self.worker.message_signal.connect(self.onMessageReceived)
-            self.worker.set_metadata_callback(self.onMessageReceivedWithMetadata)
-            self.worker.set_deletion_callback(self.onMessageDeleted)
-        else:
-            # Still connect status and error signals for bot connector health
-            logger.info(f"[TwitchConnector] Bot account: skipping incoming message wiring for {nick_for_auth}")
-        # Always connect status and error signals
-        self.worker.status_signal.connect(self.onStatusChanged)
-        self.worker.error_signal.connect(self.onError)
-        
-        self.worker_thread.started.connect(self.worker.run)
-        self.worker_thread.start()
-        try:
-            self._last_worker_created = time.time()
-            logger.debug(f"[TwitchConnector][TRACE] Worker started timestamp set to {self._last_worker_created:.3f}")
-        except Exception:
-            pass
+                self.eventsub_worker_thread = QThread()
+                self.eventsub_worker.moveToThread(self.eventsub_worker_thread)
+                # Wire EventSub signals similar to normal path
+                self.eventsub_worker.redemption_signal.connect(self.onRedemption)
+                self.eventsub_worker.event_signal.connect(self.onEvent)
+                self.eventsub_worker.status_signal.connect(self.onEventSubStatus)
+                self.eventsub_worker.error_signal.connect(self.onError)
+                try:
+                    self.eventsub_worker.reauth_signal.connect(self._on_eventsub_reauth_requested)
+                except Exception:
+                    pass
+                self.eventsub_worker_thread.started.connect(self.eventsub_worker.run)
+                self.eventsub_worker_thread.start()
+                # Do not create IRC worker for streamer connectors (EventSub handles incoming chat)
+                return
+            except Exception as e:
+                logger.exception(f"[TwitchConnector] Failed to start EventSub worker: {e}")
+
+        # IRC/TwitchWorker removed: we no longer create an IRC worker for incoming or outgoing chat.
+        # Incoming chat is provided exclusively via EventSub (started earlier for streamer connectors).
+        # Outgoing/bot sends use the Helix REST API in `send_message()` below.
+        self.worker = None
         
         # Only start EventSub worker for streamer account
         if not self.is_bot_account:
@@ -370,6 +358,10 @@ class TwitchConnector(BasePlatformConnector):
                 self.client_id,
                 username
             )
+            try:
+                self.eventsub_worker.connector = self
+            except Exception:
+                pass
             self.eventsub_worker_thread = QThread()
             self.eventsub_worker.moveToThread(self.eventsub_worker_thread)
             self.eventsub_worker.redemption_signal.connect(self.onRedemption)
@@ -439,6 +431,39 @@ class TwitchConnector(BasePlatformConnector):
                     self.refresh_token = new_refresh
 
                 logger.info("[TwitchConnector] Token refreshed successfully")
+                # Restart EventSub worker (if running) so it picks up the refreshed token
+                try:
+                    if getattr(self, 'eventsub_worker', None):
+                        logger.info("[TwitchConnector] Restarting EventSub worker to pick up refreshed token")
+                        try:
+                            # Use the helper to stop the worker/thread safely
+                            self._stop_eventsub_worker(timeout_ms=5000)
+                        except Exception as e:
+                            logger.exception(f"[TwitchConnector] Error stopping eventsub worker: {e}")
+
+                        # Start a fresh EventSub worker with the new token
+                        try:
+                            self.eventsub_worker = TwitchEventSubWorker(
+                                self.oauth_token,
+                                self.client_id,
+                                getattr(self, 'username', None)
+                            )
+                            self.eventsub_worker_thread = QThread()
+                            self.eventsub_worker.moveToThread(self.eventsub_worker_thread)
+                            self.eventsub_worker.redemption_signal.connect(self.onRedemption)
+                            self.eventsub_worker.event_signal.connect(self.onEvent)
+                            self.eventsub_worker.status_signal.connect(self.onEventSubStatus)
+                            self.eventsub_worker.error_signal.connect(self.onError)
+                            try:
+                                self.eventsub_worker.reauth_signal.connect(self._on_eventsub_reauth_requested)
+                            except Exception:
+                                pass
+                            self.eventsub_worker_thread.started.connect(self.eventsub_worker.run)
+                            self.eventsub_worker_thread.start()
+                        except Exception as e:
+                            logger.exception(f"[TwitchConnector] Error restarting EventSub worker: {e}")
+                except Exception:
+                    pass
 
                 # Persist rotated tokens to config for both bot and streamer keys
                 try:
@@ -496,10 +521,143 @@ class TwitchConnector(BasePlatformConnector):
 
             if msg.clickedButton() == reauth_btn:
                 try:
-                    webbrowser.open(oauth_url)
-                    logger.info("[EventSub] Opened browser for re-authorization")
+                    # Start a lightweight temporary local HTTP server on localhost:8888
+                    # to accept the OAuth redirect. Run in a daemon thread so it
+                    # doesn't block the UI. The handler will shut the server down
+                    # after serving one request.
+                    import threading
+                    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+                    # Capture parent connector for use inside handler
+                    parent_connector = self
+
+                    class _OneShotHandler(BaseHTTPRequestHandler):
+                        def do_GET(self):
+                            from urllib.parse import urlparse, parse_qs
+                            qs = parse_qs(urlparse(self.path).query)
+                            code = qs.get('code', [None])[0]
+
+                            # Default: respond to browser so user isn't left waiting
+                            def _respond(status, body_bytes):
+                                try:
+                                    self.send_response(status)
+                                    self.send_header('Content-type', 'text/html')
+                                    self.end_headers()
+                                    self.wfile.write(body_bytes)
+                                except Exception:
+                                    pass
+
+                            try:
+                                if not code:
+                                    _respond(200, b'<html><body><h1>No authorization code found.</h1></body></html>')
+                                    return
+
+                                # Exchange authorization code for tokens
+                                redirect_uri = 'http://localhost:8888/callback'
+                                try:
+                                    session = requests.Session()
+                                    resp = session.post(
+                                        'https://id.twitch.tv/oauth2/token',
+                                        data={
+                                            'client_id': parent_connector.client_id,
+                                            'client_secret': parent_connector.client_secret,
+                                            'grant_type': 'authorization_code',
+                                            'code': code,
+                                            'redirect_uri': redirect_uri
+                                        },
+                                        timeout=10
+                                    )
+                                except requests.exceptions.RequestException:
+                                    _respond(500, b'<html><body><h1>Authorization error.</h1></body></html>')
+                                    return
+
+                                if resp.status_code != 200:
+                                    _respond(500, b'<html><body><h1>Authorization failed.</h1><p>Could not exchange code for tokens.</p></body></html>')
+                                    return
+
+                                data = resp.json()
+                                # Update connector tokens in-memory
+                                parent_connector.oauth_token = data.get('access_token', parent_connector.oauth_token)
+                                new_refresh = data.get('refresh_token')
+                                if new_refresh:
+                                    parent_connector.refresh_token = new_refresh
+
+                                # Persist rotated tokens to config
+                                try:
+                                    if getattr(parent_connector, 'config', None):
+                                        if getattr(parent_connector, 'is_bot_account', False):
+                                            parent_connector.config.set_platform_config('twitch', 'bot_token', parent_connector.oauth_token)
+                                            parent_connector.config.set_platform_config('twitch', 'bot_refresh_token', parent_connector.refresh_token)
+                                        else:
+                                            parent_connector.config.set_platform_config('twitch', 'oauth_token', parent_connector.oauth_token)
+                                            parent_connector.config.set_platform_config('twitch', 'streamer_refresh_token', parent_connector.refresh_token)
+                                except Exception:
+                                    pass
+
+                                _respond(200, b'<html><body><h1>Authorization complete.</h1><p>You may close this window and return to AudibleZenBot.</p></body></html>')
+
+                                # Restart EventSub worker so it picks up refreshed token
+                                try:
+                                    # Stop existing worker if present using helper
+                                    try:
+                                        parent_connector._stop_eventsub_worker(timeout_ms=5000)
+                                    except Exception:
+                                        logger.exception("[TwitchConnector] Error stopping parent eventsub worker from callback handler")
+
+                                    # Start fresh worker
+                                    try:
+                                        parent_connector.eventsub_worker = TwitchEventSubWorker(
+                                            parent_connector.oauth_token,
+                                            parent_connector.client_id,
+                                            getattr(parent_connector, 'username', None)
+                                        )
+                                        try:
+                                            parent_connector.eventsub_worker.connector = parent_connector
+                                        except Exception:
+                                            pass
+                                        parent_connector.eventsub_worker_thread = QThread()
+                                        parent_connector.eventsub_worker.moveToThread(parent_connector.eventsub_worker_thread)
+                                        parent_connector.eventsub_worker.redemption_signal.connect(parent_connector.onRedemption)
+                                        parent_connector.eventsub_worker.event_signal.connect(parent_connector.onEvent)
+                                        parent_connector.eventsub_worker.status_signal.connect(parent_connector.onEventSubStatus)
+                                        parent_connector.eventsub_worker.error_signal.connect(parent_connector.onError)
+                                        try:
+                                            parent_connector.eventsub_worker.reauth_signal.connect(parent_connector._on_eventsub_reauth_requested)
+                                        except Exception:
+                                            pass
+                                        parent_connector.eventsub_worker_thread.started.connect(parent_connector.eventsub_worker.run)
+                                        parent_connector.eventsub_worker_thread.start()
+                                    except Exception:
+                                        logger.exception("[TwitchConnector] Error starting parent eventsub worker from callback handler")
+                                except Exception:
+                                    logger.exception("[TwitchConnector] Unexpected error restarting parent eventsub worker from callback handler")
+
+                            finally:
+                                # Ensure server shuts down after handling
+                                try:
+                                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+                                except Exception:
+                                    pass
+
+                        def log_message(self, format, *args):
+                            return
+
+                    try:
+                        server = HTTPServer(('localhost', 8888), _OneShotHandler)
+                        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+                        server_thread.start()
+                        logger.info("[EventSub] Started temporary local OAuth callback server on port 8888")
+                    except OSError as e:
+                        logger.warning(f"[EventSub] Could not start temporary callback server on port 8888: {e}")
+                        server = None
+
+                    try:
+                        webbrowser.open(oauth_url)
+                        logger.info("[EventSub] Opened browser for re-authorization")
+                    except Exception as e:
+                        logger.exception(f"[EventSub] Failed to open browser: {e}")
                 except Exception as e:
-                    logger.exception(f"[EventSub] Failed to open browser: {e}")
+                    logger.exception(f"[TwitchConnector] Error launching re-auth browser/server: {e}")
         except Exception as e:
             logger.exception(f"[TwitchConnector] Error showing re-auth dialog: {e}")
         
@@ -529,6 +687,41 @@ class TwitchConnector(BasePlatformConnector):
                 if new_refresh:
                     self.refresh_token = new_refresh
                 logger.info(f"Twitch token refreshed successfully")
+                # Restart EventSub worker (if running) so it picks up the refreshed token
+                try:
+                    if getattr(self, 'eventsub_worker', None):
+                        logger.info("[TwitchConnector] Restarting EventSub worker to pick up refreshed token")
+                        try:
+                            self._stop_eventsub_worker(timeout_ms=5000)
+                        except Exception as e:
+                            logger.exception(f"[TwitchConnector] Error stopping eventsub worker: {e}")
+
+                        try:
+                            self.eventsub_worker = TwitchEventSubWorker(
+                                self.oauth_token,
+                                self.client_id,
+                                getattr(self, 'username', None)
+                            )
+                            try:
+                                self.eventsub_worker.connector = self
+                            except Exception:
+                                pass
+                            self.eventsub_worker_thread = QThread()
+                            self.eventsub_worker.moveToThread(self.eventsub_worker_thread)
+                            self.eventsub_worker.redemption_signal.connect(self.onRedemption)
+                            self.eventsub_worker.event_signal.connect(self.onEvent)
+                            self.eventsub_worker.status_signal.connect(self.onEventSubStatus)
+                            self.eventsub_worker.error_signal.connect(self.onError)
+                            try:
+                                self.eventsub_worker.reauth_signal.connect(self._on_eventsub_reauth_requested)
+                            except Exception:
+                                pass
+                            self.eventsub_worker_thread.started.connect(self.eventsub_worker.run)
+                            self.eventsub_worker_thread.start()
+                        except Exception as e:
+                            logger.exception(f"[TwitchConnector] Error restarting EventSub worker: {e}")
+                except Exception:
+                    pass
                 return True
             elif response.status_code == 400:
                 logger.warning(f"⚠️ Token refresh failed: Invalid refresh token")
@@ -593,15 +786,131 @@ class TwitchConnector(BasePlatformConnector):
         except Exception:
             pass
     
+    def _stop_eventsub_worker(self, timeout_ms: int = 5000):
+        """Safely stop the EventSub worker and its thread.
+
+        Attempts a graceful `quit()` + `wait()` on the QThread and falls
+        back to `terminate()` if the thread doesn't stop within `timeout_ms`.
+        Clears references to the worker and thread on completion.
+        """
+        try:
+            # Ask worker to stop first (worker.stop should be idempotent)
+            if getattr(self, 'eventsub_worker', None):
+                try:
+                    self.eventsub_worker.stop()
+                except Exception:
+                    logger.exception("[TwitchConnector] Exception while stopping eventsub_worker")
+
+            # Then stop the thread cleanly
+            if getattr(self, 'eventsub_worker_thread', None):
+                try:
+                    if self.eventsub_worker_thread.isRunning():
+                        self.eventsub_worker_thread.quit()
+                        self.eventsub_worker_thread.wait(timeout_ms)
+                        if self.eventsub_worker_thread.isRunning():
+                            logger.warning("[TwitchConnector] EventSub thread did not stop in time; forcing terminate()")
+                            self.eventsub_worker_thread.terminate()
+                            self.eventsub_worker_thread.wait(2000)
+                            if self.eventsub_worker_thread.isRunning():
+                                logger.error("[TwitchConnector] EventSub thread still running after terminate()")
+                except Exception:
+                    logger.exception("[TwitchConnector] Exception while stopping eventsub_worker_thread")
+
+            # Clear references so a fresh worker can be created
+            self.eventsub_worker = None
+            self.eventsub_worker_thread = None
+        except Exception:
+            logger.exception("[TwitchConnector] Unexpected error while stopping EventSub worker")
     def send_message(self, message: str):
         """Send a message to Twitch chat"""
-        logger.debug(f"[TwitchConnector] send_message called: worker={self.worker is not None}, connected={self.connected}, message={message[:50]}")
-        if self.worker and self.connected:
-            logger.debug(f"[TwitchConnector] Calling worker.send_message()")
-            result = self.worker.send_message(message)
-            return result
-        else:
-            logger.warning(f"[TwitchConnector] ⚠ Cannot send: worker={self.worker is not None}, connected={self.connected}")
+        logger.debug(f"[TwitchConnector] send_message called via REST API: message={message[:50]}")
+
+        # Ensure we have broadcaster ID cached
+        try:
+            headers = {
+                'Client-ID': self.client_id,
+                'Authorization': f'Bearer {self.oauth_token}'
+            }
+
+            # Get broadcaster ID if not cached
+            if not hasattr(self, 'broadcaster_id') or not self.broadcaster_id:
+                if not getattr(self, 'username', None):
+                    logger.warning("[TwitchConnector] Cannot send message: missing connector username (broadcaster login)")
+                    return False
+                session = _make_retry_session()
+                try:
+                    user_response = session.get(
+                        'https://api.twitch.tv/helix/users',
+                        headers=headers,
+                        params={'login': self.username},
+                        timeout=10
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.exception(f"[Twitch] Network error fetching broadcaster ID: {e}")
+                    return False
+
+                if user_response.status_code == 200:
+                    users = user_response.json().get('data', [])
+                    if users:
+                        self.broadcaster_id = users[0]['id']
+                        logger.info(f"[Twitch] Cached broadcaster_id: {self.broadcaster_id}")
+                    else:
+                        logger.warning(f"[Twitch] Could not find user ID for {self.username}")
+                        return False
+                else:
+                    logger.error(f"[Twitch] Failed to get broadcaster ID: {user_response.status_code}")
+                    return False
+
+            # Determine moderator_id: prefer bot username if available (for bot connectors)
+            moderator_id = self.broadcaster_id
+            try:
+                if self.is_bot_account:
+                    bot_login = getattr(self, 'bot_username', None) or getattr(self, 'username', None)
+                    if bot_login and bot_login.lower() != getattr(self, 'username', '').lower():
+                        session = _make_retry_session()
+                        try:
+                            bot_resp = session.get(
+                                'https://api.twitch.tv/helix/users',
+                                headers=headers,
+                                params={'login': bot_login},
+                                timeout=10
+                            )
+                        except requests.exceptions.RequestException:
+                            bot_resp = None
+                        if bot_resp and bot_resp.status_code == 200:
+                            bdata = bot_resp.json().get('data', [])
+                            if bdata:
+                                moderator_id = bdata[0]['id']
+                # Fallback: moderator_id stays as broadcaster_id
+            except Exception:
+                pass
+
+            # Send chat message via Helix API
+            session = _make_retry_session()
+            try:
+                resp = session.post(
+                    'https://api.twitch.tv/helix/chat/messages',
+                    headers=headers,
+                    params={
+                        'broadcaster_id': self.broadcaster_id,
+                        'moderator_id': moderator_id
+                    },
+                    json={'content': message},
+                    timeout=10
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception(f"[Twitch] Network error sending chat message: {e}")
+                return False
+
+            if resp.status_code in (200, 201, 204):
+                logger.info(f"[Twitch] Message sent via Helix API: {message[:50]}")
+                return True
+            else:
+                logger.error(f"[Twitch] Failed to send message: {resp.status_code} - {resp.text}")
+                return False
+
+        except Exception as e:
+            logger.exception(f"[TwitchConnector] send_message error: {e}")
             return False
     
     def delete_message(self, message_id: str):
@@ -1169,6 +1478,20 @@ class TwitchWorker(QThread):
                     
         self.status_signal.emit(False)
         self.ws = None
+        # Also update the connector directly in case Qt signal delivery is
+        # not active (headless or non-Qt test runners).
+        try:
+            if self.connector:
+                try:
+                    self.connector.connected = False
+                except Exception:
+                    pass
+                try:
+                    self.connector.connection_status.emit(False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
     
     async def refresh_token_if_needed(self):
         """Refresh token during active connection"""
@@ -1279,6 +1602,20 @@ class TwitchWorker(QThread):
         # Log join confirmation
         if f'JOIN #{self.channel}' in raw_message:
             logger.info(f"Successfully joined #{self.channel}")
+            # If a connector object is attached, mark it connected and
+            # emit the connection status so non-Qt callers can observe it
+            try:
+                if self.connector:
+                    try:
+                        self.connector.connected = True
+                    except Exception:
+                        pass
+                    try:
+                        self.connector.connection_status.emit(True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             return
         
         # Check for error messages (NOTICE, msg_banned, msg_suspended, etc.)
@@ -1683,7 +2020,185 @@ class TwitchWorker(QThread):
                 # Extract emotes from tags
                 if 'emotes' in tags and tags['emotes']:
                     metadata['emotes'] = tags['emotes']
+
+                # Persist pretty-printed incoming PRIVMSG tags for debugging and
+                # note whether fragments are present. This helps inspect incoming
+                # IRC tag JSON and quickly find messages that included a
+                # `fragments` payload.
+                try:
+                    import json as _json, time as _time, os as _os
+                    log_dir = _os.path.join(_os.getcwd(), 'logs')
+                    _os.makedirs(log_dir, exist_ok=True)
+                    pname = _os.path.join(log_dir, f"privmsg_{self.channel}.log")
+                    with open(pname, 'a', encoding='utf-8') as _wf:
+                        _wf.write(f"{_time.time():.3f} PRIVMSG raw={raw_message!r}\n")
+                        try:
+                            _wf.write(_json.dumps(tags, indent=2, ensure_ascii=False))
+                        except Exception:
+                            _wf.write(str(tags))
+                        _wf.write('\n\n')
+                except Exception:
+                    pass
+
+                # Flag in metadata if fragments tag is present (will be parsed later)
+                try:
+                    metadata['has_fragments'] = bool(tags.get('fragments'))
+                except Exception:
+                    metadata['has_fragments'] = False
+
+            # Prefer reconstructing the message from `fragments` tag when available.
+            # IRC tag values are escaped using IRCv3 tag escaping (e.g. `\s` for space,
+            # `\:` for semicolon, `\\` for backslash, `\r`/`\n` for CR/LF). We
+            # provide a small unescape helper and attempt to parse `fragments` as
+            # JSON. If that fails, fall back to the `text` tag, and finally to the
+            # parsed body from the PRIVMSG payload.
+            def _irc_tag_unescape(s: str) -> str:
+                try:
+                    return s.replace('\\s', ' ').replace('\\:', ';').replace('\\\\', '\\').replace('\\r', '\r').replace('\\n', '\n')
+                except Exception:
+                    return s
+
+            prebuilt_message = None
+            try:
+                fr = tags.get('fragments') if tags else None
+                if fr:
+                    # Unescape then try to parse JSON array of fragments.
+                    # Build an ordered message string and an `emotes` mapping
+                    # keyed by emote id -> list of "start-end" ranges
+                    try:
+                        un = _irc_tag_unescape(fr)
+                        import json
+                        frag = json.loads(un)
+                        if isinstance(frag, (list, tuple)):
+                            parts = []
+                            emotes_map = {}
+                            # get twitch manager if available to resolve ids/sets
+                            try:
+                                from core.twitch_emotes import get_manager as _get_mgr
+                                _t_mgr = _get_mgr()
+                            except Exception:
+                                _t_mgr = None
+
+                            for f in frag:
+                                if isinstance(f, str):
+                                    parts.append(f)
+                                    continue
+                                if not isinstance(f, dict):
+                                    continue
+
+                                ftype = (f.get('type') or '').lower()
+                                # Text fragment
+                                if ftype == 'text' and 'text' in f:
+                                    parts.append(f.get('text') or '')
+                                    continue
+
+                                # Emote fragment (structure may be nested under 'emote')
+                                emobj = f.get('emote') if 'emote' in f else f
+                                if emobj and (ftype == 'emote' or 'id' in emobj or 'emote_id' in emobj):
+                                    em_id = None
+                                    try:
+                                        em_id = str(emobj.get('id') or emobj.get('emote_id') or emobj.get('emoteId') or '')
+                                    except Exception:
+                                        em_id = None
+
+                                    em_text = None
+                                    try:
+                                        em_text = emobj.get('text') or emobj.get('name') or emobj.get('code') or ''
+                                    except Exception:
+                                        em_text = ''
+
+                                    # Append the textual placeholder so positions align
+                                    start = len(''.join(parts))
+                                    placeholder = em_text or ''
+                                    parts.append(placeholder)
+                                    end = len(''.join(parts)) - 1
+
+                                    if em_id:
+                                        have_emote = False
+                                        try:
+                                            if _t_mgr and str(em_id) in getattr(_t_mgr, 'id_map', {}):
+                                                have_emote = True
+                                        except Exception:
+                                            have_emote = False
+
+                                        # If emote not known but emote_set present, try to fetch the set
+                                        try:
+                                            em_set = emobj.get('emote_set_id') or emobj.get('emote_set') or emobj.get('emote_set_ids')
+                                        except Exception:
+                                            em_set = None
+
+                                        if not have_emote and em_set and _t_mgr:
+                                            try:
+                                                # schedule immediate fetch (will perform immediate fetch
+                                                # when no throttler worker is active) and populate id_map
+                                                _t_mgr.schedule_emote_set_fetch(em_set)
+                                                if str(em_id) in getattr(_t_mgr, 'id_map', {}):
+                                                    have_emote = True
+                                            except Exception:
+                                                pass
+
+                                        if have_emote:
+                                            try:
+                                                lst = emotes_map.get(str(em_id)) or []
+                                                lst.append(f"{start}-{end}")
+                                                emotes_map[str(em_id)] = lst
+                                            except Exception:
+                                                pass
+                                        else:
+                                            # emote not available; we'll leave the placeholder text
+                                            # which will be escaped by the renderer later
+                                            pass
+                                    continue
+
+                                # Fallback: if fragment has 'text' key, use it
+                                if 'text' in f:
+                                    parts.append(f.get('text') or '')
+                                    continue
+
+                            prebuilt_message = ''.join(parts).strip()
+                            # attach emotes_map to metadata if any
+                            if emotes_map:
+                                metadata['emotes'] = emotes_map
+
+                            # Persist pretty-printed fragments JSON to logs for later inspection
+                            try:
+                                import json as _json, time as _time, os as _os
+                                log_dir = _os.path.join(_os.getcwd(), 'logs')
+                                _os.makedirs(log_dir, exist_ok=True)
+                                fname = _os.path.join(log_dir, f"fragments_{self.channel}.log")
+                                with open(fname, 'a', encoding='utf-8') as wf:
+                                    wf.write(f"{_time.time():.3f} FRAGMENTS worker={id(self)} message_id={metadata.get('message_id')!r}\n")
+                                    wf.write(_json.dumps(frag, indent=2, ensure_ascii=False))
+                                    wf.write('\n\n')
+                            except Exception:
+                                pass
+
+                            # expose parsed fragments for callers/tests
+                            try:
+                                metadata['fragments_json'] = frag
+                            except Exception:
+                                pass
+                        elif isinstance(frag, dict) and 'text' in frag:
+                            prebuilt_message = str(frag.get('text') or '').strip()
+                    except Exception:
+                        prebuilt_message = None
+
+                if not prebuilt_message:
+                    # Try `text` tag (escaped) as a fallback
+                    txt = tags.get('text') if tags else None
+                    if txt:
+                        prebuilt_message = _irc_tag_unescape(txt).strip()
+            except Exception:
+                prebuilt_message = None
             
+            # Prepare body without leading tags when present
+            body = raw_message
+            try:
+                if raw_message.startswith('@'):
+                    body = raw_message.split(' ', 1)[1]
+            except Exception:
+                body = raw_message
+
             # IRC format can be:
             # Simple: :username!username@username.tmi.twitch.tv PRIVMSG #channel :message
             # With tags: @badge-info=;badges=;color=#... :username!username@username.tmi.twitch.tv PRIVMSG #channel :message
@@ -1692,12 +2207,16 @@ class TwitchWorker(QThread):
             # - capture anything up to '!' as username (allows unicode/symbols)
             # - accept any non-space channel name after PRIVMSG
             # - capture the remainder after the first ':' following PRIVMSG as the message
-            match = re.search(r':([^!]+)!.*?PRIVMSG\s+([^\s]+)\s+:(.+)', raw_message)
+            match = re.search(r':([^!]+)!.*?PRIVMSG\s+([^\s]+)\s+:(.+)', body)
 
             if match:
                 username = match.group(1)
                 # group(2) is the channel, group(3) is the message
-                message = match.group(3).strip()
+                # If we reconstructed message from tags, prefer that.
+                if prebuilt_message:
+                    message = prebuilt_message
+                else:
+                    message = match.group(3).strip()
                 logger.debug(f"[Twitch Parser] [OK] Parsed: {username}: {message[:50]}")
                 try:
                     import time, os
@@ -1711,14 +2230,17 @@ class TwitchWorker(QThread):
                 return username, message, metadata
             
             # Try simpler fallback pattern (handle odd tag ordering or missing parts)
-            if 'PRIVMSG' in raw_message and ':' in raw_message:
+            if 'PRIVMSG' in body and ':' in body:
                 try:
                     # Capture channel and message after PRIVMSG
-                    m = re.search(r'PRIVMSG\s+([^\s]+)\s+:(.+)', raw_message)
-                    username_match = re.search(r':([^!]+)!', raw_message)
+                    m = re.search(r'PRIVMSG\s+([^\s]+)\s+:(.+)', body)
+                    username_match = re.search(r':([^!]+)!', body)
                     if m and username_match:
                         username = username_match.group(1)
-                        message = m.group(2).strip()
+                        if prebuilt_message:
+                            message = prebuilt_message
+                        else:
+                            message = m.group(2).strip()
                         logger.debug(f"[Twitch Parser] [OK] Parsed (alt): {username}: {message[:50]}")
                         try:
                             import time, os
@@ -1844,17 +2366,32 @@ class TwitchEventSubWorker(QThread):
                 scopes = data.get('scopes', [])
                 # remember scopes for later diagnostic logging
                 self.validated_scopes = scopes
+                # remember raw token info and type (user vs app)
+                self.token_info = data
+                # token is a user token when a user_id or login is present
+                self.token_user_id = data.get('user_id') or data.get('login')
+                self.token_type = 'user' if self.token_user_id else 'app'
                 logger.info(f"[EventSub] Token validated. Granted scopes:")
                 for scope in scopes:
                     logger.info(f"[EventSub]    [OK] {scope}")
 
-                # Check for required scopes
-                required_scopes = {
-                    'channel:read:redemptions': 'Channel Points Redemptions',
-                    'channel:read:subscriptions': 'Subscribers & Gift Subs',
-                    'bits:read': 'Cheers/Bits',
-                    'moderator:read:followers': 'Followers'
-                }
+                # Check for required scopes. Requirements differ for user vs app (client credentials) tokens.
+                if getattr(self, 'token_type', 'user') == 'user':
+                    required_scopes = {
+                        'user:read:chat': 'User Read Chat',
+                        'chat:read': 'Chat Read',
+                        'chat:edit': 'Chat Edit',
+                        'channel:read:redemptions': 'Channel Points Redemptions',
+                        'channel:read:subscriptions': 'Subscribers & Gift Subs',
+                        'bits:read': 'Cheers/Bits',
+                        'moderator:read:followers': 'Followers'
+                    }
+                else:
+                    # App (client credentials) tokens should use bot scopes
+                    required_scopes = {
+                        'channel:bot': 'Channel Bot',
+                        'user:bot': 'User Bot'
+                    }
 
                 missing = []
                 for scope, name in required_scopes.items():
@@ -1876,17 +2413,30 @@ class TwitchEventSubWorker(QThread):
                             twitch_client_id = _tcfg.get('client_id', '')
                         except Exception:
                             twitch_client_id = ''
+                        # Use localhost:8888 for Twitch reauth by default (non-ngrok local flow)
                         redirect_uri = "http://localhost:8888/callback"
-                        scopes_needed = [
-                            'user:read:email',
-                            'chat:read',
-                            'chat:edit',
-                            'channel:read:subscriptions',
-                            'channel:manage:broadcast',
-                            'channel:read:redemptions',
-                            'bits:read',
-                            'moderator:read:followers'
-                        ]
+                        # Build scope list depending on token type. Do NOT include EventSub subscription types
+                        # like `channel.chat.message` in the OAuth scope request; those are subscription types only.
+                        if getattr(self, 'token_type', 'user') == 'user':
+                            scopes_needed = [
+                                'user:read:email',
+                                'user:read:chat',
+                                'chat:read',
+                                'chat:edit',
+                                'channel:read:subscriptions',
+                                'channel:manage:broadcast',
+                                'channel:read:redemptions',
+                                'bits:read',
+                                'moderator:read:followers',
+                                'user:write:chat'
+                            ]
+                        else:
+                            # App tokens should request bot scopes relevant to server-side actions
+                            scopes_needed = [
+                                'channel:bot',
+                                'user:bot'
+                            ]
+
                         scope_string = " ".join(scopes_needed)
                         from urllib.parse import urlencode
                         params = {
@@ -2053,19 +2603,61 @@ class TwitchEventSubWorker(QThread):
                 'version': '1',
                 'condition': {'broadcaster_user_id': self.broadcaster_id}
             }
+            ,
+            # Note: channel.chat.message subscription appended below so we can include an optional
+            # `user_id` condition when token validation reveals a user context.
         ]
+
+        # Build and append the chat messages subscription, optionally scoping to the token's user_id
+        try:
+            chat_condition = {'broadcaster_user_id': self.broadcaster_id}
+            token_user_id = None
+            if hasattr(self, 'token_info') and isinstance(self.token_info, dict):
+                token_user_id = self.token_info.get('user_id')
+            if token_user_id:
+                chat_condition['user_id'] = str(token_user_id)
+
+            subscriptions.append({
+                'name': 'chat messages',
+                'type': 'channel.chat.message',
+                'version': '1',
+                'condition': chat_condition
+            })
+        except Exception:
+            # Fallback: subscribe without user_id
+            subscriptions.append({
+                'name': 'chat messages',
+                'type': 'channel.chat.message',
+                'version': '1',
+                'condition': {'broadcaster_user_id': self.broadcaster_id}
+            })
         
         # Subscribe to each event type
         for sub in subscriptions:
             try:
+                # Build transport block. Default to websocket transport (session_id).
+                # If the worker is configured to use webhook transport (e.g., via
+                # `self.transport_mode == 'webhook'`), use the webhook shape instead.
+                transport = {
+                    'method': 'websocket',
+                    'session_id': self.session_id
+                }
+                if getattr(self, 'transport_mode', None) == 'webhook':
+                    # Expect `self.callback_url` and `self.callback_secret` to be provided
+                    callback = getattr(self, 'callback_url', None)
+                    secret = getattr(self, 'callback_secret', None)
+                    if callback:
+                        transport = {
+                            'method': 'webhook',
+                            'callback': callback,
+                            'secret': secret or ''
+                        }
+
                 subscription_data = {
                     'type': sub['type'],
                     'version': sub['version'],
                     'condition': sub['condition'],
-                    'transport': {
-                        'method': 'websocket',
-                        'session_id': self.session_id
-                    }
+                    'transport': transport
                 }
                 
                 logger.info(f"[EventSub] Subscribing to {sub['name']}...")
@@ -2170,11 +2762,137 @@ class TwitchEventSubWorker(QThread):
                     cheer_message = event.get('message', '')
                     logger.info(f"[EventSub] Cheer: {username} - {bits} bits")
                     self.event_signal.emit('cheer', username, {'bits': bits, 'message': cheer_message})
+
+                elif (isinstance(subscription_type, str) and ('chat' in subscription_type and 'message' in subscription_type)) or subscription_type in ('channel.chat_message', 'channel.chat.message'):
+                    # Channel chat message delivered via EventSub websocket
+                    # Be defensive about field names - different versions may use different keys
+                    # Prefer structured `fragments` when present (EventSub provides these
+                    # for richer message contents including emotes and mentions). If
+                    # fragments aren't available, fall back to legacy text fields.
+                    # Diagnostic: dump event payload keys and full payload at debug
+                    try:
+                        keys = list(event.keys())
+                        logger.info(f"[EVENTSUB_CHAT_PAYLOAD_KEYS] {keys}")
+                        try:
+                            payload_text = json.dumps(event, default=str)
+                            # Log full payload at INFO so it appears in usual log tails during repro.
+                            logger.info(f"[EVENTSUB_CHAT_PAYLOAD_JSON] {payload_text}")
+                        except Exception:
+                            logger.exception("[EVENTSUB_CHAT_PAYLOAD] Failed to serialize chat event payload")
+                    except Exception:
+                        logger.exception("[EVENTSUB_CHAT_PAYLOAD] Failed to inspect chat event payload keys")
+                    fragments = event.get('fragments') or event.get('message_fragments') or None
+                    if fragments and isinstance(fragments, list):
+                        try:
+                            # Reconstruct a human-readable message by concatenating
+                            # the `text` field from each fragment in order. Preserve
+                            # spacing as provided by the fragments' text values.
+                            message_text = ''.join([f.get('text', '') for f in fragments])
+                        except Exception:
+                            message_text = ''
+                    else:
+                        message_text = event.get('message') or event.get('text') or event.get('body') or event.get('content') or ''
+                        # Some EventSub payloads place a structured message object
+                        # in `message` containing `text` and `fragments` keys. If
+                        # so, extract the readable text and prefer the embedded
+                        # fragments for richer rendering.
+                        try:
+                            if isinstance(message_text, dict):
+                                # Extract fragments from nested message if present
+                                if not fragments and 'fragments' in message_text and isinstance(message_text.get('fragments'), list):
+                                    fragments = message_text.get('fragments')
+                                message_text = message_text.get('text', '') or ''
+                        except Exception:
+                            pass
+                    # Prefer EventSub "chatter_*" fields when present (these are
+                    # the reported sender fields for channel.chat.message events).
+                    # Fall back to older/alternate keys for compatibility.
+                    username = (
+                        event.get('chatter_user_name')
+                        or event.get('chatter_user_login')
+                        or event.get('user_name')
+                        or event.get('user_login')
+                        or event.get('display_name')
+                        or event.get('broadcaster_user_name')
+                        or 'Unknown'
+                    )
+                    message_id = event.get('id') or event.get('message_id') or event.get('msg_id')
+                    timestamp = event.get('timestamp') or event.get('created_at') or None
+
+                    try:
+                        logger.info(f"[EventSub] Chat message from {username} (connector_id={id(self)} is_bot={getattr(self,'is_bot_account', False)}): {message_text}")
+                    except Exception:
+                        logger.info(f"[EventSub] Chat message from {username}: {message_text}")
+                    try:
+                        from .connector_utils import emit_chat
+                        metadata = {
+                            'message_id': message_id,
+                            # Prefer chatter_user_id when available; fall back
+                            # to other keys for older payloads.
+                            'user_id': (
+                                event.get('chatter_user_id')
+                                or event.get('user_id')
+                                or event.get('user_login')
+                            ),
+                            'timestamp': timestamp,
+                            'badges': [],
+                            'fragments': fragments if fragments is not None else []
+                        }
+                        # Transient diagnostic: log whether the connector exposes the
+                        # metadata-aware signal and attempt a best-effort receivers
+                        # introspection. This helps diagnose cases where the EventSub
+                        # worker logs a message but the ChatManager never receives it.
+                        try:
+                            # Prefer to emit via the parent connector if available.
+                            emit_target = getattr(self, 'connector', self)
+                            has_sig = hasattr(emit_target, 'message_received_with_metadata')
+                            receivers_info = None
+                            try:
+                                sig_obj = getattr(emit_target, 'message_received_with_metadata', None)
+                                if sig_obj is not None:
+                                    try:
+                                        receivers_info = sig_obj.receivers()
+                                    except Exception:
+                                        receivers_info = 'unknown'
+                            except Exception:
+                                receivers_info = 'error'
+                            try:
+                                logger.info(f"[EventSub] Emitting via emit_chat: connector_id={id(emit_target)} has_signal={has_sig} receivers={receivers_info} metadata_keys={list(metadata.keys())}")
+                            except Exception:
+                                logger.info(f"[EventSub] Emitting via emit_chat: has_signal={has_sig} receivers={receivers_info} metadata_keys={list(metadata.keys())}")
+                        except Exception:
+                            # Non-fatal; continue to emit
+                            emit_target = getattr(self, 'connector', self)
+
+                        emit_chat(emit_target, 'twitch', username, message_text, metadata)
+                    except Exception as e:
+                        logger.exception(f"[EventSub] Failed to emit chat message: {e}")
+                else:
+                    # Unknown/unsupported subscription type -- log full payload for diagnosis
+                    try:
+                        payload = data.get('payload', {})
+                        # Avoid dumping excessively large binary fields; serialize safely
+                        payload_text = json.dumps(payload, default=str)
+                        logger.warning(f"[EventSub] Unhandled notification type: {subscription_type} - payload: {payload_text}")
+                    except Exception:
+                        try:
+                            logger.warning(f"[EventSub] Unhandled notification type: {subscription_type} - payload could not be serialized")
+                        except Exception:
+                            pass
             
             elif message_type == 'session_reconnect':
                 # Server requesting reconnect
                 reconnect_url = data.get('payload', {}).get('session', {}).get('reconnect_url')
                 logger.info(f"[EventSub] Server requested reconnect to: {reconnect_url}")
+            else:
+                # Unknown top-level message type
+                try:
+                    logger.warning(f"[EventSub] Unhandled message_type: {message_type} - raw: {json.dumps(data, default=str)}")
+                except Exception:
+                    try:
+                        logger.warning(f"[EventSub] Unhandled message_type: {message_type} (could not serialize full message)")
+                    except Exception:
+                        pass
             
         except Exception as e:
             logger.exception(f"[EventSub] Error handling message: {e}")

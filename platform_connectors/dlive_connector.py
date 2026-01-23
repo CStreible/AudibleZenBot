@@ -7,33 +7,73 @@ Protocol: graphql-ws
 """
 
 from platform_connectors.base_connector import BasePlatformConnector
-from PyQt6.QtCore import QThread, pyqtSignal
+from platform_connectors.qt_compat import QThread, pyqtSignal
 import asyncio
 import json
 import time
 import websockets
-import requests
+# Ensure a compatible `connect` symbol exists for tests and older
+# websockets versions; if the installed package doesn't provide it, map
+# to the bundled stub implementation.
+try:
+    if not hasattr(websockets, 'connect'):
+        import importlib as _il
+        _stub = _il.import_module('websockets_stub')
+        setattr(websockets, 'connect', getattr(_stub, 'connect'))
+except Exception:
+    pass
+try:
+    import requests
+except Exception:
+    requests = None
 from core.logger import get_logger
+from platform_connectors.connector_utils import connect_with_retry, startup_allowed, safe_emit
 
 logger = get_logger(__name__)
 
 
 def _make_retry_session(total: int = 3, backoff_factor: float = 1.0):
     """Create a requests.Session with urllib3 Retry configured for transient errors."""
-    from requests.adapters import HTTPAdapter
-    from urllib3.util import Retry
+    try:
+        from requests.adapters import HTTPAdapter
+        from urllib3.util import Retry
+        session = requests.Session()
+        retries = Retry(
+            total=total,
+            backoff_factor=backoff_factor,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+        return session
+    except Exception:
+        try:
+            return requests.Session()
+        except Exception:
+            class _DummyRequestsExceptions:
+                class RequestException(Exception):
+                    pass
 
-    session = requests.Session()
-    retries = Retry(
-        total=total,
-        backoff_factor=backoff_factor,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET", "POST", "DELETE", "PUT", "PATCH")
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-    return session
+            class _DummyRequestsSession:
+                def post(self, *args, **kwargs):
+                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
+
+                def get(self, *args, **kwargs):
+                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
+
+                def delete(self, *args, **kwargs):
+                    raise _DummyRequestsExceptions.RequestException("requests not installed or retry libs missing")
+
+            class _DummyRequestsModule:
+                exceptions = _DummyRequestsExceptions()
+
+                @staticmethod
+                def Session(*args, **kwargs):
+                    return _DummyRequestsSession()
+
+            return _DummyRequestsModule().Session()
 
 
 class DLiveConnector(BasePlatformConnector):
@@ -73,6 +113,9 @@ class DLiveConnector(BasePlatformConnector):
         self.worker.deletion_signal.connect(self.onMessageDeleted)
         self.worker.status_signal.connect(self.onStatusChanged)
         self.worker.error_signal.connect(self.onError)
+        if not startup_allowed():
+            logger.info("[DLiveConnector] CI mode: skipping DLiveWorker.start()")
+            return
         self.worker.start()
     
     def disconnect(self):
@@ -83,7 +126,7 @@ class DLiveConnector(BasePlatformConnector):
             self.worker.wait(5000)  # Wait up to 5 seconds
         
         self.connected = False
-        self.connection_status.emit(False)
+        safe_emit(self.connection_status, False)
     
     def send_message(self, message: str):
         """Send a message to DLive chat"""
@@ -152,20 +195,20 @@ class DLiveConnector(BasePlatformConnector):
     
     def onMessageReceived(self, username: str, message: str, metadata: dict):
         logger.debug(f"[DLiveConnector] onMessageReceived: {username}, {message}, metadata: {metadata}")
-        self.message_received_with_metadata.emit('dlive', username, message, metadata)
+        safe_emit(self.message_received_with_metadata, 'dlive', username, message, metadata)
     
     def onMessageDeleted(self, message_id: str):
         """Handle message deletion event from DLive"""
         logger.info(f"[DLiveConnector] Message deleted by platform: {message_id}")
-        self.message_deleted.emit('dlive', message_id)
+        safe_emit(self.message_deleted, 'dlive', message_id)
     
     def onStatusChanged(self, connected: bool):
         self.connected = connected
-        self.connection_status.emit(connected)
+        safe_emit(self.connection_status, connected)
     
     def onError(self, error: str):
         logger.error(f"[DLiveConnector] Error: {error}")
-        self.error_occurred.emit(error)
+        safe_emit(self.error_occurred, error)
 
 
 class DLiveWorker(QThread):
@@ -273,7 +316,7 @@ class DLiveWorker(QThread):
         self.connection_time = time.time()
         # Resolve display name to actual username first
         if not self.resolve_username():
-            self.error_signal.emit(f"Failed to resolve DLive username for: {self.displayname}")
+            safe_emit(self.error_signal, f"Failed to resolve DLive username for: {self.displayname}")
             return
         try:
             self.loop = asyncio.new_event_loop()
@@ -285,7 +328,7 @@ class DLiveWorker(QThread):
                 import traceback
                 logger.exception(f"[DLiveWorker] Error in event loop: {type(e).__name__}: {e}")
                 logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
-                self.error_signal.emit(str(e))
+                safe_emit(self.error_signal, str(e))
             finally:
                 if self.loop and not self.loop.is_closed():
                     logger.debug("[DLiveWorker] Closing event loop")
@@ -294,7 +337,7 @@ class DLiveWorker(QThread):
             import traceback
             logger.exception(f"[DLiveWorker] Exception in run(): {type(e).__name__}: {e}")
             logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
-            self.error_signal.emit(str(e))
+            safe_emit(self.error_signal, str(e))
     
     async def connect_with_retry(self, max_retries=10):
         """Connect with automatic retry and exponential backoff"""
@@ -322,12 +365,12 @@ class DLiveWorker(QThread):
                 # Exponential backoff with max 60 seconds
                 wait_time = min(backoff * (2 ** (retry_count - 1)), 60)
                 logger.info(f"[DLiveWorker] Retrying in {wait_time} seconds... (attempt {retry_count}/{max_retries})")
-                self.status_signal.emit(False)
+                safe_emit(self.status_signal, False)
                 await asyncio.sleep(wait_time)
             elif retry_count >= max_retries:
                 logger.error(f"[DLiveWorker] Max retries ({max_retries}) reached, giving up")
-                self.error_signal.emit(f"Connection failed after {max_retries} attempts")
-                self.status_signal.emit(False)
+                safe_emit(self.error_signal, f"Connection failed after {max_retries} attempts")
+                safe_emit(self.status_signal, False)
                 break
     
     async def connect_and_listen(self):
@@ -355,12 +398,14 @@ class DLiveWorker(QThread):
             
             # Use an explicit open timeout and a ping interval to surface
             # connection problems faster and avoid long hangs in connect().
-            async with websockets.connect(
+            async with connect_with_retry(
+                websockets.connect,
                 self.WS_URL,
                 subprotocols=["graphql-ws"],
                 extra_headers=headers,
                 open_timeout=self.open_timeout,
                 ping_interval=self.ping_interval,
+                retries=5,
             ) as websocket:
                 self.ws = websocket
                 logger.info("[DLiveWorker] WebSocket connected")
@@ -384,7 +429,7 @@ class DLiveWorker(QThread):
                 
                 if msg.get("type") == "connection_ack":
                     logger.info("[DLiveWorker] Connection acknowledged")
-                    self.status_signal.emit(True)
+                    safe_emit(self.status_signal, True)
                     
                     # Subscribe to chat
                     await self.subscribe_to_chat(websocket)
@@ -393,25 +438,25 @@ class DLiveWorker(QThread):
                     await self.listen_for_messages(websocket)
                 else:
                     logger.warning(f"[DLiveWorker] Unexpected response: {msg}")
-                    self.error_signal.emit("Connection not acknowledged")
-                    self.status_signal.emit(False)
+                    safe_emit(self.error_signal, "Connection not acknowledged")
+                    safe_emit(self.status_signal, False)
                     
         except websockets.exceptions.WebSocketException as e:
             logger.exception(f"[DLiveWorker] WebSocket error: {e}")
-            self.error_signal.emit(f"WebSocket error: {e}")
-            self.status_signal.emit(False)
+            safe_emit(self.error_signal, f"WebSocket error: {e}")
+            safe_emit(self.status_signal, False)
             # Re-raise so the retry loop can handle backoff
             raise
         except asyncio.CancelledError:
             logger.warning(f"[DLiveWorker] Connection attempt cancelled")
-            self.status_signal.emit(False)
+            safe_emit(self.status_signal, False)
             raise
         except Exception as e:
             import traceback
             logger.exception(f"[DLiveWorker] Connection error: {type(e).__name__}: {e}")
             logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
-            self.error_signal.emit(f"Connection error: {e}")
-            self.status_signal.emit(False)
+            safe_emit(self.error_signal, f"Connection error: {e}")
+            safe_emit(self.status_signal, False)
             # Re-raise to allow connect_with_retry to perform backoff
             raise
     
@@ -512,7 +557,7 @@ class DLiveWorker(QThread):
                 if msg_type == 'error':
                     if msg_id == self.subscription_id:
                         logger.error(f"[DLiveWorker] ❌ SUBSCRIPTION ERROR: {json.dumps(data, indent=2)}")
-                        self.error_signal.emit(f"Subscription failed: {data}")
+                        safe_emit(self.error_signal, f"Subscription failed: {data}")
                         return
                     else:
                         logger.warning(f"[DLiveWorker] Other error: {json.dumps(data, indent=2)}")
@@ -597,7 +642,7 @@ class DLiveWorker(QThread):
                         else:
                             logger.error(f"[DLiveWorker] Error from server: {json.dumps(error_data, indent=2)}")
                             if error_msg:
-                                self.error_signal.emit(f"Server error: {error_msg}")
+                                safe_emit(self.error_signal, f"Server error: {error_msg}")
                             
                             # If this is a subscription error, it might be the wrong username format
                             if data.get('id') == '1':
@@ -631,12 +676,12 @@ class DLiveWorker(QThread):
                     
         except websockets.exceptions.ConnectionClosed:
             logger.info("[DLiveWorker] WebSocket connection closed")
-            self.status_signal.emit(False)
+            safe_emit(self.status_signal, False)
         except Exception as e:
             import traceback
             logger.exception(f"[DLiveWorker] Error listening: {type(e).__name__}: {e}")
             logger.debug(f"[DLiveWorker] Traceback:\n{traceback.format_exc()}")
-            self.error_signal.emit(f"Listening error: {e}")
+            safe_emit(self.error_signal, f"Listening error: {e}")
         finally:
             # Cancel health monitoring
             health_task.cancel()
@@ -696,7 +741,8 @@ class DLiveWorker(QThread):
                 }
                 
                 logger.info(f"[DLiveWorker] Chat: {username}: {content}")
-                self.message_signal.emit(username, content, metadata)
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, content, metadata)
             
             elif msg_type == "ChatGift":
                 # Gift message
@@ -718,7 +764,8 @@ class DLiveWorker(QThread):
                 }
                 
                 logger.info(f"[DLiveWorker] Gift: {username} {content}")
-                self.message_signal.emit(username, content, metadata)
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, content, metadata)
             
             elif msg_type == "ChatFollow":
                 # Follow message
@@ -736,7 +783,8 @@ class DLiveWorker(QThread):
                 
                 logger.info(f"[DLiveWorker] Follow: {username}")
                 # Emit as stream event instead of regular message
-                self.message_signal.emit(username, "🎯 followed the stream", {'event_type': 'follow', **event_data})
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, "🎯 followed the stream", {'event_type': 'follow', **event_data})
             
             elif msg_type == "ChatSubscription":
                 # Subscription message
@@ -756,7 +804,8 @@ class DLiveWorker(QThread):
                 
                 logger.info(f"[DLiveWorker] Subscription: {username} for {month} month(s)")
                 # Emit as stream event instead of regular message
-                self.message_signal.emit(username, f"⭐ subscribed for {month} month{'s' if month > 1 else ''}", {'event_type': 'subscription', **event_data})
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, f"⭐ subscribed for {month} month{'s' if month > 1 else ''}", {'event_type': 'subscription', **event_data})
             
             elif msg_type in ("ChatHost", "Host"):
                 # Host/raid message
@@ -776,14 +825,15 @@ class DLiveWorker(QThread):
                 
                 logger.info(f"[DLiveWorker] Host/Raid: {username} with {viewer_count} viewer(s)")
                 # Emit as stream event
-                self.message_signal.emit(username, f"📢 hosted with {viewer_count} viewer{'s' if viewer_count != 1 else ''}", {'event_type': 'raid', **event_data})
+                from .connector_utils import emit_chat
+                emit_chat(self, 'dlive', username, f"📢 hosted with {viewer_count} viewer{'s' if viewer_count != 1 else ''}", {'event_type': 'raid', **event_data})
             
             elif msg_type in ("ChatDelete", "Delete"):
                 # Message deletion event
                 deleted_msg_id = msg.get('id') or msg.get('deletedMessageId')
                 if deleted_msg_id:
                     logger.info(f"[DLiveWorker] Message deleted by moderator: {deleted_msg_id}")
-                    self.deletion_signal.emit(deleted_msg_id)
+                    safe_emit(self.deletion_signal, deleted_msg_id)
                 else:
                     logger.warning(f"[DLiveWorker] ⚠ Delete event without message ID")
             else:
@@ -823,6 +873,47 @@ class DLiveWorker(QThread):
                 )
             except Exception as e:
                 logger.exception(f"[DLiveWorker] Error closing WebSocket: {e}")
+
+        # Schedule cooperative shutdown on the worker loop and request loop stop
+        try:
+            if self.loop and not (self.loop.is_closed()):
+                try:
+                    asyncio.run_coroutine_threadsafe(self._shutdown_async(), self.loop)
+                except Exception:
+                    pass
+                try:
+                    self.loop.call_soon_threadsafe(self.loop.stop)
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("[DLiveWorker] Error scheduling shutdown on event loop")
+
+    async def _shutdown_async(self):
+        """Cooperative async shutdown: close websocket and cancel outstanding tasks."""
+        try:
+            self.running = False
+            # Close websocket if open
+            try:
+                if self.ws:
+                    await self.ws.close()
+            except Exception:
+                pass
+
+            # Cancel outstanding tasks running on this loop
+            try:
+                current = asyncio.current_task(loop=self.loop)
+                tasks = [t for t in asyncio.all_tasks(loop=self.loop) if t is not current]
+                if tasks:
+                    for t in tasks:
+                        try:
+                            t.cancel()
+                        except Exception:
+                            pass
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.exception(f"[DLiveWorker] _shutdown_async error: {e}")
     
     def send_message(self, message: str):
         """Send a message to DLive chat using HTTP POST (not WebSocket)"""

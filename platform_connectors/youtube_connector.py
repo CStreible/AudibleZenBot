@@ -5,13 +5,42 @@ Connects to YouTube Live Chat API
 
 import time
 from platform_connectors.base_connector import BasePlatformConnector
-from PyQt6.QtCore import QThread, pyqtSignal
-import requests
+from platform_connectors.qt_compat import QThread, pyqtSignal
+from platform_connectors.connector_utils import startup_allowed, safe_emit
+try:
+    import requests
+except Exception:
+    requests = None
 from core.logger import get_logger
 try:
     from core.http_session import make_retry_session
 except Exception:
     make_retry_session = None
+
+# Dummy `requests` fallback so the module imports even when requests isn't installed.
+if requests is None:
+    class _DummyRequestsExceptions:
+        class RequestException(Exception):
+            pass
+
+    class _DummyRequestsSession:
+        def post(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def get(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def delete(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+    class _DummyRequestsModule:
+        exceptions = _DummyRequestsExceptions()
+
+        @staticmethod
+        def Session(*args, **kwargs):
+            return _DummyRequestsSession()
+
+    requests = _DummyRequestsModule()
 
 logger = get_logger(__name__)
 
@@ -231,6 +260,9 @@ class YouTubeConnector(BasePlatformConnector):
         self.worker.error_signal.connect(self.onError)
 
         self.worker_thread.started.connect(self.worker.run)
+        if not startup_allowed():
+            logger.info("[YouTubeConnector] CI mode: skipping YouTubeWorker thread start")
+            return
         self.worker_thread.start()
     
     def check_authenticated_user(self):
@@ -290,7 +322,7 @@ class YouTubeConnector(BasePlatformConnector):
         self.worker = None
         self.worker_thread = None
         self.connected = False
-        self.connection_status.emit(False)
+        safe_emit(self.connection_status, False)
     
     def send_message(self, message: str):
         """Send a message to YouTube chat"""
@@ -427,7 +459,7 @@ class YouTubeConnector(BasePlatformConnector):
     def onMessageReceived(self, username: str, message: str, metadata: dict):
         """Handle received message"""
         logger.debug(f"[YouTubeConnector] onMessageReceived: {username}, {message}, badges: {metadata.get('badges', [])}")
-        self.message_received_with_metadata.emit('youtube', username, message, metadata)
+        safe_emit(self.message_received_with_metadata, 'youtube', username, message, metadata)
     
     def onMessageDeleted(self, message_id: str):
         """Handle message deletion event from YouTube
@@ -442,16 +474,16 @@ class YouTubeConnector(BasePlatformConnector):
         is not reliably supported by YouTube's API.
         """
         logger.debug(f"[YouTubeConnector] Message deleted by platform: {message_id}")
-        self.message_deleted.emit('youtube', message_id)
+        safe_emit(self.message_deleted, 'youtube', message_id)
     
     def onStatusChanged(self, connected: bool):
         """Handle connection status change"""
         self.connected = connected
-        self.connection_status.emit(connected)
+        safe_emit(self.connection_status, connected)
     
     def onError(self, error: str):
         """Handle error"""
-        self.error_occurred.emit(error)
+        safe_emit(self.error_occurred, error)
 
 
 class YouTubeWorker(QThread):
@@ -507,8 +539,8 @@ class YouTubeWorker(QThread):
         if not self.api_key and not self.oauth_token:
             error_msg = "No API key or OAuth token provided. Cannot connect to YouTube."
             logger.error(f"[YouTubeWorker] ERROR: {error_msg}")
-            self.error_signal.emit(error_msg)
-            self.status_signal.emit(False)
+            safe_emit(self.error_signal, error_msg)
+            safe_emit(self.status_signal, False)
             return
         if self.api_key or self.oauth_token:
             # Real API connection
@@ -519,13 +551,13 @@ class YouTubeWorker(QThread):
                     if not self.find_live_broadcast():
                         retry_count += 1
                         wait_time = min(2 ** retry_count, 60)  # Cap at 1 minute
-                        self.error_signal.emit(f"No active live stream found (retrying in {wait_time}s)")
+                        safe_emit(self.error_signal, f"No active live stream found (retrying in {wait_time}s)")
                         self._interruptible_sleep(wait_time)
                         continue
                     
                     # Reset retry count on success
                     retry_count = 0
-                    self.status_signal.emit(True)
+                    safe_emit(self.status_signal, True)
                     
                     logger.debug(f"[YouTubeWorker] Starting message polling loop...")
                     
@@ -549,19 +581,19 @@ class YouTubeWorker(QThread):
                             logger.exception(f"[YouTubeWorker] Error in polling loop: {e}")
                             import traceback
                             traceback.print_exc()
-                            self.error_signal.emit(f"Error fetching messages: {str(e)}")
+                            safe_emit(self.error_signal, f"Error fetching messages: {str(e)}")
                             self._interruptible_sleep(5)
                             
                 except Exception as e:
                     retry_count += 1
                     wait_time = min(2 ** retry_count, 300)  # Cap at 5 minutes
-                    self.error_signal.emit(f"Connection error (attempt {retry_count}): {str(e)}")
+                    safe_emit(self.error_signal, f"Connection error (attempt {retry_count}): {str(e)}")
                     if self.running:
                         self._interruptible_sleep(wait_time)
                     else:
                         break
                     
-            self.status_signal.emit(False)
+            safe_emit(self.status_signal, False)
     
     def find_live_broadcast(self) -> bool:
         """Find the active live broadcast for the channel"""
@@ -590,7 +622,7 @@ class YouTubeWorker(QThread):
                 )
             except requests.exceptions.RequestException as e:
                 logger.exception(f"[YouTubeWorker] Network error searching for live broadcast: {e}")
-                self.error_signal.emit(f"Network error searching for live broadcast: {e}")
+                safe_emit(self.error_signal, f"Network error searching for live broadcast: {e}")
                 return False
             
             logger.debug(f"[YouTubeWorker] Search response status: {response.status_code}")
@@ -604,7 +636,7 @@ class YouTubeWorker(QThread):
                         if error_code == 'quotaExceeded':
                             error_msg = "YouTube API quota exceeded. The daily limit has been reached. Please try again tomorrow or use a different API key."
                             logger.warning(f"[YouTubeWorker] QUOTA EXCEEDED: {error_msg}")
-                            self.error_signal.emit(error_msg)
+                            safe_emit(self.error_signal, error_msg)
                             self.is_active = False
                             return False
                 except:
@@ -627,7 +659,7 @@ class YouTubeWorker(QThread):
                         logger.debug(f"[YouTubeWorker] Retry response status: {response.status_code}")
                     except requests.exceptions.RequestException as e:
                         logger.exception(f"[YouTubeWorker] Network error retrying search: {e}")
-                        self.error_signal.emit(f"Network error retrying search: {e}")
+                        safe_emit(self.error_signal, f"Network error retrying search: {e}")
                         return False
             
             if response.status_code != 200:
@@ -649,7 +681,7 @@ class YouTubeWorker(QThread):
             return False
             
         except Exception as e:
-            self.error_signal.emit(f"Error finding broadcast: {str(e)}")
+            safe_emit(self.error_signal, f"Error finding broadcast: {str(e)}")
             return False
     
     def get_live_chat_id(self, video_id: str) -> bool:
@@ -677,7 +709,7 @@ class YouTubeWorker(QThread):
                 )
             except requests.exceptions.RequestException as e:
                 logger.exception(f"[YouTubeWorker] Network error getting chat ID: {e}")
-                self.error_signal.emit(f"Network error getting chat ID: {e}")
+                safe_emit(self.error_signal, f"Network error getting chat ID: {e}")
                 return False
 
             if response.status_code != 200:
@@ -702,7 +734,7 @@ class YouTubeWorker(QThread):
             return False
             
         except Exception as e:
-            self.error_signal.emit(f"Error getting chat ID: {str(e)}")
+            safe_emit(self.error_signal, f"Error getting chat ID: {str(e)}")
             return False
     
     def refresh_access_token(self) -> bool:
@@ -772,7 +804,7 @@ class YouTubeWorker(QThread):
                 )
             except requests.exceptions.RequestException as e:
                 logger.exception(f"[YouTubeWorker] Network error fetching messages: {e}")
-                self.error_signal.emit(f"Network error fetching messages: {e}")
+                safe_emit(self.error_signal, f"Network error fetching messages: {e}")
                 return
             
             # Check for quota exceeded error
@@ -784,7 +816,7 @@ class YouTubeWorker(QThread):
                         if error_code == 'quotaExceeded':
                             error_msg = "YouTube API quota exceeded. Stopping message polling."
                             logger.warning(f"[YouTubeWorker] QUOTA EXCEEDED: {error_msg}")
-                            self.error_signal.emit(error_msg)
+                            safe_emit(self.error_signal, error_msg)
                             self.is_active = False
                             return
                 except:
@@ -848,7 +880,7 @@ class YouTubeWorker(QThread):
                     deleted_msg_id = snippet.get('messageDeletedDetails', {}).get('deletedMessageId')
                     if deleted_msg_id:
                         logger.info(f"[YouTubeWorker] Message deleted by moderator: {deleted_msg_id}")
-                        self.deletion_signal.emit(deleted_msg_id)
+                        safe_emit(self.deletion_signal, deleted_msg_id)
                         # Remove from active set
                         self.active_message_ids.discard(deleted_msg_id)
                     continue
@@ -896,7 +928,8 @@ class YouTubeWorker(QThread):
                 
                 self.last_message_time = time.time()  # Update health timestamp
                 logger.debug(f"[YouTubeWorker] Chat: {username}: {message}")
-                self.message_signal.emit(username, message, metadata)
+                from .connector_utils import emit_chat
+                emit_chat(self, 'youtube', username, message, metadata)
                 
         except Exception as e:
             raise Exception(f"Message fetch error: {str(e)}")
@@ -943,12 +976,12 @@ class YouTubeWorker(QThread):
                 return True
             except requests.exceptions.RequestException as e:
                 logger.exception(f"[YouTubeWorker] Network error sending message: {e}")
-                self.error_signal.emit(f"Failed to send message due to network error: {e}")
+                safe_emit(self.error_signal, f"Failed to send message due to network error: {e}")
                 return False
             except Exception as e:
-                self.error_signal.emit(f"Failed to send message: {str(e)}")
+                safe_emit(self.error_signal, f"Failed to send message: {str(e)}")
                 return False
 
         except Exception as e:
-            self.error_signal.emit(f"Failed to send message: {str(e)}")
+            safe_emit(self.error_signal, f"Failed to send message: {str(e)}")
             return False

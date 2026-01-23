@@ -2,14 +2,34 @@
 
 Place shared widgets here (ToggleSwitch, future shared controls).
 """
-from PyQt6.QtWidgets import QCheckBox
 """Common UI elements for the AudibleZenBot application.
 
 Place shared widgets here (ToggleSwitch, future shared controls).
 """
-from PyQt6.QtWidgets import QCheckBox, QLayout, QWidgetItem
-from PyQt6.QtCore import Qt, QRect, QPropertyAnimation, pyqtProperty, QSize, QPoint
-from PyQt6.QtGui import QPainter, QColor, QBrush, QPen
+# Guard PyQt6 imports for headless/test environments
+HAS_PYQT = True
+try:
+    from PyQt6.QtWidgets import QCheckBox, QLayout, QWidgetItem
+    from PyQt6.QtCore import Qt, QRect, QPropertyAnimation, pyqtProperty, QSize, QPoint
+    from PyQt6.QtGui import QPainter, QColor, QBrush, QPen
+except Exception:
+    HAS_PYQT = False
+    QCheckBox = object
+    QLayout = object
+    QWidgetItem = object
+    Qt = object
+    QRect = object
+    QPropertyAnimation = object
+    def pyqtProperty(*a, **k):
+        def _decorator(f):
+            return f
+        return _decorator
+    QSize = object
+    QPoint = object
+    QPainter = object
+    QColor = object
+    QBrush = object
+    QPen = object
 
 
 class ToggleSwitch(QCheckBox):

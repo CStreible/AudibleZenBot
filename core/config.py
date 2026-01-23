@@ -5,6 +5,7 @@ Configuration Manager - Save and load application settings
 import json
 import os
 import threading
+import traceback
 from typing import Dict, Any
 from pathlib import Path
 from core import secret_store
@@ -267,6 +268,27 @@ class ConfigManager:
                         result[k] = secret_store.unprotect_string(result[k])
                     except Exception:
                         result[k] = ''
+            # Diagnostic trace for platform reads (help track unexpected overwrites)
+            try:
+                # Format a cleaned stack that omits internal worker frames to
+                # reduce noise when background threads call into config APIs.
+                def _clean_stack(limit=6):
+                    try:
+                        frames = traceback.extract_stack()[:-1]
+                        # Prefer to exclude noisy frames from background workers
+                        filtered = [f for f in frames if ('twitch_emotes.py' not in (f.filename or '') and 'threading.py' not in (f.filename or '') and 'site-packages' not in (f.filename or ''))]
+                        if not filtered:
+                            # fallback to recent frames
+                            return ''.join(traceback.format_list(frames[-limit:]))
+                        return ''.join(traceback.format_list(filtered[-limit:]))
+                    except Exception:
+                        return ''.join(traceback.format_stack(limit=limit))
+
+                stack = _clean_stack(limit=6)
+                keys = list(result.keys())
+                logger.debug(f"[ConfigManager][TRACE] get_platform_config: platform={platform} keys={keys} stack:\n{stack}")
+            except Exception:
+                pass
             return result
     
     def set_platform_config(self, platform: str, key: str, value: Any):
@@ -286,6 +308,30 @@ class ConfigManager:
                     store_value = secret_store.protect_string(value)
             except Exception:
                 store_value = value
+
+            # Diagnostic trace for platform writes — mask sensitive values
+            try:
+                disp = ''
+                if key in sensitive and isinstance(value, str) and value:
+                    disp = value[:6] + '...'  # avoid writing full secrets to logs
+                else:
+                    disp = repr(value)
+
+                def _clean_stack(limit=6):
+                    try:
+                        frames = traceback.extract_stack()[:-1]
+                        filtered = [f for f in frames if ('twitch_emotes.py' not in (f.filename or '') and 'threading.py' not in (f.filename or '') and 'site-packages' not in (f.filename or ''))]
+                        if not filtered:
+                            return ''.join(traceback.format_list(frames[-limit:]))
+                        return ''.join(traceback.format_list(filtered[-limit:]))
+                    except Exception:
+                        return ''.join(traceback.format_stack(limit=limit))
+
+                stack = _clean_stack(limit=6)
+                logger.debug(f"[ConfigManager][TRACE] set_platform_config: platform={platform} key={key} value={disp} stack:\n{stack}")
+            except Exception:
+                pass
+
             self.config["platforms"][platform][key] = store_value
             self.save()
     

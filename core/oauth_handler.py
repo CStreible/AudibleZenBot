@@ -236,7 +236,10 @@ class OAuthHandler(QObject):
     def _exchange_code_for_token(self, platform: str, config: dict, 
                                  code: str, code_verifier: str):
         """Exchange authorization code for access token"""
-        import requests
+        try:
+            import requests
+        except Exception:
+            requests = None
         
         data = {
             'client_id': config['client_id'],

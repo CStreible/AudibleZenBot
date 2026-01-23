@@ -2,18 +2,55 @@ from ui.ui_elements import ToggleSwitch
 """
 Automation Page - Chat Commands, Events, Timers, and Stream Info
 """
-
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QTabWidget, QScrollArea, QFrame, QLineEdit, QTextEdit,
-    QGroupBox, QGridLayout, QComboBox, QCompleter, QCheckBox,
-    QSpinBox, QListWidget, QListWidgetItem, QMessageBox, QInputDialog,
-    QTableWidget, QTableWidgetItem, QHeaderView
-)
-from PyQt6.QtCore import Qt, QByteArray, QTimer
-from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter
-from PyQt6.QtSvg import QSvgRenderer
-from ui.platform_icons import get_platform_icon_html
+# Guard PyQt6 imports so module can be imported in headless/test environments
+HAS_PYQT = True
+try:
+    from PyQt6.QtWidgets import (
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+        QTabWidget, QScrollArea, QFrame, QLineEdit, QTextEdit,
+        QGroupBox, QGridLayout, QComboBox, QCompleter, QCheckBox,
+        QSpinBox, QListWidget, QListWidgetItem, QMessageBox, QInputDialog,
+        QTableWidget, QTableWidgetItem, QHeaderView
+    )
+    from PyQt6.QtCore import Qt, QByteArray, QTimer
+    from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter
+    from PyQt6.QtSvg import QSvgRenderer
+    from ui.platform_icons import get_platform_icon_html
+except Exception:
+    HAS_PYQT = False
+    QWidget = object
+    QVBoxLayout = object
+    QHBoxLayout = object
+    QLabel = object
+    QPushButton = object
+    QTabWidget = object
+    QScrollArea = object
+    QFrame = object
+    QLineEdit = object
+    QTextEdit = object
+    QGroupBox = object
+    QGridLayout = object
+    QComboBox = object
+    QCompleter = object
+    QCheckBox = object
+    QSpinBox = object
+    QListWidget = object
+    QListWidgetItem = object
+    QMessageBox = object
+    QInputDialog = object
+    QTableWidget = object
+    QTableWidgetItem = object
+    QHeaderView = object
+    Qt = object
+    QByteArray = object
+    QTimer = object
+    QFont = object
+    QIcon = object
+    QPixmap = object
+    QPainter = object
+    QSvgRenderer = object
+    def get_platform_icon_html(platform, size=18):
+        return ''
 import os
 import sys
 import json
