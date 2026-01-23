@@ -1230,6 +1230,27 @@ class TwitchEmoteManager:
                         # Always write prefetch images to disk (prefetch path)
                         with open(fpath, 'wb') as wf:
                             wf.write(r.content)
+                        # Also write a numeric-id variant file when the CDN URL
+                        # contains an explicit numeric emote id (e.g. /emoticons/v2/555555645/...).
+                        # This ensures older UI paths that expect `twitch_<numeric>.png`
+                        # will find a file even when the manager's emote id is
+                        # a prefixed string like `emotesv2_<hash>`.
+                        try:
+                            import re
+                            m = re.search(r'/emoticons/v2/(\d+)(?:/|$)', url)
+                            if m:
+                                numeric_id = m.group(1)
+                                numeric_fname = f"twitch_{numeric_id}.{ext}"
+                                numeric_fpath = os.path.join(self.cache_dir, numeric_fname)
+                                # Only write if it doesn't already exist to avoid races
+                                if not os.path.exists(numeric_fpath):
+                                    try:
+                                        with open(numeric_fpath, 'wb') as nf:
+                                            nf.write(r.content)
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
                         # Log to emote_cache.log the cached file (platform, emote id, filename)
                         try:
                             log_dir = os.path.join(os.getcwd(), 'logs')
@@ -1398,6 +1419,25 @@ class TwitchEmoteManager:
                     b = f.read()
                 mime = 'image/gif' if fpath.lower().endswith('.gif') else 'image/png'
                 return f'data:{mime};base64,' + base64.b64encode(b).decode()
+            else:
+                # Fallback: some emotes are cached under a numeric id filename
+                # (twitch_<numeric>.<ext>) when the CDN URL contains a numeric
+                # id. Try to detect the numeric id from the selected URL and
+                # read that file if present.
+                try:
+                    import re
+                    m = re.search(r'/emoticons/v2/(\d+)(?:/|$)', url) if url else None
+                    if m:
+                        numeric_id = m.group(1)
+                        numeric_fname = f"twitch_{numeric_id}.{ext}"
+                        numeric_fpath = os.path.join(self.cache_dir, numeric_fname)
+                        if os.path.exists(numeric_fpath):
+                            with open(numeric_fpath, 'rb') as f2:
+                                b2 = f2.read()
+                            mime2 = 'image/gif' if numeric_fpath.lower().endswith('.gif') else 'image/png'
+                            return f'data:{mime2};base64,' + base64.b64encode(b2).decode()
+                except Exception:
+                    pass
         except Exception:
             pass
 

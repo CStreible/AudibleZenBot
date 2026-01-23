@@ -473,10 +473,17 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
                         if ftype == 'emote':
                             # Emote fragment handling: try cache, then fetch emote set
                             emobj = frag.get('emote') if isinstance(frag, dict) else {}
-                            # Emote id may be under several keys
+                            # Emote id may be under several keys; prefer nested emote.id
                             emote_id = None
                             try:
-                                emote_id = str(emobj.get('id') or emobj.get('emote_id') or frag.get('id')) if isinstance(emobj, dict) else None
+                                if isinstance(emobj, dict):
+                                    emobj_id = emobj.get('id') or emobj.get('emote_id')
+                                else:
+                                    emobj_id = None
+                                if emobj_id:
+                                    emote_id = str(emobj_id)
+                                else:
+                                    emote_id = str(frag.get('id')) if frag.get('id') else None
                             except Exception:
                                 emote_id = None
 
@@ -762,6 +769,15 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
 
         final_html = ''.join(parts)
         has_img = '<img' in final_html
+
+        # Diagnostic: log final HTML and presence of images to help
+        # investigate intermittent missing-emote renders reported during
+        # live runs. Keep preview short to avoid log bloat.
+        try:
+            mid = (metadata.get('message_id') if metadata and isinstance(metadata, dict) else None)
+            logger.debug(f"emotes: render_message result message_id={mid!r} has_img={has_img} len_html={len(final_html)} html_preview={repr(final_html[:200])}")
+        except Exception:
+            pass
 
         # Emit signal (best-effort)
         try:
