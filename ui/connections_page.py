@@ -3,14 +3,45 @@ Connections Page - Manage platform connections and authentication
 """
 
 from logging import config
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
-    QLabel, QLineEdit, QPushButton, QCheckBox, QGroupBox,
-    QTextEdit, QFrame, QDialog, QProgressBar, QListWidget, QSizePolicy
-)
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl
-from PyQt6.QtGui import QFont
-from PyQt6.QtWebEngineWidgets import QWebEngineView
+# Guard PyQt6 imports for headless/test environments
+HAS_PYQT = True
+try:
+    from PyQt6.QtWidgets import (
+        QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
+        QLabel, QLineEdit, QPushButton, QCheckBox, QGroupBox,
+        QTextEdit, QFrame, QDialog, QProgressBar, QListWidget, QSizePolicy
+    )
+    from PyQt6.QtCore import Qt, pyqtSignal, QUrl
+    from PyQt6.QtGui import QFont
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+except Exception:
+    HAS_PYQT = False
+    QWidget = object
+    QVBoxLayout = object
+    QHBoxLayout = object
+    QTabWidget = object
+    QLabel = object
+    QLineEdit = object
+    QPushButton = object
+    QCheckBox = object
+    QGroupBox = object
+    QTextEdit = object
+    QFrame = object
+    QDialog = object
+    QProgressBar = object
+    QListWidget = object
+    QSizePolicy = object
+    Qt = object
+    def pyqtSignal(*a, **k):
+        class _DummySignal:
+            def connect(self, *args, **kwargs):
+                return None
+            def emit(self, *args, **kwargs):
+                return None
+        return _DummySignal()
+    QUrl = object
+    QFont = object
+    QWebEngineView = object
 from urllib.parse import urlparse, parse_qs
 import secrets
 import json
@@ -1287,7 +1318,10 @@ class PlatformConnectionWidget(QWidget):
     def refresh_kick_info(self, connector):
         """Refresh Kick stream info"""
         import requests
-        import cloudscraper
+        try:
+            import cloudscraper
+        except Exception:
+            cloudscraper = None
         
         logger.debug(f"[Kick] Attempting to refresh info...")
         
@@ -1312,10 +1346,14 @@ class PlatformConnectionWidget(QWidget):
         logger.debug(f"[Kick] Using channel identifier: {channel_identifier}")
         
         try:
-            scraper = cloudscraper.create_scraper(
-                browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
-            )
-            response = scraper.get(f"https://kick.com/api/v2/channels/{channel_identifier}", timeout=10)
+            if cloudscraper is not None:
+                scraper = cloudscraper.create_scraper(
+                    browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
+                )
+                response = scraper.get(f"https://kick.com/api/v2/channels/{channel_identifier}", timeout=10)
+            else:
+                # Fall back to requests if cloudscraper isn't available (may fail on Cloudflare-protected pages)
+                response = requests.get(f"https://kick.com/api/v2/channels/{channel_identifier}", timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
@@ -1846,7 +1884,10 @@ class PlatformConnectionWidget(QWidget):
     def update_kick_api(self, stream_info):
         """Update Kick channel info via API"""
         import requests
-        import cloudscraper
+        try:
+            import cloudscraper
+        except Exception:
+            cloudscraper = None
         
         connector = self.chat_manager.connectors.get('kick')
         if not connector:
@@ -1972,7 +2013,7 @@ class PlatformConnectionWidget(QWidget):
             # Extract port, default to 8887 if not present
             port = pr.port or 8887
             server = HTTPServer(('localhost', port), CallbackHandler)
-            server_thread = threading.Thread(target=lambda: server.handle_request())
+            server_thread = threading.Thread(target=server.serve_forever)
             server_thread.daemon = True
             server_thread.start()
             local_callback_server = server
@@ -2149,15 +2190,24 @@ class PlatformConnectionWidget(QWidget):
                 def log_message(self, format, *args):
                     pass
 
-            # Use port 8890 for Kick (developers page uses that), otherwise default to 8888
-            port = 8888
+            # Use configured shared callback port when possible (defaults to 8889).
             try:
-                if self.platform_id == 'kick':
-                    port = 8890
+                from core.config import ConfigManager
+                cfg = ConfigManager()
+                callback_port = cfg.get('ngrok.callback_port', 8889)
             except Exception:
+                callback_port = 8889
+
+            # Use port 8890 for Kick (developers page uses that).
+            # For Twitch when not using ngrok, prefer the traditional localhost:8888 callback.
+            if getattr(self, 'platform_id', None) == 'kick':
+                port = 8890
+            elif getattr(self, 'platform_id', None) == 'twitch':
                 port = 8888
+            else:
+                port = callback_port
             server = HTTPServer(('localhost', port), CallbackHandler)
-            server_thread = threading.Thread(target=lambda: server.handle_request())
+            server_thread = threading.Thread(target=server.serve_forever)
             server_thread.daemon = True
             server_thread.start()
 
@@ -2173,7 +2223,8 @@ class PlatformConnectionWidget(QWidget):
                     client_id = twitch_cfg.get('client_id', '')
                 except Exception:
                     client_id = ''
-                redirect_uri = "http://localhost:8888/callback"
+                # Use the original Twitch OAuth redirect path
+                redirect_uri = f"http://localhost:{port}/callback"
                 scopes = [
                     "user:read:email",
                     "chat:read",
@@ -2217,7 +2268,7 @@ class PlatformConnectionWidget(QWidget):
                         pass
                     port = callback_port
                     server = HTTPServer(('localhost', port), CallbackHandler)
-                    server_thread = threading.Thread(target=lambda: server.handle_request())
+                    server_thread = threading.Thread(target=server.serve_forever)
                     server_thread.daemon = True
                     server_thread.start()
 
@@ -2345,7 +2396,15 @@ class PlatformConnectionWidget(QWidget):
 
             # Wait for callback (with timeout)
             if callback_received.wait(timeout=120):
-                server.server_close()
+                try:
+                    if hasattr(server, 'shutdown'):
+                        server.shutdown()
+                except Exception:
+                    pass
+                try:
+                    server.server_close()
+                except Exception:
+                    pass
                 if 'code' in auth_code_container:
                     auth_code = auth_code_container['code']
                     logger.debug(f"[OAuth] Authorization code received: {auth_code[:20]}...")
@@ -2773,12 +2832,43 @@ class PlatformConnectionWidget(QWidget):
                 response = requests.post(TROVO_TOKEN_URL, headers=headers, json=data)
                 response.raise_for_status()
                 token_data = response.json()
-                access_token = token_data.get('access_token')
-                refresh_token = token_data.get('refresh_token', '')
+                access_token = token_data.get('access_token') if isinstance(token_data, dict) else None
+                refresh_token = token_data.get('refresh_token', '') if isinstance(token_data, dict) else ''
+                # Trovo may return a {'data': [ {...} ]} envelope - handle that
+                if not access_token:
+                    try:
+                        if isinstance(token_data, dict):
+                            d = token_data.get('data')
+                            if isinstance(d, list) and len(d) > 0 and isinstance(d[0], dict):
+                                access_token = d[0].get('access_token') or d[0].get('accessToken')
+                                refresh_token = d[0].get('refresh_token', '') or d[0].get('refreshToken', '')
+                    except Exception:
+                        pass
                 if access_token:
                     user_info = self.fetchUserInfo(access_token)
                     self.onOAuthSuccess(account_type, user_info, access_token, refresh_token)
                 else:
+                    try:
+                        logger.error("Trovo token response JSON: %s", token_data)
+                    except Exception:
+                        try:
+                            logger.error("Trovo token response text: %s", response.text)
+                        except Exception:
+                            pass
+                    # Write raw token response to file for debugging
+                    try:
+                        import os
+                        path = os.path.join(os.getcwd(), 'trovo_token_response.txt')
+                        with open(path, 'w', encoding='utf-8') as _f:
+                            try:
+                                _f.write(str(token_data))
+                            except Exception:
+                                try:
+                                    _f.write(response.text)
+                                except Exception:
+                                    _f.write('')
+                    except Exception:
+                        pass
                     logger.error("No access token in response")
                     self.onOAuthFailed(account_type, "No access token in response")
             elif self.platform_id == 'youtube':
@@ -2834,7 +2924,8 @@ class PlatformConnectionWidget(QWidget):
                         self.onOAuthFailed(account_type, "Twitch client_secret not configured in config.json. Add it under twitch > client_secret")
                         return
                 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
-                TWITCH_REDIRECT_URI = "http://localhost:8888/callback"
+                # When exchanging code, use the original localhost redirect path (default 8888)
+                TWITCH_REDIRECT_URI = f"http://localhost:{(8888 if getattr(self, 'platform_id', None) == 'twitch' else callback_port)}/callback"
                 data = {
                     "client_id": client_id,
                     "client_secret": client_secret,
@@ -3365,11 +3456,31 @@ class PlatformConnectionWidget(QWidget):
         return current_token if current_token else None
     
     def loadAccountStates(self):
-        """Load saved account states from config"""
-        from core.config import ConfigManager
-        config = ConfigManager()
-        platform_config = config.get_platform_config(self.platform_id)
+        """Load saved account states from config.
 
+        This method defers the potentially-blocking config read to a background
+        thread and schedules UI updates back on the main thread to avoid
+        blocking UI initialization.
+        """
+        import threading
+        from PyQt6.QtCore import QTimer
+
+        def _reader():
+            try:
+                from core.config import ConfigManager
+                config = ConfigManager()
+                platform_config = config.get_platform_config(self.platform_id)
+            except Exception as e:
+                logger.exception(f"[{self.platform_id}] Error reading platform config: {e}")
+                platform_config = None
+
+            # Schedule UI update on the main thread
+            QTimer.singleShot(0, lambda: self._applyAccountStates(platform_config))
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+    def _applyAccountStates(self, platform_config):
+        """Apply platform config to UI controls. Must run on the main/UI thread."""
         if not platform_config:
             logger.debug(f"[{self.platform_id}] No config found in loadAccountStates")
             return
@@ -3384,34 +3495,55 @@ class PlatformConnectionWidget(QWidget):
             token = platform_config.get('streamer_token', '')
             # Use display name if available, otherwise fallback to username
             if display_name:
-                self.streamer_display_name.setText(display_name)
+                try:
+                    self.streamer_display_name.setText(display_name)
+                except Exception:
+                    pass
             elif username:
-                self.streamer_display_name.setText(username)
+                try:
+                    self.streamer_display_name.setText(username)
+                except Exception:
+                    pass
             if display_name or username:
-                self.status_label.setText(f"Streamer logged in: {display_name or username}")
-                self.streamer_login_btn.setText("Logout")
-                self.streamer_login_btn.setEnabled(True)
+                try:
+                    self.status_label.setText(f"Streamer logged in: {display_name or username}")
+                    self.streamer_login_btn.setText("Logout")
+                    self.streamer_login_btn.setEnabled(True)
+                except Exception:
+                    pass
                 # Auto-connect to platform with streamer account
                 if username and token:
                     if hasattr(self, 'append_status_message'):
-                        self.append_status_message(f"[Streamer] Auto-connecting to {self.platform_name} chat...")
-                    self.connect_requested.emit(self.platform_id, username, token)
+                        try:
+                            self.append_status_message(f"[Streamer] Auto-connecting to {self.platform_name} chat...")
+                        except Exception:
+                            pass
+                    try:
+                        self.connect_requested.emit(self.platform_id, username, token)
+                    except Exception as e:
+                        logger.debug(f"Failed to emit connect_requested for {self.platform_id}: {e}")
                 else:
                     logger.warning(f"[{self.platform_id}] Streamer logged in but missing username={bool(username)} or token={bool(token)}")
         else:
-            self.streamer_display_name.setText("")
+            try:
+                self.streamer_display_name.setText("")
+            except Exception:
+                pass
 
         # Load bot account
         if platform_config.get('bot_logged_in', False):
             display_name = platform_config.get('bot_display_name', '')
             username = platform_config.get('bot_username', '')
             # Set the bot account username field in the UI
-            if display_name:
-                self.bot_display_name.setText(display_name)
-                self.status_label.setText(f"Bot logged in: {display_name}")
-            elif username:
-                self.bot_display_name.setText(username)
-                self.status_label.setText(f"Bot logged in: {username}")
+            try:
+                if display_name:
+                    self.bot_display_name.setText(display_name)
+                    self.status_label.setText(f"Bot logged in: {display_name}")
+                elif username:
+                    self.bot_display_name.setText(username)
+                    self.status_label.setText(f"Bot logged in: {username}")
+            except Exception:
+                pass
         # Load disable state for this platform (persist across runs)
         try:
             disabled = platform_config.get('disabled', False)
@@ -3631,6 +3763,36 @@ class ConnectionsPage(QWidget):
                 widget.streamer_display_name.setText(streamer_display_name)
                 widget.streamer_login_btn.setText("Logout")
                 logger.debug(f"[ConnectionsPage] Updated streamer UI for {platform_id}: {streamer_display_name}")
+                # If this is Twitch, trigger a background per-channel emote prefetch
+                try:
+                    if platform_id.lower() == 'twitch':
+                        try:
+                            from core.config import ConfigManager as _CM
+                            _cfg = _CM()
+                            pconf = _cfg.get_platform_config(platform_id) or {}
+                            # Common keys storing numeric broadcaster id
+                            bid = pconf.get('streamer_user_id') or pconf.get('streamer_channel_id') or pconf.get('channel_id') or None
+                        except Exception:
+                            bid = None
+                        try:
+                            if not bid and username:
+                                # fall back to using username (some APIs accept username)
+                                bid = username
+                        except Exception:
+                            pass
+
+                        try:
+                            from core.twitch_emotes import get_manager as _get_tmgr
+                            tm = _get_tmgr() if _get_tmgr is not None else None
+                            if tm is not None and bid:
+                                try:
+                                    tm.prefetch_channel(str(bid), background=True)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             else:
                 # If the streamer account is still considered "logged in" in
                 # the config but the connector is temporarily disconnected,

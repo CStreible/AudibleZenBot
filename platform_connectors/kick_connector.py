@@ -14,12 +14,56 @@ Alternative: Wait for Kick to release a WebSocket API for developers.
 """
 
 import json
-import requests
-import cloudscraper
+try:
+    import requests
+except Exception:
+    requests = None
+# cloudscraper is an optional dependency used to bypass Cloudflare protections at runtime.
+# Guard the import so test collection doesn't fail when it's not installed in CI.
+try:
+    import cloudscraper
+except Exception:
+    cloudscraper = None
+
+# Provide safe dummy replacements for optional network libraries so the
+# connector module can be imported in environments without these deps.
+if requests is None:
+    class _DummyRequestsExceptions:
+        class RequestException(Exception):
+            pass
+
+    class _DummyRequestsSession:
+        def post(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def get(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+        def delete(self, *args, **kwargs):
+            raise _DummyRequestsExceptions.RequestException("requests not installed")
+
+    class _DummyRequestsModule:
+        exceptions = _DummyRequestsExceptions()
+
+        @staticmethod
+        def Session(*args, **kwargs):
+            return _DummyRequestsSession()
+
+    requests = _DummyRequestsModule()
+
+if cloudscraper is None:
+    class _DummyCloudScraper:
+        @staticmethod
+        def create_scraper(*args, **kwargs):
+            # Return a session-like object that raises RequestException on network calls
+            return requests.Session()
+
+    cloudscraper = _DummyCloudScraper()
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from platform_connectors.base_connector import BasePlatformConnector
-from PyQt6.QtCore import QThread, pyqtSignal, QObject
+from platform_connectors.qt_compat import QThread, pyqtSignal, QObject
+from platform_connectors.connector_utils import startup_allowed, safe_emit
 from core.logger import get_logger
 
 # Structured logger for this module
@@ -585,11 +629,11 @@ class KickConnector(BasePlatformConnector):
             # Emit signals with correct signature (platform, username, message, metadata)
             # Emit metadata-first for newer handlers
             try:
-                self.message_received_with_metadata.emit('kick', username, content, metadata)
+                    safe_emit(self.message_received_with_metadata, 'kick', username, content, metadata)
             except Exception:
                 # Fallback legacy emit
                 try:
-                    self.message_received.emit('kick', username, content, {})
+                    safe_emit(self.message_received, 'kick', username, content, {})
                 except Exception:
                     pass
             logger.debug(f"Signal emitted successfully")
@@ -608,7 +652,7 @@ class KickConnector(BasePlatformConnector):
             msg_id = data.get("id") or data.get("message_id")
             if msg_id:
                 logger.info(f"Message deleted by moderator: {msg_id}")
-                self.message_deleted.emit('kick', msg_id)
+                safe_emit(self.message_deleted, 'kick', msg_id)
             else:
                 logger.warning(f"Deletion event without message ID")
         except Exception as e:
@@ -678,7 +722,7 @@ class KickConnector(BasePlatformConnector):
                     self.webhook_url = self.ngrok_manager.start_tunnel(self.webhook_port, name="kick")
                     
                     if not self.webhook_url:
-                        self.error_occurred.emit("Failed to start ngrok tunnel. Configure token in Settings.")
+                        safe_emit(self.error_occurred, "Failed to start ngrok tunnel. Configure token in Settings.")
                         logger.error("Ngrok tunnel failed. Please configure auth token in Settings page.")
                         return
                     
@@ -691,17 +735,20 @@ class KickConnector(BasePlatformConnector):
         
         # Step 2: Get App Access Token
         if not self.get_app_access_token():
-            self.error_occurred.emit("Failed to get Kick access token")
+            safe_emit(self.error_occurred, "Failed to get Kick access token")
             return
         
         # Step 3: Get channel info
         if not self.get_channel_info(channel):
-            self.error_occurred.emit(f"Failed to get Kick channel info for '{channel}'")
+            safe_emit(self.error_occurred, f"Failed to get Kick channel info for '{channel}'")
             return
         
         # Step 4: Start webhook server (shared callback server)
         self.webhook_thread = Thread(target=self.start_webhook_server, daemon=True)
-        self.webhook_thread.start()
+        if not startup_allowed():
+            logger.info("[KickConnector] CI mode: skipping webhook server thread start")
+        else:
+            self.webhook_thread.start()
 
         # Give the webhook server a moment to start
         import time
@@ -725,12 +772,12 @@ class KickConnector(BasePlatformConnector):
             
             # Mark as connected
             self.connected = True
-            self.connection_status.emit(True)
+            safe_emit(self.connection_status, True)
             logger.info(f"✓ Kick: Connected to channel '{channel}'")
             if self.webhook_url and not self.webhook_url.startswith("http://your-ngrok"):
                 logger.info(f"✓ Webhook URL: {self.webhook_url}")
         else:
-            self.error_occurred.emit("Failed to subscribe to Kick chat events")
+            safe_emit(self.error_occurred, "Failed to subscribe to Kick chat events")
             logger.warning("NOTE: Webhooks require a publicly accessible URL.")
             if not self.ngrok_manager or not self.ngrok_manager.is_available():
                 logger.info("Configure ngrok in Settings for automatic tunnel management.")
@@ -772,7 +819,7 @@ class KickConnector(BasePlatformConnector):
                 pass
             self.webhook_server = None
         
-        self.connection_status.emit(False)
+        safe_emit(self.connection_status, False)
         logger.info("✓ Kick: Disconnected")
     
     def send_message(self, message: str):
@@ -922,7 +969,10 @@ class KickConnector(BasePlatformConnector):
             
             # Run WebSocket in separate thread
             self.ws_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
-            self.ws_thread.start()
+            if not startup_allowed():
+                logger.info("[KickConnector] CI mode: skipping chat websocket thread start")
+            else:
+                self.ws_thread.start()
             
             logger.info(f"[Kick WS] Started connection thread")
             
@@ -956,12 +1006,15 @@ class KickConnector(BasePlatformConnector):
                                 logger.info(f"✓ Kick: Successfully resubscribed")
                             else:
                                 logger.error(f"✗ Kick: Failed to resubscribe")
-                                self.error_occurred.emit("Kick webhook subscription failed")
+                                safe_emit(self.error_occurred, "Kick webhook subscription failed")
             
             logger.info(f"Health monitoring stopped")
         
         self.health_check_thread = Thread(target=health_check_worker, daemon=True)
-        self.health_check_thread.start()
+        if not startup_allowed():
+            logger.info("[KickConnector] CI mode: skipping health_check thread start")
+        else:
+            self.health_check_thread.start()
     
     def verify_subscription(self):
         """Verify that webhook subscription is still active"""

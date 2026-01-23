@@ -35,7 +35,10 @@ class _CompatApp:
                     code = req.args.get('code')
                 except Exception:
                     code = None
-                logger.debug(f"[Trovo OAuth] Received callback with code: {code}")
+                try:
+                    logger.info(f"[Trovo OAuth] Callback URL received: {req.url}")
+                except Exception:
+                    logger.debug(f"[Trovo OAuth] Received callback with code: {code}")
                 if code:
                     last_code_container['code'] = code
                     try:

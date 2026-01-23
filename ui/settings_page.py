@@ -2,13 +2,72 @@
 Settings Page - Configuration and ngrok management
 """
 
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QLineEdit, QGroupBox, QScrollArea, QTextEdit, QCheckBox,
-    QFrame, QMessageBox, QColorDialog, QGridLayout, QFileDialog
-)
-from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal
-from PyQt6.QtGui import QFont, QColor
+# Guard PyQt6 imports for headless/test environments
+HAS_PYQT = True
+try:
+    from PyQt6.QtWidgets import (
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+        QLineEdit, QGroupBox, QScrollArea, QTextEdit, QCheckBox,
+        QFrame, QMessageBox, QColorDialog, QGridLayout, QFileDialog
+    )
+    from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal
+    from PyQt6.QtGui import QFont, QColor
+except Exception:
+    HAS_PYQT = False
+    QWidget = object
+    QVBoxLayout = object
+    QHBoxLayout = object
+    QLabel = object
+    QPushButton = object
+    QLineEdit = object
+    QGroupBox = object
+    QScrollArea = object
+    QTextEdit = object
+    QCheckBox = object
+    QFrame = object
+    QMessageBox = object
+    QColorDialog = object
+    QGridLayout = object
+    QFileDialog = object
+    Qt = object
+    def pyqtSlot(*a, **k):
+        def _decorator(f):
+            return f
+        return _decorator
+    def pyqtSignal(*a, **k):
+        class _DummySignal:
+            def connect(self, *args, **kwargs):
+                return None
+            def emit(self, *args, **kwargs):
+                return None
+        return _DummySignal()
+    QFont = object
+    QColor = object
+# Ensure a usable QMessageBox exists for headless/tests even if the import
+# fallback set it to `object` earlier (some test collection paths import
+# modules before test stubs are installed). Provide minimal methods used
+# by tests so they can monkeypatch them reliably.
+if globals().get('QMessageBox') is object:
+    class _MinimalMessageBox:
+        StandardButton = type('SB', (), {'Yes': 1, 'No': 2})
+
+        @staticmethod
+        def information(parent, title, text):
+            return _MinimalMessageBox.StandardButton.Yes
+
+        @staticmethod
+        def warning(parent, title, text):
+            return _MinimalMessageBox.StandardButton.Yes
+
+        @staticmethod
+        def critical(parent, title, text):
+            return _MinimalMessageBox.StandardButton.Yes
+
+        @staticmethod
+        def question(parent, title, text, buttons=None):
+            return _MinimalMessageBox.StandardButton.Yes
+
+    QMessageBox = _MinimalMessageBox
 import os
 import sys
 from core.logger import get_logger

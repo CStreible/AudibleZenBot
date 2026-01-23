@@ -3,9 +3,16 @@ Chat Overlay Server for OBS Studio
 Provides a web-based chat overlay that syncs with the main application
 """
 
-from flask import Flask, render_template_string, jsonify, send_file, request
-from flask_cors import CORS
-from PyQt6.QtCore import QObject, pyqtSignal, QThread
+try:
+    from flask import Flask, render_template_string, jsonify, send_file, request  # type: ignore
+    from flask_cors import CORS  # type: ignore
+    HAS_FLASK = True
+except Exception:
+    HAS_FLASK = False
+
+# Use the lightweight Qt compatibility layer so this module can be
+# imported in headless/test environments without PyQt6 installed.
+from platform_connectors.qt_compat import QObject, pyqtSignal, QThread
 import threading
 import json
 import os
@@ -14,8 +21,45 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-app = Flask(__name__)
-CORS(app)
+if HAS_FLASK:
+    app = Flask(__name__)
+    CORS(app)
+else:
+    # Minimal no-op replacements so route decorators and helpers don't
+    # cause import-time failures when Flask isn't installed.
+    class _NoOpApp:
+        def route(self, *args, **kwargs):
+            def _decorator(fn):
+                return fn
+            return _decorator
+
+        def run(self, *args, **kwargs):
+            return None
+
+    def render_template_string(s, **kwargs):
+        return s
+
+    def jsonify(obj):
+        return obj
+
+    def send_file(path, **kwargs):
+        raise RuntimeError("Flask not installed: send_file unavailable")
+
+    class _NoOpRequest:
+        def get_data(self, *args, **kwargs):
+            return b""
+
+        def get_json(self, *args, **kwargs):
+            return None
+
+        headers = {}
+        path = '/'
+
+    request = _NoOpRequest()
+    def CORS(app):
+        return None
+
+    app = _NoOpApp()
 
 # Global state for messages and settings
 overlay_messages = []

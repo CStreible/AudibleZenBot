@@ -1,0 +1,419 @@
+{
+    "ui": {
+        "show_platform_icons": true,
+        "sidebar_expanded": false,
+        "theme": "dark",
+        "show_badges": false,
+        "show_user_colors": true,
+        "show_timestamps": true,
+        "background_style": "Alternating",
+        "username_colors": [
+            "#FF6B6B",
+            "#4ECDC4",
+            "#45B7D1",
+            "#FFA07A",
+            "#98D8C8",
+            "#F7DC6F",
+            "#BB8FCE",
+            "#55ffff",
+            "#aaff00",
+            "#555500",
+            "#A9DFBF",
+            "#F5B7B1",
+            "#55007f",
+            "#AED6F1",
+            "#ff5500",
+            "#ffaaff",
+            "#5500ff",
+            "#ffff00",
+            "#aa0000",
+            "#00aa00"
+        ],
+        "window": {
+            "x": 92,
+            "y": 87,
+            "width": 744,
+            "height": 911
+        }
+    },
+    "platforms": {
+        "twitch": {
+            "username": "AudibleZenLife",
+            "connected": true,
+            "muted": false,
+            "oauth_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAADaFcwJeGy2UHpZBTkmz47QcFUtzGGHh7iZTNpdEnsrsgAAAAAOgAAAAAIAACAAAADQRcc3hSaAunE1eJR2TDentqsElyVFzl7oKM4sgQuHhCAAAAB8ZK6aCdhcHYltEcd3ehNxvksy5VMoGwkx0kIQMtFEYkAAAACWCr7QJPTDb7wu1fT3CbkYxCRip7nebv+83jkL6gDuJRt40DqDl6dg92BJKkiAy6GZyqyhU0Zab7qEezZj56Hi",
+            "stream_info": {
+                "title": "More Dawntrail crafting today - Hang out and chat (or lurk if ya wanna!)  !zen !commands",
+                "notification": "Things just got a little more Zen today. Come visit your place to chat, chill, and lurk if ya wanna.",
+                "category": "FINAL FANTASY XIV ONLINE",
+                "tags": [
+                    "AnonymousFollows",
+                    "Ally",
+                    "ChattingWithViewers",
+                    "SafeSpace",
+                    "OldManGamer",
+                    "MusicAndVibes",
+                    "English"
+                ]
+            },
+            "client_id": "h84tx3mvvpk9jyt8rv8p8utfzupz82",
+            "client_secret": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAADielpCyNZc+igsOIjWwcFEQSC4ISJsCMTmQaJgJw2ZtwAAAAAOgAAAAAIAACAAAABTaHxIklG+O5EXcJtdOjPUjM0pqlFMsvE+VaMoZJnCqyAAAADGc3i66i1lb/RZkX63TmcCrdE9alltjYAYK4fq7JpYY0AAAADpZojcOYpRpTbmIfwioP7dNLAU6lG2yU8sFHnhMMnPlARsVhPLPBqr5JjxALfgSy65p++ZtZ4a4l5DdQYaekTL",
+            "streamer_username": "audiblezenlife",
+            "streamer_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAABkS9VvfKt45+zQTCyxq6TwYJ0LTjite1zRu/lWQG9PLAAAAAAOgAAAAAIAACAAAACyExXhMVNzTRMGrzvxnDUOhVzl4FvM9ojA4E5afPIDYSAAAADw4/FngCJrM7rbXo6VxCK2S7k4hDRNZtatHlKTvoVDEEAAAAA3Ve52OFwbqNKZQJbvbnQB7+n7GrKJmy4kAK8fPOs4xBNpq63+Q6yb860KaV+bHkm54F014bFIo1yhJykcC7im",
+            "streamer_logged_in": true,
+            "bot_username": "",
+            "bot_token": "",
+            "bot_logged_in": false,
+            "streamer_display_name": "AudibleZenLife",
+            "bot_display_name": "",
+            "streamer_refresh_token": "930otwgw3f94vnfv2czidv27zsn6vmnmae54qqbezu2qy8p4la",
+            "streamer_token_timestamp": 1768738856,
+            "bot_refresh_token": "",
+            "bot_token_timestamp": 1768738890,
+            "bot_connected": false,
+            "streamer_connected": false,
+            "streamer_user_id": "853763018",
+            "bot_user_id": "873823714",
+            "disabled": false
+        },
+        "youtube": {
+            "channel_id": "",
+            "connected": true,
+            "muted": true,
+            "oauth_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAADRXWOS+UjwMjpLf5dT9CVdp46IPuxdnXxsRP1tjgrLyAAAAAAOgAAAAAIAACAAAAA4Q7RNunvcOUI5IT8SB1Fg25IXLinEq3KSHRzpzzQK0gABAAC/Ghbh55uGECGgQW+b6Qj1VJrMHOFM+5Eys1U29fcY8qQ+FeivqzEsCYYmrMl3+VLdEYsX8TiOyAmPMxMFEU0G2+vj7LRrYwiQiaF1SW2vSAW5SEpB7LW4V4C9Bfapp0FW65ETvHDnpwPVhoJeoyXaZzt3BLGcJARvAgN76+LL8dEKWoP+SjS93od581lidpcXaVzeEU6W0VEWet8bQGwpCUSaL9ZYEnVIV1Nt+F8PeG1ZPLBKGM6ItmA0LG62Tj3BSMxN83QzsXmHh6hU+Xv2U4NQk0bbL6fH9AzLKPYriT48dlig2P/PcRChAdZDopjcPIEvan/8Y3lvWnvWLkJVQAAAANfbwZ9jk7yGkV9rSk3j3wTx8P9G2uNfYuCeqeY9o7ijlwltAKYm6dv3lDK/JOAGMfu6eC9sAPHiMDqVpqR/Nds=",
+            "username": "UCxu_6x5X7VLCXsy3TxIm14w",
+            "refresh_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAADZKog2jMkmTPET917ESCA03ml+3aMuFM7GSpe3xG4nvwAAAAAOgAAAAAIAACAAAAATAcjU8AbktD2FOu0Zbl2XWab5hT3hSuWFQbbpm+eepHAAAABQAGWfS5QyW2x9kSwPpl9ErU7LjDo/OBmVFN+O3ht/szYaBtX8lS4YkoY1phJ8a4xHpaKe5GaWrrIqeA4ldBwKn7cm9mjUZe4uA7fsqFuwRXUjwhm91IsELZoy+0AT+vfb9bi88EUyIRw/Xyf4RdcMQAAAABskDz4oVrS/8CVbNUDyT1XMfr6BY1WYh8svRer++Pg0jGBInMpuaDiWN/6E5LTuRYgHSZW8v7AgSdZEA2iCcmM=",
+            "streamer_username": "audible.zen.gaming",
+            "streamer_display_name": "Audible Zen Life",
+            "streamer_token": "",
+            "streamer_logged_in": false,
+            "streamer_refresh_token": "",
+            "streamer_token_timestamp": 1768739216,
+            "streamer_connected": false,
+            "streamer_user_id": "",
+            "bot_username": "support",
+            "bot_token": "",
+            "bot_refresh_token": "",
+            "bot_connected": false,
+            "bot_logged_in": false,
+            "bot_display_name": "Audible Zen Bot",
+            "bot_token_timestamp": 1768741119,
+            "bot_user_id": "",
+            "disabled": true,
+            "client_id": "44621719812-l23h29dbhqjfm6ln6buoojenmiocv1cp.apps.googleusercontent.com",
+            "client_secret": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAABBpHALvPdELYGUqOoZjAqitKQ0k32/Z1NJsjwQWt3JmwAAAAAOgAAAAAIAACAAAAC1wo+rqj9LsRutaqF7KzyEwFWlG9iEcEGJUGs7fhbcajAAAACwaPJHSb+m4D52BL0CTKti7p3Pyoa6BfJEqRD6Bfx3ymsCJYWCk2GUbLrhwS7nLSJAAAAAABESsQM/7NXholtJaGXtvDMKB2xL3cB1WemovxjusM+tk7iVk6fMQUqgyOjiZmBq+w0aQg/8CKOd7L8tt06QYw=="
+        },
+        "trovo": {
+            "username": "AudibleZenLife",
+            "connected": true,
+            "muted": false,
+            "access_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAABjZcBNnxauSmKWpBPjfXnmYw5dPI+K8TH0QclFRFTqMgAAAAAOgAAAAAIAACAAAABC0Tb33A2ItyBEDulyxglDeLehDWtXMPyxI4JSzOM1/DAAAAA1a/oHk7xRXeKnF7LX0IwtzMvWFOk0J72M8dPu+XShB+/RCid0JWsdAmbaYHfkAFdAAAAAyV3U2G2aRUf8eYR6st2Gv7JtfuB5TNvX6eiDp+rhBxkuSgwXmbOhdia9oevWIgyXsXN2d7tzgE9B0PDguunRuQ==",
+            "refresh_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAAD4I8wa/ct75vqZ3HACwwM0/zvd4u18FX7prN7OiV9CewAAAAAOgAAAAAIAACAAAABFbp51XXX2PFXwdpD3fZ3VVM9v8g/fGOgibtguafPwczAAAAAjlpn6QBaSRtXJORnKQiGwf7Wan1P+wJ2UC818JrX6XECAxxC9dVvouu/2K/V72o1AAAAAleJS+M7swP2P1c/rZwIoHCN4NcgajuF+wDVN1cJQlo/Y8YtgtvTDJEuH3KfMrua0UYyLNSuf/DF5IYfc9w7PeQ==",
+            "streamer_username": "AudibleZenLife",
+            "streamer_display_name": "Audible_Zen_Life",
+            "streamer_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAAD/iAiSTvmzaWAwubThS68vGCqPDYM+aU1qlio08oOikQAAAAAOgAAAAAIAACAAAADbecQPCb6myb8z4Yxl1kUFhubSKb89JyCtmS9LxZ4rNDAAAADxfHkEvuqv4qZESzalyhutfMoV/nb5JMBzOox6x97PRAkHTbcPxq162Nqb3rTwmyFAAAAAWyGvNfmzN0yKPqVLpNmaJStoOp9pM1nYkhu76Ikkqmo+97d3IOaS7Hr+/gjAiveszF7S8sjAHqWU7W8wGskTEw==",
+            "streamer_logged_in": true,
+            "streamer_refresh_token": "0b819bf64307dfc7dbf4af1e47ca6359",
+            "streamer_token_timestamp": 1768737231,
+            "streamer_connected": false,
+            "streamer_user_id": "112073557",
+            "bot_username": "AudibleZenBot",
+            "bot_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAACj0x31PCFEwkO9WO7MoLCSl4VLwrHCjafjaZ81E7CQCQAAAAAOgAAAAAIAACAAAAAthvIBFkOyIKNCGqgiMtEiwhbj22f8rsH6tVceJ6qFcTAAAAADfVKo5ccYI9lti8ZOrVmauwzNiFK+9oyAJO2JPjVZcWvteWwbDDvHh/gT5/rKx/RAAAAAOp0pPvUAURFvaDdBcx/K5Op4rpCLTg2+kD4+YX83L3wuhgB/Ux3bx/6IxrKVVuLkRrPUGSNX/yC/zIufDaocpg==",
+            "bot_refresh_token": "6904848d95dcb5216723ed40ffd8fd6e",
+            "bot_connected": true,
+            "bot_logged_in": true,
+            "bot_display_name": "AudibleZenBot",
+            "bot_token_timestamp": 1768737219,
+            "bot_user_id": "117184180",
+            "disabled": false,
+            "redirect_uri": "https://mistilled-declan-unendable.ngrok-free.dev/callback",
+            "client_id": "b239c1cc698e04e93a164df321d142b3",
+            "client_secret": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAABQf39aNZT02GckuJ/6bxBEnycf6FlULdW7aaTKWTRQbQAAAAAOgAAAAAIAACAAAACtlOK2Xs8r5XazpFyCwr0Svze0sFFmAjz/9F7LFYKCQTAAAABSzAaja3/mq4TftL/B28z6sKbvmbK9lIG4WXGY0Zfs87MiJ1TcAGMshbfFkv1Rw7VAAAAAGI1Y2yOXi7kDKA+1t/OcRV738Z5DNV78apYyiluFhumdPshEKxm7/RhcbnvzjxKOmEu7zOI/07Zau9cX7IQrRA=="
+        },
+        "kick": {
+            "username": "audiblezenlife",
+            "connected": true,
+            "muted": false,
+            "stream_info": {
+                "title": "Testing - Hang out and chat (or lurk if ya wanna!)",
+                "notification": "",
+                "category": "Music Production",
+                "tags": []
+            },
+            "streamer_username": "audiblezenlife",
+            "streamer_display_name": "audiblezenlife",
+            "streamer_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAACiBzfsj0cPXvwWof6tKnDBUUSKG0/7L921ru5Z9O7EtQAAAAAOgAAAAAIAACAAAABnwCcFmwHJ6bW3oya+shhU+AryX4F8e8bn0R/5aO302EAAAACtWWPK7e3QgYIp/GX5FhJ5sRz6tXb9PkuGz2xIkXTZKeHQGULJKb32/pdhT82XXwT2dEYpYebA64kPer3twSaoQAAAAAaMai2CrWMdb0Ajx3lqgSdol4sXq95qDZqByX91DAEuoIAIuH3p62UqBh/5WbWXUJYYdalz9lfHWiluNrhPeRw=",
+            "streamer_refresh_token": "Y2YYODMYNTITZDBMMC01YZDHLTGWMDITNDNHYTK5MJBIY2ZJ",
+            "streamer_token_timestamp": 1768741457,
+            "streamer_logged_in": true,
+            "streamer_connected": false,
+            "streamer_cookies": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAAAJ/QtkX5qJNpmaRrpIZG6fdJjr1X4ziA0twzCeF7vYugAAAAAOgAAAAAIAACAAAAD9BV0oEV8gj9Mx8zlqXe9/x6oZwaLQOs3p3yLOLlA8u1ACAABCgYvhKeofuK5haTVstoE+cZtpLbpaepS4FH9QGWqea4aOb6YVc710MxTeuc44zrZzfpeNlDb6X4d5SmSvXLYiKbHIXeP3wb5QGbIoG37dbbQn6mR8YvGYThQT9pxTqjz1fYV++fpln5O97/FwsRJR5jXeD41W8UwkG+ThN6KznbTFQIrkL8nSitGGwPXse4xMILe+NGpc4b1Bpyqsv89I5I17cXI72V90rlPUt4hUJL9/tA65XNcn04fjzUvlFF7VpKkTTf+ATaw9E260uYwlxgH28CAdSyGs6cNESxMuDJffvkHeUWQlMJ2NgWeNm+vLpCl+ym0EmMvxRXJozG0TpyT0fYX42chPjDlsxNNnsQvbvv4y4IMVZEjrgF2HTbabL3gtDRBeVmtbFWHhKm4VhRCo7OhgM0sZPykbMTNDuuz3OhVcJphuMFSJvXv0zgk6jpUuprj9te69xkI69dT+8MwTHXhVxEbmjLw36wXThLq4Rc9QTkAIC7URLyCEddqwqZwih4H6oO0vVhBcn43CYtmNS5sTWHBidh3OjbBWVQFat7S3cUaUD8U5PQvWSmk9b0BebU4I+LUIvAk3rCz6bGw5i5p8J9AYxx0bOF/jiueHyR3zTawwg3MsNRuAQNL0Wk6jNeUJSaTwTLlsbfbyuY09K6yxgCvXLC2KNuJ2CkRGJrd78Cm52EK0css+BOex1OKbpgeUyRKdnKzpkjqEzs2rHrIJ2MFy1kMOcMSTLg86UchxdTYhy22IOigEtITYMsFgVMWcBuM1beUH0SznQAAAAJlcPGeBPF6PVBefp+WVVBfaGptGnXDYXQv5ZaaJUtuk86I7ZY2zTHnkRmtDWA/rd0DQLUYa2/D/d04a61v/DFI=",
+            "streamer_user_id": "3403590",
+            "bot_username": "audiblezenbot",
+            "bot_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAABr8GhsWqqaputNP3CBe62Dymq9/UeUb+zMg0SOCrsI8QAAAAAOgAAAAAIAACAAAAC1vbRXeTmHgecSNDzos/HPYbtDu8nVij937sD/6H556kAAAAD744MK67EH7T3ckqOQJTKZ6ewLx+sQcTCltpCMAS1X06NeN5ENDynU85sdJ0hsExE/P412ccutcmdbu1Hg6GN3QAAAADBH6bzPwu9ByfWbCDWIRLKevGtJ2kNw+1OnjIt2ALq0bHES3bXqommblnpIhrdUD6hhmWRQnhpbsJ0dU0nK5DQ=",
+            "bot_refresh_token": "YMUXNWRHOWETYMY4MY01MWNLLWFIZGITYJCYZDZJYWUWYJDM",
+            "bot_connected": true,
+            "bot_logged_in": true,
+            "bot_display_name": "audiblezenbot",
+            "bot_token_timestamp": 1768741422,
+            "bot_user_id": "92222771",
+            "disabled": false,
+            "client_id": "01KDPP3YN4SB6ZMSV6R6HM12C7",
+            "client_secret": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAAB8lV3NT5w4Ula0Ckob7joppwkhnCckZRRYPFTxa+cHRQAAAAAOgAAAAAIAACAAAABMvCOFRTERabsVC5aytjrS9NRV9yuJaOMZxZ8J2pgCDVAAAADafv33c2f6iXQT0bGQQoCpoGxN1P8ZgH5iTtjeaTmdmpS+/G9sZRVK2ns7Wf/iLwd8P782zZ0YOhsmoDL32K3HviGUAhzktUsF1ysKp6loT0AAAAAXzwyMiymj9p7BXx0B+AnWNq96QVf44hIj+onhBkg754Y2IgTQsUnemwy9o30aKwjMd7r8C0fG2pcEuf3MfqDq"
+        },
+        "dlive": {
+            "username": "AudibleZenLife",
+            "connected": true,
+            "muted": false,
+            "access_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAADn5zbWEJaOUTwX982x81+Yxim4VKwCymicnyBkqlQIcAAAAAAOgAAAAAIAACAAAADZpQ50cC/p+U504Tv1E/UXnYIdx0GTTan6aqIOfkeSnuABAABpJoSLzc5Mgxt7f3FWK/5S83DQRjiqcKmz4Jyg5Xv9fmkSHmlJcc286rlw8aHQ8prwhr0liFUlmjecuAuGT1gAI1kkehl28IBlL07jdnGI0p8CCgfS1r2mlCIptYqcEMD6j0XzgwWEpsq6zVN4jIRsfwxvND+3VCLkziaXsbnXXB0ib/ePD5BiCQEj9ReUgOiQ9dMFt2xCK7fDm8wgodFKgexb/z8deQTPAjo9IurCrrHd0ls54VAcmYvjl+3aAcQtK2xIpNjhYREFVvx5jNN3fue6C4dMzWP16MfZjkJ2DUusicVWxdTH5ZEWZf9v8hjE2XyxiYB5x2tOGeQVayJ4tK4LI0rFkcVWvex3VAGyyAR+OnIr3MZj/vB7fLq6U/f0pwXP5ZUNXB2gWm1eDIR9SJ2X9uX+VTMxjy9i4sThGDRQnrnjuMb4ZqY3j3OZ0qdNBfDZMEAit7otTl1JsxloAKr2HunrBiGqmp8twESAYkjPQ75XmSBwnJ2xodoczPXUhWXfcXA4f/+VIL1kzH1CAL4xJJvj0fj/M/LhjaM+3JL/lH3khqVEIcl/mfEOUAVf8typl3P9fbS/1XaFqr5k9fwgFS5rY1nWtJwm4h2A053CE1W8boOhXvXn0RqhqwdAAAAAy66hhYB67YUrZHYUwjRZuPVYFlX71JkJGL9NPi9qlPHH6O2uA9KCNxwSs1nqQdSwot8Cu2tlkoNnwqSc1/ZG5A==",
+            "streamer_username": "AudibleZenLife",
+            "streamer_display_name": "AudibleZenLife",
+            "streamer_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAAD7W85m0uV94BKjnzEEYrKOMAMpSmMIvcipdJGffRqUqAAAAAAOgAAAAAIAACAAAADzxyA2adsFL2aEnxfWBO9wmY1xk4iMCl0xzmtxXtkgeeABAAAyR2f3rZ4WDK5hMMxHEwvHeGEPYEk8Q/jhgWXO0G6EeqLpCyvKSKfI/MQ+di9bTMCZHle11u91QF2m1/1hhadGczktMdWtio537okJVN6E4Kc3NtdxqW6emjX3/H/ZmuC6zGWfys0h+p5ELI8kLgjgFsV6HDvRbAvKySE8zMv+SKATx6SIIlarc7Y91xAlOO+xhTRZqKnYO9rL2iTrDebwWiRY+j2MXucUoz45VF/yKVGte6Nkwc9L3JzCo1bM0d+eQZBM66ad1sxde940RcrbfbkAjecD3j94GI3LJv4ei1vuErkSLx+gzx3pwvgij+nEZm1z+MWUYtC36UaHzsL+CEsYNiWe/LSTbfjo3bhIFxa0Kv1CKy/DXYVLztwfe7D2CYvl6IuJ0yg3MuhVDklOmUPWRxkVJmc4ty+JwilUWIDTQ1YBrZy3rgt1cEm/FDu5SDG/Wl6McHcypSr/3mhdKv7uA1rPZrfFqNs6WN7MqVN6UE2tbzj9hxGiDOMT28cXyWvzUnxInLt8umCDkCWtM8SAhY3J2s8oUU3cQyqx8CdBX1yBM1z59fK6WyAcEGZS12fyW9YdeKsa2mOH0zoth4tit/0zGqxdRGuPort9V76RlemoKF+UTcB1yGmNbSdAAAAACs56zZGfJxMLV7AbMDaSSlu+PP1tCkgiremsHYF8NEm56wgb49NDvSc7SaaCRp+Gn8JeIWVpYfR4PnOy8ewPiA==",
+            "streamer_refresh_token": "",
+            "streamer_token_timestamp": 1768705175,
+            "streamer_logged_in": true,
+            "streamer_connected": false,
+            "bot_username": "AudibleZenBot",
+            "bot_display_name": "AudibleZenBot",
+            "bot_token": "",
+            "bot_refresh_token": "",
+            "bot_token_timestamp": 1768011459,
+            "bot_logged_in": false,
+            "bot_connected": false,
+            "disabled": false,
+            "streamer_user_id": "",
+            "bot_user_id": ""
+        },
+        "twitter": {
+            "username": "AudibleZenLife",
+            "connected": true,
+            "muted": false,
+            "oauth_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAAD2hqDFocpcwtuWco7X7uCX41T2rWGwuMxOoW1bhFlkoQAAAAAOgAAAAAIAACAAAADchnC4nxmFjbWqtmX8CbD/O8xgJ1Ca1iLy7Eah6WKLYoAAAACT7BF45QoXZekH4HMelFWBBDB/Xy1ye11E/cKwsEddZFzuVlD5iNsrPPHMUhtrXvR08iw4kNc549Xkj+m0d3Bi4tSq5eJJWSvX7IuJCT/HOQlrIqxUZONsJLCn9N80FIlOgnx/LXunpCg5C2Ao5y1xGpIC0ETt9LAWadqcqtAg40AAAABkeb6pjWYBG4eHAJQDVtV8SM8lD3CqB9uumrKbICuc3E0BizqQh18VvfANuBzwaxExO9ougIYlxDBzfWCh6XWi",
+            "access_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAAAVhvhnsELoUzxYZxZuuJqoTy6dx0qKR8OHE8/gY7omBQAAAAAOgAAAAAIAACAAAADj3geasioSkW8XaTvtW1UP8ib2LhDUpscFTwWlzJ719kAAAADsKpI/bWEkZ4Xg2I5xXB/K+FD667d1DYca+mfXV2WbMg/QirVnGj9I+edQGDzoHqcfg/+7ADVYm+lhk4QBbXQ7QAAAALSs2bpzjcP3c9SbqoBB8yLX2OdiNEt71GcrTsRtixi8oGF8YLqIiefOHBtpLhWXtxLy5jotkAlPFjMeDDWeywU=",
+            "access_token_secret": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAABTIak0XvKlJLEcpL0GWPXF8xtGb5zprIwY++zHLMfXkgAAAAAOgAAAAAIAACAAAAA+tJiguTn042G6rBcH//io902L9bMObkQkNE25JF8DxTAAAAC5DnZcCWaq2q4+J3UzdOU8bJ6eB0OC65c43wt6eOSMdQrSv1MrEVJFMGM2wv0B8tFAAAAAWPDaNEjs0uyxIRLbXcnmj6Sj1gGEaYcr88va47y0AYfSQG5exYsrVBcGXCfMeXCzRTQO/cKdtrHj4N65ZURzJw=="
+        },
+        "twitch_streamer": {
+            "oauth_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAAAl9UxUVrcVrumGt/VBewGsTqqgRf8gU6sEP0q0sGeejAAAAAAOgAAAAAIAACAAAAD9MemHDVfl+OyV60E9YyFzJyTnrGtBL4itbyREnyrPSSAAAABqtTh0jLzODzRwcDpPBM/g1SkhLspCI2yR52aSOS8kekAAAADUUMF1tX1yeLc5CYLaVaDhfiNk0087Zi1c8muQviriuxGmrsjEthpI77u9vPK0xF3xOmtiy23HAdGlUGN02Ksy",
+            "refresh_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAACZNMWIKb2S+nvZ4fgTtNUZ4X2dmph/8d5xv0teRhTRTQAAAAAOgAAAAAIAACAAAAABmRh5K7cr8uxtC1fxZzqBY1t5l+6zEDP1c/LFOAtVj0AAAABPsBZRxsbrTdgExpMelytlnzFle0FeMk79FiHf9//HN1hKgkkIlbC3wMEYh9/WeyvK9CVG+HzmZA0YbrWE6rexQAAAAApSGzGA2R4H1CVlM2c2RQk8TV8+mzrlUQ5e1S6qauRl4+xNaZ6mkszOJLEPRAkxQwoRMGA43v+ig8jTI+oTSzU="
+        },
+        "twitch_bot": {
+            "oauth_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAABpapi1Fu3VuNK2LhvkxOIZNClkeSqr/srb1VnGoZxfMwAAAAAOgAAAAAIAACAAAAD39DPU2cxlNjRWeR+Wspgrg6MQ5SIJb89RSrD2MmVgrCAAAAByYFowz4OwUkXhHJPSOb9kOEa8DlymuusaXvNpXQyp70AAAACsl/ZemUue/d1Csh3tDtGcWJuc+KyKHNddueS6Ih5RiufZYYaVC8O9C/SBJ9K3kGAY4LQXnKETkfd2E1SOBih3",
+            "refresh_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAc8NtF+weVEunsYJ+BSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAABgplMLXMDeCHsG5H73uqE1qaFtFcgkRzUw6DvwCe2xDQAAAAAOgAAAAAIAACAAAABj6SQ0vJJ8R24rzGIgeFz+EeIyvFHh6cnwZyWN8HLd/EAAAACSMWrG8hgmgLmXK0m1RiKNZU0gudtXO0Nq09NoEF0haFNefTzG0rSncbM35fgn8p82324pynfT5Ln6hWpEy+y0QAAAAI/yPGVlnJ07BSq32lmmU4Mj7CrHJIGOJSDJ4wf0sB/H4KdvxYmbc6J3svx4HJBh+39c0AyLNQQMwGszByKG904="
+        }
+    },
+    "chat": {
+        "max_messages": 500,
+        "auto_scroll": true,
+        "show_timestamps": false
+    },
+    "ngrok": {
+        "auth_token": "37bw7tgW11SEou9FRZKQU0pQznR_5eEhKBUijjvb1AJoQhhdo",
+        "auto_start": true,
+        "tunnels": {
+            "trovo": {
+                "enabled": true
+            }
+        },
+        "kill_existing_on_startup": true
+    },
+    "overlay": {
+        "direction": "Bottom to Top",
+        "max_messages": 50,
+        "username_font": "Arial",
+        "username_font_size": 36,
+        "message_font": "Arial",
+        "message_font_size": 32,
+        "show_badges": false,
+        "show_platform": false,
+        "entry_animation": "Slide In",
+        "exit_animation": "Slide Out",
+        "duration": 30,
+        "msg_opacity": 70,
+        "msg_bg_color": "#000000",
+        "msg_blur": 10,
+        "overlay_bg_type": "Transparent",
+        "overlay_bg_color": "#1a1a1a",
+        "overlay_media": "",
+        "overlay_device": "Feature Disabled",
+        "overlay_image_path": "",
+        "overlay_video_path": ""
+    },
+    "timer_messages": {
+        "groups": {
+            "Global Timers": {
+                "display_name": "Global Timers",
+                "interval": 30,
+                "messages": [
+                    "1. This is a test message",
+                    "TEST_TIMER_STREAMER_ORDER",
+                    "TEST_TIMER_BOT_ORDER"
+                ],
+                "platforms": {
+                    "twitch": true,
+                    "trovo": true,
+                    "kick": true,
+                    "dlive": true,
+                    "youtube": false,
+                    "twitter": false
+                },
+                "active": false,
+                "allow_offline": false,
+                "send_as_streamer": true
+            }
+        }
+    },
+    "logging": {
+        "folder": "C:/Users/cstre/OneDrive/Documents/Audible Zen Life Assets/Logs",
+        "enabled": false,
+        "levels": {
+            "DEBUG": false,
+            "INFO": false,
+            "WARN": true,
+            "ERROR": true,
+            "CRITICAL": true,
+            "TRACE": false,
+            "DIAG": false
+        },
+        "category_levels": {
+            "all": {
+                "DEBUG": false,
+                "INFO": false,
+                "WARN": false,
+                "ERROR": false,
+                "CRITICAL": false,
+                "TRACE": false,
+                "DIAG": false
+            },
+            "chatmanager": {
+                "DEBUG": false,
+                "INFO": false,
+                "WARN": false,
+                "ERROR": false,
+                "CRITICAL": false,
+                "TRACE": false,
+                "DIAG": false
+            },
+            "connectors": {
+                "DEBUG": false,
+                "INFO": false,
+                "WARN": false,
+                "ERROR": false,
+                "CRITICAL": false,
+                "TRACE": false,
+                "DIAG": false
+            },
+            "connectors.twitch": {
+                "DEBUG": false,
+                "INFO": false,
+                "WARN": false,
+                "ERROR": false,
+                "CRITICAL": false,
+                "TRACE": false,
+                "DIAG": false
+            },
+            "connectors.trovo": {
+                "DEBUG": false,
+                "INFO": false,
+                "WARN": false,
+                "ERROR": false,
+                "CRITICAL": false,
+                "TRACE": false,
+                "DIAG": false
+            },
+            "sends": {
+                "DEBUG": false,
+                "INFO": false,
+                "WARN": false,
+                "ERROR": false,
+                "CRITICAL": false,
+                "TRACE": false,
+                "DIAG": false
+            },
+            "network": {
+                "DEBUG": false,
+                "INFO": false,
+                "WARN": false,
+                "ERROR": false,
+                "CRITICAL": false,
+                "TRACE": false,
+                "DIAG": false
+            },
+            "auth": {
+                "DEBUG": false,
+                "INFO": false,
+                "WARN": false,
+                "ERROR": false,
+                "CRITICAL": false,
+                "TRACE": false,
+                "DIAG": false
+            },
+            "persistence": {
+                "DEBUG": false,
+                "INFO": false,
+                "WARN": false,
+                "ERROR": false,
+                "CRITICAL": false,
+                "TRACE": false,
+                "DIAG": false
+            }
+        }
+    },
+    "automation": {
+        "variables": {
+            "ZenDefaultHat": {
+                "value": "No Hat",
+                "default": "No Hat",
+                "type": "string",
+                "initialize": false
+            },
+            "ZenRunningFirstViewers": {
+                "value": "false",
+                "default": "false",
+                "type": "bool",
+                "initialize": true
+            },
+            "ZenBreakTime": {
+                "value": "false",
+                "default": "false",
+                "type": "bool",
+                "initialize": true
+            },
+            "ZenFirstViewer": {
+                "value": "(Unclaimed!)",
+                "default": "(Unclaimed!)",
+                "type": "string",
+                "initialize": false
+            },
+            "ZenSecondViewer": {
+                "value": "(Unclaimed!)",
+                "default": "(Unclaimed!)",
+                "type": "string",
+                "initialize": false
+            },
+            "ZenThirdViewer": {
+                "value": "(Unclaimed!)",
+                "default": "(Unclaimed!)",
+                "type": "string",
+                "initialize": false
+            }
+        }
+    },
+    "test": {
+        "key0": "value0",
+        "key1": "value1",
+        "key2": "value2",
+        "key3": "value3",
+        "key4": "value4"
+    },
+    "debug": {
+        "all": false,
+        "chatmanager": false,
+        "connectors": false,
+        "connectors.twitch": false,
+        "connectors.trovo": false,
+        "sends": false,
+        "network": false,
+        "auth": false,
+        "persistence": false
+    }
+}

@@ -13,21 +13,11 @@
   - `stop_tunnel()` - Stop specific tunnel
   - `stop_all_tunnels()` - Stop all tunnels
   - `get_tunnel_url()` - Get public URL for port
-  - `is_tunnel_active()` - Check tunnel status
-  - `_monitor_tunnels()` - Background health monitoring
-
-**Features**:
-- PyQt6 signals for UI updates
-- Automatic pyngrok installation detection
-- Thread-safe tunnel management
-- Health monitoring every 30 seconds
-- Clean shutdown handling
 
 #### 2. `ui/settings_page.py` (NEW)
 **Purpose**: Settings UI with ngrok configuration  
 **Size**: 390 lines  
 **Key Classes**:
-- `SettingsPage(QWidget)` - Settings page UI
   - Ngrok token input with show/hide
   - Test connection button
   - Active tunnels display
@@ -37,8 +27,6 @@
 **UI Components**:
 - Ngrok Configuration section
 - Tunnel Status section
-- About section
-- Real-time status updates via signals
 
 #### 3. `AudibleZenBot.spec` (NEW)
 **Purpose**: PyInstaller build specification  
@@ -48,15 +36,10 @@
 - Include resources and badges
 - Hidden imports for all dependencies
 - One-file executable mode
-- No console window (GUI mode)
-- Optional app icon support
-
 #### 4. `build_exe.ps1` (NEW)
 **Purpose**: Automated build script  
 **Size**: 92 lines  
 **Features**:
-- Virtual environment activation
-- Dependency installation
 - Clean build option (`-Clean`)
 - Debug mode option (`-Debug`)
 - One-folder mode option (`-OneFolder`)
@@ -66,9 +49,6 @@
 **Usage**:
 ```powershell
 .\build_exe.ps1           # Regular build
-.\build_exe.ps1 -Clean    # Clean build
-.\build_exe.ps1 -Debug    # Debug mode
-```
 
 #### 5. `EXECUTABLE_BUILD.md` (NEW)
 **Purpose**: Complete build documentation  
@@ -99,19 +79,11 @@
 #### 7. `STANDALONE_REFERENCE.md` (NEW)
 **Purpose**: Quick reference for users and developers  
 **Size**: ~250 lines  
-**Contents**:
-- First-time setup steps
-- Ngrok configuration
-- Platform connection guide
-- Developer build instructions
-- Project structure
 - Key changes summary
 - Testing checklist
 
-#### 8. `CONVERSION_SUMMARY.md` (NEW)
 **Purpose**: Comprehensive conversion summary  
 **Size**: ~450 lines  
-**Contents**:
 - What was added
 - How it works (flow diagrams)
 - Building instructions
