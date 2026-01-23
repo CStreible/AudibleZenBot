@@ -1,6 +1,6 @@
-"""Repro harness for emote-set throttler.
+"""Repro harness for emote-set throttler (safe import).
 
-This script removes the current working directory from `sys.path` before
+This script removes the current working directory from sys.path before
 importing project modules so local stub files like `requests.py` don't
 shadow the real `requests` package.
 """
@@ -9,15 +9,15 @@ import sys
 import os
 import time
 
+# Ensure the virtualenv site-packages are prioritized so installed packages
+# (e.g., `requests`) are found before any local files that might shadow them.
 try:
-    # Ensure the virtualenv site-packages are prioritized so installed
-    # packages (e.g., `requests`) are found before any local files that
-    # might shadow them.
     import site as _site
     site_paths = []
     try:
         site_paths = _site.getsitepackages()
     except Exception:
+        # Fall back to using sys.path entries that look like site-packages
         site_paths = [p for p in sys.path if p and ('site-packages' in p or 'dist-packages' in p)]
     for p in reversed(site_paths):
         try:

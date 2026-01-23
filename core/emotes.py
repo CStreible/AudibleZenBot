@@ -28,6 +28,7 @@ class InMemoryEmoteMap:
         self.map = {}  # name -> data-uri/info
         self.pattern = None
         self.t_mgr = t_mgr
+        self.b_mgr = None
         self.broadcaster_id = broadcaster_id
 
     def rebuild(self):
@@ -214,6 +215,10 @@ class InMemoryEmoteMap:
         If a disk-cached image exists return it; otherwise fetch from
         the `url`, save to the emote cache, and return its data URI.
         """
+        try:
+            logger.debug(f'emotes: _ensure_data_uri entry name={name!r} info_keys={list(info.keys()) if info else None} broadcaster_id={self.broadcaster_id!r}')
+        except Exception:
+            pass
         if not info:
             return None
         url = info.get('url')
@@ -281,6 +286,27 @@ class InMemoryEmoteMap:
         except Exception:
             pass
 
+        # Prefer manager-provided name-based URI lookup when available
+        try:
+            name_lookup = getattr(self.t_mgr, 'get_emote_data_uri_by_name', None)
+            if callable(name_lookup):
+                try:
+                    try:
+                        logger.debug(f'emotes: _ensure_data_uri calling name_lookup for name={name!r} broadcaster_id={self.broadcaster_id!r}')
+                    except Exception:
+                        pass
+                    uri = name_lookup(name, broadcaster_id=self.broadcaster_id)
+                    try:
+                        logger.debug(f'emotes: _ensure_data_uri name_lookup returned {bool(uri)} for name={name!r}')
+                    except Exception:
+                        pass
+                    if uri:
+                        return uri
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # Otherwise fetch from network and save to disk
         try:
             # Prefer manager's request helper when available
@@ -339,8 +365,33 @@ def _get_global_emap(t_mgr, broadcaster_id=None):
             except Exception:
                 pass
         else:
-            # If caller requests a different broadcaster_id, update and rebuild
+            # If caller requests a different broadcaster_id or manager, update and rebuild
             try:
+                try:
+                    # Ensure the emap uses the provided Twitch manager instance
+                    if t_mgr is not None and getattr(_global_emap, 't_mgr', None) is not t_mgr:
+                        _global_emap.t_mgr = t_mgr
+                        try:
+                            _global_emap.rebuild()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                # Also attempt to pick up any BTTV/FFZ manager available so name lookups
+                # that rely on a b_mgr are supported in tests that inject one.
+                try:
+                    from core import bttv_ffz as _bf
+                    bm = getattr(_bf, 'get_manager', lambda: None)()
+                    if bm is not None and getattr(_global_emap, 'b_mgr', None) is not bm:
+                        _global_emap.b_mgr = bm
+                        try:
+                            _global_emap.rebuild()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
                 if broadcaster_id and _global_emap.broadcaster_id != broadcaster_id:
                     _global_emap.broadcaster_id = broadcaster_id
                     try:
@@ -609,7 +660,18 @@ def render_message(message: str, emotes_tag, metadata: Optional[dict] = None):
                             except Exception:
                                 pass
                         else:
-                            found_id = nm
+                            # Prefer a direct name-based resolution API if available
+                            try:
+                                uri = None
+                                name_lookup = getattr(t_mgr, 'get_emote_data_uri_by_name', None)
+                                if callable(name_lookup):
+                                    uri = name_lookup(emote_text, broadcaster_id=broadcaster_id)
+                                if uri:
+                                    emote_html = f'<img src="{uri}" alt="{html.escape(emote_text)}" />'
+                                else:
+                                    found_id = nm
+                            except Exception:
+                                found_id = nm
                     except Exception:
                         pass
 

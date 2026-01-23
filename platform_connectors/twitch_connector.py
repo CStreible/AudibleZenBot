@@ -2769,6 +2769,18 @@ class TwitchEventSubWorker(QThread):
                     # Prefer structured `fragments` when present (EventSub provides these
                     # for richer message contents including emotes and mentions). If
                     # fragments aren't available, fall back to legacy text fields.
+                    # Diagnostic: dump event payload keys and full payload at debug
+                    try:
+                        keys = list(event.keys())
+                        logger.info(f"[EVENTSUB_CHAT_PAYLOAD_KEYS] {keys}")
+                        try:
+                            payload_text = json.dumps(event, default=str)
+                            # Log full payload at INFO so it appears in usual log tails during repro.
+                            logger.info(f"[EVENTSUB_CHAT_PAYLOAD_JSON] {payload_text}")
+                        except Exception:
+                            logger.exception("[EVENTSUB_CHAT_PAYLOAD] Failed to serialize chat event payload")
+                    except Exception:
+                        logger.exception("[EVENTSUB_CHAT_PAYLOAD] Failed to inspect chat event payload keys")
                     fragments = event.get('fragments') or event.get('message_fragments') or None
                     if fragments and isinstance(fragments, list):
                         try:
@@ -2792,7 +2804,18 @@ class TwitchEventSubWorker(QThread):
                                 message_text = message_text.get('text', '') or ''
                         except Exception:
                             pass
-                    username = event.get('user_name') or event.get('user_login') or event.get('display_name') or event.get('broadcaster_user_name') or 'Unknown'
+                    # Prefer EventSub "chatter_*" fields when present (these are
+                    # the reported sender fields for channel.chat.message events).
+                    # Fall back to older/alternate keys for compatibility.
+                    username = (
+                        event.get('chatter_user_name')
+                        or event.get('chatter_user_login')
+                        or event.get('user_name')
+                        or event.get('user_login')
+                        or event.get('display_name')
+                        or event.get('broadcaster_user_name')
+                        or 'Unknown'
+                    )
                     message_id = event.get('id') or event.get('message_id') or event.get('msg_id')
                     timestamp = event.get('timestamp') or event.get('created_at') or None
 
@@ -2804,7 +2827,13 @@ class TwitchEventSubWorker(QThread):
                         from .connector_utils import emit_chat
                         metadata = {
                             'message_id': message_id,
-                            'user_id': event.get('user_id') or event.get('user_login'),
+                            # Prefer chatter_user_id when available; fall back
+                            # to other keys for older payloads.
+                            'user_id': (
+                                event.get('chatter_user_id')
+                                or event.get('user_id')
+                                or event.get('user_login')
+                            ),
                             'timestamp': timestamp,
                             'badges': [],
                             'fragments': fragments if fragments is not None else []

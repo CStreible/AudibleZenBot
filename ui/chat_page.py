@@ -398,6 +398,14 @@ class ChatPage(QWidget):
         
         # Pause/unpause message display
         self.is_paused = False
+        # Immediate JS execution rate-limits
+        # Number of immediate calls allowed per second for generic priority snippets
+        self._immediate_rate_limit = 20
+        # Number of immediate calls allowed per second specifically for tiny metadata/data-uri patches
+        # Temporarily raised for testing to allow aggressive immediate patching
+        self._meta_immediate_rate_limit = (self.config.get('ui.meta_immediate_rate_limit') if self.config else None) or 200
+        # timestamps of recent immediate calls
+        self._immediate_call_timestamps = []
         self.message_queue = []
         # Count of Python-side display calls (increments for every _displayMessage call)
         self._python_display_count = 0
@@ -505,8 +513,35 @@ class ChatPage(QWidget):
             Message with emotes replaced by <img> tags
         """
         if not message:
-            return ''
-
+                # If we have a page, attempt immediate execution subject to simple rate limiting.
+                if page:
+                    # Allow a test-time override to bypass rate limiting via env var AZB_FORCE_IMMEDIATE=1
+                    try:
+                        force_immediate = bool(os.environ.get('AZB_FORCE_IMMEDIATE') in ('1', 'true', 'True'))
+                    except Exception:
+                        force_immediate = False
+                    if force_immediate:
+                        try:
+                            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                df.write(f"{time.time():.3f} IMMEDIATE_FORCED_BY_ENV message_id={message_id}\n")
+                                try:
+                                    df.flush(); os.fsync(df.fileno())
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                    # Extra diagnostics: log immediate timestamp list and queue length
+                    try:
+                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} IMMEDIATE_DIAG message_id={message_id} page_present=1 pending_js={self.pending_js_count} queue_len={len(self.js_execution_queue)} timestamps={self._immediate_call_timestamps}\n")
+                            try:
+                                df.flush(); os.fsync(df.fileno())
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
         if not emotes_tag:
             # No emote info; escape message for safe HTML
             return html.escape(message)
@@ -2207,6 +2242,66 @@ class ChatPage(QWidget):
             priority = False
             js_to_enqueue = js_code
 
+        # Force verbose diagnostics for metadata-like patches even when the
+        # explicit priority marker is not present. This helps capture
+        # IMMEDIATE_* events in logs during repro runs.
+        try:
+            import time, os
+            maybe_meta = False
+            try:
+                maybe_meta = isinstance(js_to_enqueue, str) and ('data:image' in js_to_enqueue or 'setEmoteDataUri' in js_to_enqueue)
+            except Exception:
+                maybe_meta = False
+            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+            with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                df.write(f"{time.time():.3f} IMMEDIATE_VERBOSE_DETECT priority={int(bool(priority))} maybe_meta={int(bool(maybe_meta))} message_id={message_id}\n")
+                try:
+                    df.flush(); os.fsync(df.fileno())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # If we didn't already mark this snippet as priority, promote
+        # metadata-like patches (data URI or setEmoteDataUri) so they
+        # can take the immediate execution path during repro/testing.
+        try:
+            if not priority:
+                try:
+                    is_meta_patch = isinstance(js_to_enqueue, str) and ('data:image' in js_to_enqueue or 'setEmoteDataUri' in js_to_enqueue)
+                except Exception:
+                    is_meta_patch = False
+                if is_meta_patch:
+                    priority = True
+                    try:
+                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} IMMEDIATE_PROMOTED_BY_META_PRECHECK message_id={message_id}\n")
+                            try:
+                                df.flush(); os.fsync(df.fileno())
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                else:
+                    # Log when precheck did not promote - include snippet preview for diagnosis
+                    try:
+                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                        preview = (js_to_enqueue[:140] + '...') if isinstance(js_to_enqueue, str) and len(js_to_enqueue) > 140 else (js_to_enqueue if isinstance(js_to_enqueue, str) else '')
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} IMMEDIATE_PRECHECK_SKIPPED message_id={message_id} maybe_meta=0 preview={preview}\n")
+                            try:
+                                df.flush(); os.fsync(df.fileno())
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         if priority:
             # Try to execute metadata-priority JS immediately if possible to
             # avoid being delayed by a busy queue. Fall back to inserting
@@ -2237,20 +2332,48 @@ class ChatPage(QWidget):
                 # If we have a page, attempt immediate execution subject to simple rate limiting.
                 if page:
                     recent = len(self._immediate_call_timestamps)
-                    if recent < getattr(self, '_immediate_rate_limit', 20):
-                        # Instrumentation
-                        try:
+                    # Detect tiny metadata/data-uri patches and apply a higher per-second quota for them
+                    try:
+                        is_meta_patch = isinstance(js_to_enqueue, str) and ('data:image' in js_to_enqueue or 'setEmoteDataUri' in js_to_enqueue)
+                    except Exception:
+                        is_meta_patch = False
+                    # Promote metadata-like patches to priority so the immediate-path
+                    # instrumentation (IMMEDIATE_* logs) runs during repro/testing.
+                    try:
+                        if is_meta_patch:
+                            priority = True
+                            # small diagnostic so logs show promotion source
                             dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
                             os.makedirs(os.path.dirname(dlog), exist_ok=True)
                             with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
-                                df.write(f"{time.time():.3f} IMMEDIATE_CALL_ATTEMPT message_id={message_id} recent={recent}\n")
+                                df.write(f"{time.time():.3f} IMMEDIATE_PROMOTED_BY_META message_id={message_id}\n")
                                 try:
                                     df.flush(); os.fsync(df.fileno())
                                 except Exception:
                                     pass
-                        except Exception:
-                            pass
+                    except Exception:
+                        pass
+                    limit = getattr(self, '_meta_immediate_rate_limit' if is_meta_patch else '_immediate_rate_limit', 40 if is_meta_patch else 20)
+                    # Instrumentation (include which limit we're using)
+                    try:
+                        dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+                        os.makedirs(os.path.dirname(dlog), exist_ok=True)
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} IMMEDIATE_CALL_ATTEMPT message_id={message_id} recent={recent} limit={limit} meta_patch={int(is_meta_patch)}\n")
+                            try:
+                                df.flush(); os.fsync(df.fileno())
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
 
+                    # If forced by env, bypass the recent<limit check
+                    try:
+                        env_force = bool(os.environ.get('AZB_FORCE_IMMEDIATE') in ('1', 'true', 'True'))
+                    except Exception:
+                        env_force = False
+
+                    if env_force or recent < limit:
                         # Run JS directly with a lightweight callback
                         def _immediate_cb(result):
                             try:
@@ -2291,8 +2414,16 @@ class ChatPage(QWidget):
                             except Exception:
                                 pass
                             self.pending_js_count += 1
-                            page.runJavaScript(js_to_enqueue, _immediate_cb)
-                            return
+                            try:
+                                self._run_js_with_diagnostics(page, js_to_enqueue, _immediate_cb, message_id=message_id, tag='IMMEDIATE_CALL', timeout_ms=3000)
+                                return
+                            except Exception:
+                                # Fallback if wrapper fails
+                                try:
+                                    page.runJavaScript(js_to_enqueue, _immediate_cb)
+                                    return
+                                except Exception:
+                                    pass
                         except Exception:
                             # log failure and fall back to queue insertion
                             try:
@@ -2307,12 +2438,12 @@ class ChatPage(QWidget):
                             except Exception:
                                 pass
                     else:
-                        # Rate limit hit, fall back to front-insert
+                        # Rate limit hit, fall back to front-insert and log which limit prevented execution
                         try:
                             dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
                             os.makedirs(os.path.dirname(dlog), exist_ok=True)
                             with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
-                                df.write(f"{time.time():.3f} IMMEDIATE_RATE_LIMIT message_id={message_id} recent={recent}\n")
+                                df.write(f"{time.time():.3f} IMMEDIATE_RATE_LIMIT message_id={message_id} recent={recent} limit={limit} meta_patch={int(is_meta_patch)}\n")
                                 try:
                                     df.flush(); os.fsync(df.fileno())
                                 except Exception:
@@ -2580,7 +2711,12 @@ class ChatPage(QWidget):
                 except Exception:
                     pass
                 raise RuntimeError("No QWebEnginePage available for runJavaScript")
-            page.runJavaScript(js_code, on_complete)
+            # Use diagnostic wrapper to capture callback entry/result and timeouts
+            try:
+                self._run_js_with_diagnostics(page, js_code, on_complete, message_id=message_id, tag='QUEUED_CALL', timeout_ms=5000)
+            except Exception:
+                # Fallback to direct call if wrapper fails
+                page.runJavaScript(js_code, on_complete)
         except Exception as e:
             logger.error(f"✗ Exception executing JavaScript: {e}")
             try:
@@ -2656,6 +2792,118 @@ class ChatPage(QWidget):
                         return None
         except Exception:
             return None
+
+    def _run_js_with_diagnostics(self, page, js, callback=None, message_id=None, tag='CALL', timeout_ms=5000):
+        """Run `page.runJavaScript` while logging callback entry/result and timeouts.
+
+        - `tag` is an identifier added to log lines for easier grepping.
+        - `timeout_ms` specifies how long to wait before emitting a timeout diagnostic
+          if the JavaScript callback hasn't fired.
+        """
+        try:
+            import time, os, traceback
+            dlog = os.path.join(os.getcwd(), 'logs', 'chat_page_dom.log')
+            os.makedirs(os.path.dirname(dlog), exist_ok=True)
+        except Exception:
+            dlog = None
+
+        invoked = {'called': False}
+
+        def _internal_cb(result):
+            try:
+                invoked['called'] = True
+            except Exception:
+                pass
+            try:
+                if dlog:
+                    try:
+                        with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                            df.write(f"{time.time():.3f} JS_CALLBACK_ENTER tag={tag} message_id={message_id} result={repr(result)}\n")
+                            try:
+                                df.flush(); os.fsync(df.fileno())
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            try:
+                if callback:
+                    try:
+                        callback(result)
+                    except Exception:
+                        if dlog:
+                            try:
+                                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                    df.write(f"{time.time():.3f} JS_CALLBACK_EXCEPTION tag={tag} message_id={message_id} err={repr(traceback.format_exc())}\n")
+                                    try:
+                                        df.flush(); os.fsync(df.fileno())
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+        try:
+            # Wrap arbitrary JS in a safe IIFE so it always returns a value
+            # and any exceptions are caught and surface to the Python callback.
+            try:
+                wrapped_js = (
+                    "(function(){ try{ " + js + " ; return true; } catch(e) {"
+                    " console.error('AZB_JS_EXCEPTION', e); return 'AZB_EXN:' + String(e); } })()"
+                )
+            except Exception:
+                # Fallback: if concatenation fails for any reason, use original js
+                wrapped_js = js
+
+            page.runJavaScript(wrapped_js, _internal_cb)
+            # Log that runJavaScript was invoked successfully (callback may still not fire)
+            try:
+                if dlog:
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        df.write(f"{time.time():.3f} JS_INVOKED tag={tag} message_id={message_id}\n")
+                        try:
+                            df.flush(); os.fsync(df.fileno())
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        except Exception as e:
+            # Log runJavaScript invocation failure
+            try:
+                if dlog:
+                    with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                        df.write(f"{time.time():.3f} JS_RUN_EXCEPTION tag={tag} message_id={message_id} err={repr(e)}\n")
+                        try:
+                            df.flush(); os.fsync(df.fileno())
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            raise
+
+        # Schedule a timeout diagnostic if callback not invoked
+        try:
+            def _timeout():
+                try:
+                    if not invoked.get('called'):
+                        if dlog:
+                            try:
+                                with open(dlog, 'a', encoding='utf-8', errors='replace') as df:
+                                    df.write(f"{time.time():.3f} JS_CALLBACK_TIMEOUT tag={tag} message_id={message_id} timeout_ms={timeout_ms}\n")
+                                    try:
+                                        df.flush(); os.fsync(df.fileno())
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            QTimer.singleShot(timeout_ms, _timeout)
+        except Exception:
+            pass
 
     def _drain_worker_queue(self):
         """Drain items pushed by background render workers into the main thread."""
@@ -2738,7 +2986,10 @@ class ChatPage(QWidget):
                             pass
 
                     try:
-                        page.runJavaScript(js_find, _cb)
+                        try:
+                            self._run_js_with_diagnostics(page, js_find, _cb, message_id=message_id, tag='FIND_PLACEHOLDERS', timeout_ms=2000)
+                        except Exception:
+                            page.runJavaScript(js_find, _cb)
                     except Exception:
                         pass
             except Exception:
