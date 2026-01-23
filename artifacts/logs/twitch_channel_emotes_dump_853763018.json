@@ -1,0 +1,16 @@
+{
+  "timestamp": 1768871103,
+  "broadcaster_id": "853763018",
+  "id_map": {
+    "1": {
+      "id": "1",
+      "name": "Kappa",
+      "images": {
+        "url_1x": "https://example.com/1.png"
+      }
+    }
+  },
+  "name_map": {
+    "Kappa": "1"
+  }
+}

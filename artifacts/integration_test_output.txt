@@ -1,0 +1,54 @@
+.................................Fatal Python error: Aborted
+
+Thread 0x00007fe64f6f1640 (most recent call first):
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/threading.py", line 359 in wait
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/queue.py", line 180 in get
+  File "/home/runner/work/AudibleZenBot/AudibleZenBot/core/twitch_emotes.py", line 302 in _worker
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/threading.py", line 1012 in run
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Current thread 0x00007fe665717b80 (most recent call first):
+  File "/home/runner/work/AudibleZenBot/AudibleZenBot/tests/test_integration_chatpage.py", line 75 in setUpClass
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/unittest.py", line 154 in unittest_setup_class_fixture
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/fixtures.py", line 908 in call_fixture_func
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/fixtures.py", line 1202 in pytest_fixture_setup
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/fixtures.py", line 1110 in execute
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/fixtures.py", line 627 in _get_active_fixturedef
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/fixtures.py", line 539 in getfixturevalue
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/fixtures.py", line 707 in _fillfixtures
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/python.py", line 1723 in setup
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/unittest.py", line 227 in setup
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/runner.py", line 523 in setup
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/runner.py", line 165 in pytest_runtest_setup
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/runner.py", line 245 in <lambda>
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/runner.py", line 353 in from_call
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/runner.py", line 244 in call_and_report
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/runner.py", line 131 in runtestprotocol
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/runner.py", line 118 in pytest_runtest_protocol
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/main.py", line 396 in pytest_runtestloop
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/main.py", line 372 in _main
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/main.py", line 318 in wrap_session
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/main.py", line 365 in pytest_cmdline_main
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/config/__init__.py", line 199 in main
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/_pytest/config/__init__.py", line 223 in console_main
+  File "/opt/hostedtoolcache/Python/3.12.12/x64/lib/python3.12/site-packages/pytest/__main__.py", line 9 in <module>
+  File "<frozen runpy>", line 88 in _run_code
+  File "<frozen runpy>", line 198 in _run_module_as_main
+
+Extension modules: PyQt6.QtCore, charset_normalizer.md, PyQt6.QtGui, PyQt6.QtWidgets, PyQt6.QtNetwork, PyQt6.QtPrintSupport, PyQt6.QtWebChannel, PyQt6.QtWebEngineCore, PyQt6.QtWebEngineWidgets (total: 9)
