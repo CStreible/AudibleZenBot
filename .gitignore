@@ -23,3 +23,11 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+# dotnet
+bin/
+obj/
+*.user
+*.suo
+*.dll
+*.pdb
+*.exe
