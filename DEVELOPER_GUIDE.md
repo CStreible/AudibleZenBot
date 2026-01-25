@@ -200,24 +200,7 @@ Current connectors are in demo mode. To implement real connections:
 
 #### For Twitch:
 
-```python
-# Use TwitchIO or implement IRC directly
-import websockets
-import asyncio
-
-async def connect_twitch(channel, token):
-    uri = "wss://irc-ws.chat.twitch.tv:443"
-    async with websockets.connect(uri) as websocket:
-        # Send authentication
-        await websocket.send(f"PASS oauth:{token}")
-        await websocket.send(f"NICK {username}")
-        await websocket.send(f"JOIN #{channel}")
-        
-        # Listen for messages
-        async for message in websocket:
-            # Parse and emit message
-            pass
-```
+Use the Twitch EventSub websocket or implement an EventSub client. Connect to `wss://eventsub.wss.twitch.tv/ws` and handle EventSub JSON notifications (e.g. `session_welcome`, `keepalive`, `notification`, `session_reconnect`). See `AudibleZenBot.AutoGen/platform_connectors/twitch_connector.cs` for a C# example.
 
 #### For YouTube:
 
@@ -433,7 +416,7 @@ def debug_signal(sender, signal_name, *args):
 ### Priority Features
 
 1. **Real API Integration:**
-   - Complete Twitch IRC implementation
+    - Complete Twitch EventSub implementation
    - YouTube Live Chat API
    - Other platforms
 

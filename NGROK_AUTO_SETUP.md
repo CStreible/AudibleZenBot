@@ -51,7 +51,7 @@ That's it! The app will now automatically:
 
 | Platform | Connection Method | Ngrok Needed |
 |----------|-------------------|--------------|
-| **Twitch** | WebSocket (IRC) | ❌ No |
+| **Twitch** | EventSub WebSocket | ❌ No |
 | **YouTube** | API Polling | ❌ No |
 | **Trovo** | WebSocket | ❌ No |
 | **DLive** | GraphQL WebSocket | ❌ No |
