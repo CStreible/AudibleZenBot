@@ -1,0 +1,31 @@
+<UserControl x:Class="AudibleZenBot.WPF.Views.ConnectionsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Height="Auto" Width="Auto">
+    <Grid Background="#1e1e1e" Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Platform Connections" Foreground="White" FontSize="24" FontWeight="Bold" />
+
+        <TabControl Grid.Row="1" Margin="0,8,0,0" xmlns:views="clr-namespace:AudibleZenBot.WPF.Views">
+            <TabItem Header="Twitch">
+                <views:PlatformConnectionPanel x:Name="Panel_Twitch" />
+            </TabItem>
+            <TabItem Header="YouTube">
+                <views:PlatformConnectionPanel x:Name="Panel_YouTube" />
+            </TabItem>
+            <TabItem Header="Kick">
+                <views:PlatformConnectionPanel x:Name="Panel_Kick" />
+            </TabItem>
+            <TabItem Header="Trovo">
+                <views:PlatformConnectionPanel x:Name="Panel_Trovo" />
+            </TabItem>
+            <TabItem Header="DLive">
+                <views:PlatformConnectionPanel x:Name="Panel_DLive" />
+            </TabItem>
+        </TabControl>
+    </Grid>
+</UserControl>

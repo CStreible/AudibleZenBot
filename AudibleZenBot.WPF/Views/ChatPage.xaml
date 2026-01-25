@@ -1,0 +1,44 @@
+<UserControl x:Class="AudibleZenBot.WPF.Views.ChatPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Height="Auto" Width="Auto">
+    <Grid Background="#1e1e1e" Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Chat Messages" Foreground="White" FontSize="24" FontWeight="Bold" />
+
+        <!-- Settings / Controls -->
+        <StackPanel Orientation="Horizontal" Grid.Row="1" Margin="0,8,0,8" HorizontalAlignment="Left" >
+            <CheckBox x:Name="ChkIcons" Content="Icons" Foreground="White" IsChecked="True" Margin="0,0,8,0" />
+            <CheckBox x:Name="ChkUserColors" Content="User Colors" Foreground="White" IsChecked="True" Margin="0,0,8,0" />
+            <CheckBox x:Name="ChkTimestamps" Content="Timestamps" Foreground="White" IsChecked="True" Margin="0,0,8,0" />
+            <CheckBox x:Name="ChkBadges" Content="Badges" Foreground="White" IsChecked="True" Margin="0,0,8,0" />
+            <Button x:Name="BtnPause" Content="Pause" Width="80" Margin="0,0,8,0" />
+            <Button x:Name="BtnClear" Content="Clear" Width="80" Margin="0,0,8,0" />
+            <TextBox x:Name="TxtFilter" Width="200" Height="24" VerticalContentAlignment="Center" Margin="0,0,0,0" />
+        </StackPanel>
+
+        <!-- Message list / preview -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*" />
+                <ColumnDefinition Width="2*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="#151515" BorderBrush="#2d2d2d" BorderThickness="1" CornerRadius="4" Padding="6">
+                <ListBox x:Name="LbMessages" Foreground="White" Background="Transparent" BorderThickness="0" />
+            </Border>
+
+            <Border Grid.Column="1" Background="#151515" BorderBrush="#2d2d2d" BorderThickness="1" CornerRadius="4" Padding="6" Margin="8,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="Message Details / Preview" Foreground="#cccccc" FontWeight="Bold" />
+                    <TextBlock x:Name="TbMessagePreview" Text="Select a message to see details." Foreground="#aaaaaa" TextWrapping="Wrap" Margin="0,6,0,0" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
