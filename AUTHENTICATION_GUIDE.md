@@ -2,8 +2,8 @@
 
 ## Overview
 
-AudibleZenBot now supports **real chat connections** with authentication for all 6 streaming platforms:
-- 📺 Twitch (IRC WebSocket)
+- AudibleZenBot now supports **real chat connections** with authentication for all 6 streaming platforms:
+- 📺 Twitch (EventSub websocket + Helix APIs)
 - ▶️ YouTube (Live Chat API)
 - 🎮 Trovo (WebSocket API)
 - ⚽ Kick (WebSocket)
@@ -21,10 +21,10 @@ AudibleZenBot now supports **real chat connections** with authentication for all
 ### ✅ Platform Connections
 
 #### Twitch
-- **Real IRC Connection** - WebSocket to wss://irc-ws.chat.twitch.tv:443
-- **Message Parsing** - Parses IRC PRIVMSG format
-- **Send Messages** - Can send chat messages
-- **PING/PONG** - Automatic connection keepalive
+- **EventSub WebSocket** - Uses Twitch EventSub websocket for notifications (replaces legacy raw chat parsing)
+- **Message Parsing** - Parses EventSub JSON notifications including channel points redemptions, follows, subscriptions, cheers and chat message notifications when enabled
+- **Send Messages** - Uses Helix/moderation/chat endpoints (requires appropriate scopes)
+- **Reconnection & Keepalive** - WebSocket reconnection and EventSub session handling
 - **Demo Mode** - Works without token for testing
 
 #### YouTube
@@ -111,30 +111,19 @@ See the detailed **[API Setup Guide](API_SETUP_GUIDE.md)** for:
 
 ## Technical Details
 
-### Twitch Implementation
+### Twitch Implementation (EventSub + Helix)
 
-```python
-# Real IRC WebSocket connection
-IRC_SERVER = 'wss://irc-ws.chat.twitch.tv:443'
+EventSub WebSocket is used to receive structured JSON notifications from Twitch (session_welcome, keepalive, notification, session_reconnect). Common notifications include channel points redemptions, stream.online/offline, follows, subscriptions, gifted subs, and cheers. When available, `channel.chat.message` notifications are used for chat messages instead of legacy PRIVMSG-style parsing.
 
-# Authentication
-PASS oauth:REPLACE_WITH_YOUR_TOKEN
-NICK botname
-JOIN #channelname
+Receiving messages: connect to `wss://eventsub.wss.twitch.tv/ws` and parse EventSub JSON payloads.
 
-# Receive messages
-:username!username@username.tmi.twitch.tv PRIVMSG #channel :message
-
-# Send messages
-PRIVMSG #channel :Your message here
-```
+Sending messages and moderation actions use Helix endpoints (requires `chat:edit`, `moderation:chat` or appropriate scopes).
 
 **Features:**
-- Async WebSocket connection
-- IRC protocol parsing with regex
-- PING/PONG keepalive
-- Multi-threaded (non-blocking UI)
-- Error handling and reconnection
+- EventSub JSON parsing for robust event handling
+- Helix API usage for sending messages and moderation
+- WebSocket reconnect/backoff and session management
+- Fallbacks and diagnostics for missing scopes or token validation
 
 ### YouTube Implementation
 
@@ -291,8 +280,8 @@ Example structure:
 - [ ] Message filtering
 - [ ] Chat analytics
 
-### Platform Completion
-- [x] Twitch - Full IRC implementation
+-### Platform Completion
+- [x] Twitch - EventSub + Helix implementation
 - [x] YouTube - API v3 implementation
 - [ ] Trovo - Complete WebSocket
 - [ ] Kick - Complete WebSocket
@@ -348,8 +337,8 @@ class PlatformConnector(BasePlatformConnector):
 
 ## Summary
 
-✅ **What Works:**
-- Twitch real IRC connection with OAuth
+-✅ **What Works:**
+- Twitch real EventSub + Helix connection with OAuth
 - YouTube real API connection with API key
 - Token-based authentication for all platforms
 - Demo mode for all platforms (no setup needed)

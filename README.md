@@ -21,7 +21,7 @@ Monitor and manage chat messages from **Twitch**, **YouTube**, **Trovo**, **Kick
 
 ### 🎯 Multi-Platform Support
 Connect to multiple streaming platforms simultaneously and see all chats in one place:
-- **📺 Twitch** - IRC chat integration
+- **📺 Twitch** - chat integration via EventSub (recommended)
 - **▶️ YouTube** - Live chat via YouTube Data API
 - **🎮 Trovo** - WebSocket chat connection
 - **⚽ Kick** - Real-time chat monitoring (auto-ngrok webhooks!)
