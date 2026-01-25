@@ -1,0 +1,17 @@
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\bin\Debug\net8.0-windows\AudibleZenBot.UI.exe
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\bin\Debug\net8.0-windows\AudibleZenBot.UI.deps.json
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\bin\Debug\net8.0-windows\AudibleZenBot.UI.runtimeconfig.json
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\bin\Debug\net8.0-windows\AudibleZenBot.UI.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\bin\Debug\net8.0-windows\AudibleZenBot.UI.pdb
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\bin\Debug\net8.0-windows\AudibleZenBot.AutoGen.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\bin\Debug\net8.0-windows\AudibleZenBot.AutoGen.pdb
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\AudibleZenBot.UI.csproj.AssemblyReference.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\AudibleZenBot.UI.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\AudibleZenBot.UI.csproj.CoreCompileInputs.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\AudibleZenBot.UI.sourcelink.json
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\AudibleZ.81B8755A.Up2Date
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\AudibleZenBot.UI.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\refint\AudibleZenBot.UI.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\AudibleZenBot.UI.pdb
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\AudibleZenBot.UI.genruntimeconfig.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.UI\obj\Debug\net8.0-windows\ref\AudibleZenBot.UI.dll

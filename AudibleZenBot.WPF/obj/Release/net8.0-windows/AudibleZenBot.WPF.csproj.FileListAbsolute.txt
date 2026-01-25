@@ -1,0 +1,6 @@
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.WPF\obj\Release\net8.0-windows\AudibleZenBot.WPF.csproj.AssemblyReference.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.WPF\obj\Release\net8.0-windows\AudibleZenBot.WPF.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.WPF\obj\Release\net8.0-windows\AudibleZenBot.WPF.AssemblyInfoInputs.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.WPF\obj\Release\net8.0-windows\AudibleZenBot.WPF.AssemblyInfo.cs
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.WPF\obj\Release\net8.0-windows\AudibleZenBot.WPF.csproj.CoreCompileInputs.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.WPF\obj\Release\net8.0-windows\AudibleZenBot.WPF.sourcelink.json

@@ -1,0 +1,39 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "AudibleZenBot.UI/1.0.0": {
+        "dependencies": {
+          "AudibleZenBot.AutoGen": "1.0.0"
+        },
+        "runtime": {
+          "AudibleZenBot.UI.dll": {}
+        }
+      },
+      "AudibleZenBot.AutoGen/1.0.0": {
+        "runtime": {
+          "AudibleZenBot.AutoGen.dll": {
+            "assemblyVersion": "0.0.0.0",
+            "fileVersion": "0.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "AudibleZenBot.UI/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "AudibleZenBot.AutoGen/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

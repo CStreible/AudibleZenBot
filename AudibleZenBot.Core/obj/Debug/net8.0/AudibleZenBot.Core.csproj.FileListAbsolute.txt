@@ -1,0 +1,13 @@
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\bin\Debug\net8.0\AudibleZenBot.Core.deps.json
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\bin\Debug\net8.0\AudibleZenBot.Core.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\bin\Debug\net8.0\AudibleZenBot.Core.pdb
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\AudibleZenBot.Core.csproj.AssemblyReference.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\AudibleZenBot.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\AudibleZenBot.Core.AssemblyInfoInputs.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\AudibleZenBot.Core.AssemblyInfo.cs
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\AudibleZenBot.Core.csproj.CoreCompileInputs.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\AudibleZenBot.Core.sourcelink.json
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\AudibleZenBot.Core.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\refint\AudibleZenBot.Core.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\AudibleZenBot.Core.pdb
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Core\obj\Debug\net8.0\ref\AudibleZenBot.Core.dll

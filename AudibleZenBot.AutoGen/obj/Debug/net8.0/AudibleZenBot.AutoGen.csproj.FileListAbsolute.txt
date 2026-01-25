@@ -1,0 +1,11 @@
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\bin\Debug\net8.0\AudibleZenBot.AutoGen.deps.json
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\bin\Debug\net8.0\AudibleZenBot.AutoGen.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\bin\Debug\net8.0\AudibleZenBot.AutoGen.pdb
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\AudibleZenBot.AutoGen.csproj.AssemblyReference.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\AudibleZenBot.AutoGen.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\AudibleZenBot.AutoGen.csproj.CoreCompileInputs.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\AudibleZenBot.AutoGen.sourcelink.json
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\AudibleZenBot.AutoGen.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\refint\AudibleZenBot.AutoGen.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\AudibleZenBot.AutoGen.pdb
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\ref\AudibleZenBot.AutoGen.dll
