@@ -89,7 +89,7 @@ A complete standalone PC application with GUI for monitoring and managing chat f
   - Connection state management
   
 - **Platform-Specific Connectors**
-  - Twitch connector with IRC support
+  - Twitch connector using EventSub for chat
   - YouTube connector with API structure
   - Trovo connector with WebSocket
   - Kick connector
@@ -233,7 +233,7 @@ AudibleZenBot/
 
 ### Critical Path
 1. **Implement Real APIs**
-   - Complete Twitch IRC WebSocket
+  - Complete Twitch EventSub WebSocket
    - Integrate YouTube Live Chat API
    - Add OAuth flows for each platform
    - Parse platform-specific message formats
