@@ -1,0 +1,52 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudibleZenBot.Core", "AudibleZenBot.Core\AudibleZenBot.Core.csproj", "{40630BB3-F529-49C6-A06C-934C45E02223}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudibleZenBot.Connectors", "AudibleZenBot.Connectors\AudibleZenBot.Connectors.csproj", "{F2A2B6B3-E4A1-4DFD-97C9-E404B3243454}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudibleZenBot.Overlay", "AudibleZenBot.Overlay\AudibleZenBot.Overlay.csproj", "{EE3383ED-9EDB-4256-AF3C-43D5B668F48B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudibleZenBot.UI", "AudibleZenBot.UI\AudibleZenBot.UI.csproj", "{80F49F2F-8D3E-492B-8DE7-2315FAFFFEE1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudibleZenBot.Tests", "AudibleZenBot.Tests\AudibleZenBot.Tests.csproj", "{A4FB63EC-8231-4D12-BE4B-B5DA9E012DCC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudibleZenBot.AutoGen", "AudibleZenBot.AutoGen\AudibleZenBot.AutoGen.csproj", "{298E43A1-F014-458D-A5F0-0F20904BC456}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{40630BB3-F529-49C6-A06C-934C45E02223}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{40630BB3-F529-49C6-A06C-934C45E02223}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{40630BB3-F529-49C6-A06C-934C45E02223}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{40630BB3-F529-49C6-A06C-934C45E02223}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F2A2B6B3-E4A1-4DFD-97C9-E404B3243454}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F2A2B6B3-E4A1-4DFD-97C9-E404B3243454}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F2A2B6B3-E4A1-4DFD-97C9-E404B3243454}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F2A2B6B3-E4A1-4DFD-97C9-E404B3243454}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EE3383ED-9EDB-4256-AF3C-43D5B668F48B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EE3383ED-9EDB-4256-AF3C-43D5B668F48B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EE3383ED-9EDB-4256-AF3C-43D5B668F48B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EE3383ED-9EDB-4256-AF3C-43D5B668F48B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{80F49F2F-8D3E-492B-8DE7-2315FAFFFEE1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{80F49F2F-8D3E-492B-8DE7-2315FAFFFEE1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{80F49F2F-8D3E-492B-8DE7-2315FAFFFEE1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{80F49F2F-8D3E-492B-8DE7-2315FAFFFEE1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A4FB63EC-8231-4D12-BE4B-B5DA9E012DCC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A4FB63EC-8231-4D12-BE4B-B5DA9E012DCC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A4FB63EC-8231-4D12-BE4B-B5DA9E012DCC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A4FB63EC-8231-4D12-BE4B-B5DA9E012DCC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{298E43A1-F014-458D-A5F0-0F20904BC456}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{298E43A1-F014-458D-A5F0-0F20904BC456}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{298E43A1-F014-458D-A5F0-0F20904BC456}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{298E43A1-F014-458D-A5F0-0F20904BC456}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
