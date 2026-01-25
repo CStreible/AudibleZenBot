@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("AudibleZenBot.Overlay")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9603658fa079879ddc86cb6941f6162e20150953")]
 [assembly: System.Reflection.AssemblyProductAttribute("AudibleZenBot.Overlay")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AudibleZenBot.Overlay")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

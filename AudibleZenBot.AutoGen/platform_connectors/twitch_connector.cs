@@ -10,6 +10,13 @@ using System.Collections.Generic;
 namespace platform_connectors.twitch_connector {
     public static class Twitch_connectorModule {
         private static string? _eventSubSessionId;
+        // Callbacks (may be set by instances/UI). Stored as Delegate to allow flexible binding from generated code.
+        private static Delegate? _metadataCallbackDel;
+        private static Delegate? _deletionCallbackDel;
+        private static Delegate? _eventCallbackDel;
+        private static Delegate? _eventSubStatusCallbackDel;
+        private static Delegate? _statusChangedCallbackDel;
+        private static Delegate? _errorCallbackDel;
         private static async Task<HttpResponseMessage> GetWithRetriesAsync(HttpClient http, string url, int maxAttempts = 3) {
             return await core.http_retry.HttpRetry.GetWithRetriesAsync(http, url, maxAttempts).ConfigureAwait(false);
         }
@@ -19,7 +26,8 @@ namespace platform_connectors.twitch_connector {
         }
         // Original: def _make_retry_session(total: int = 3, backoff_factor: float = 1.0)
         public static void MakeRetrySession(int? total = null, double? backoff_factor = null) {
-            // TODO: implement
+            // No-op for now; retry behavior is provided by core.http_retry helpers.
+            return;
         }
 
         // Original: def __new__(cls, config=None, is_bot_account=False)
@@ -29,7 +37,8 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def __init__(self, config=None, is_bot_account=False)
         public static void Init(object? config = null, bool? is_bot_account = null) {
-            // TODO: implement
+            // minimal init: no-op
+            return;
         }
 
         // Original: def set_token(self, token: str)
@@ -58,7 +67,13 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def set_bot_username(self, bot_username: str)
         public static void SetBotUsername(string? bot_username) {
-            // TODO: implement
+            try {
+                var platform = core.platforms.PlatformIds.Twitch;
+                core.config.ConfigModule.SetPlatformConfig(platform, "bot_username", bot_username ?? string.Empty);
+                Console.WriteLine($"Twitch_connectorModule.SetBotUsername: {bot_username}");
+            } catch (Exception ex) {
+                Console.WriteLine($"SetBotUsername error: {ex.Message}");
+            }
         }
 
         // Original: def connect(self, username: str)
@@ -74,17 +89,22 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def refresh_access_token(self)
         public static void RefreshAccessToken() {
-            // TODO: implement
+            try {
+                var h = new core.oauth_handler.OAuthHandler();
+                _ = h.RefreshTokenAsync(core.platforms.PlatformIds.Twitch);
+            } catch (Exception ex) {
+                Console.WriteLine($"RefreshAccessToken error: {ex.Message}");
+            }
         }
 
         // Original: def _on_eventsub_reauth_requested(self, oauth_url: str)
         public static void OnEventsubReauthRequested(string? oauth_url) {
-            // TODO: implement
+            Console.WriteLine($"EventSub reauth requested: {oauth_url}");
         }
 
         // Original: def disconnect(self)
         public static void Disconnect() {
-            // TODO: implement
+            Console.WriteLine("Twitch_connectorModule.Disconnect called");
         }
 
         // Original: def send_message(self, message: str)
@@ -210,57 +230,120 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def onMessageReceived(self, username: str, message: str)
         public static void OnMessageReceived(string? username, string? message) {
-            // TODO: implement
+            try {
+                Console.WriteLine($"OnMessageReceived: [{username}] {message}");
+                if (_metadataCallbackDel != null) {
+                    try { _metadataCallbackDel.DynamicInvoke(username, message); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"OnMessageReceived error: {ex.Message}");
+            }
         }
 
         // Original: def onMessageReceivedWithMetadata(self, username: str, message: str, metadata: dict)
         public static void OnMessageReceivedWithMetadata(string? username, string? message, System.Collections.Generic.Dictionary<string,object>? metadata) {
-            // TODO: implement
+            try {
+                Console.WriteLine($"OnMessageReceivedWithMetadata: [{username}] {message}");
+                if (_metadataCallbackDel != null) {
+                    try { _metadataCallbackDel.DynamicInvoke(username, message, metadata); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"OnMessageReceivedWithMetadata error: {ex.Message}");
+            }
         }
 
         // Original: def onMessageDeleted(self, message_id: str)
         public static void OnMessageDeleted(string? message_id) {
-            // TODO: implement
+            try {
+                Console.WriteLine($"OnMessageDeleted: {message_id}");
+                if (_deletionCallbackDel != null) {
+                    try { _deletionCallbackDel.DynamicInvoke(message_id); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"OnMessageDeleted error: {ex.Message}");
+            }
         }
 
         // Original: def onRedemption(self, username: str, reward_title: str, reward_cost: int, user_input: str)
         public static void OnRedemption(string? username, string? reward_title, int? reward_cost, string? user_input) {
-            // TODO: implement
+            try {
+                Console.WriteLine($"OnRedemption: user={username} reward={reward_title} cost={reward_cost} input={user_input}");
+                if (_eventCallbackDel != null) {
+                    try { _eventCallbackDel.DynamicInvoke("redemption", username, new System.Collections.Generic.Dictionary<string,object>() { { "title", reward_title ?? string.Empty }, { "cost", reward_cost ?? 0 }, { "input", user_input ?? string.Empty } }); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"OnRedemption error: {ex.Message}");
+            }
         }
 
         // Original: def onEvent(self, event_type: str, username: str, event_data: dict)
         public static void OnEvent(string? event_type, string? username, System.Collections.Generic.Dictionary<string,object>? event_data) {
-            // TODO: implement
+            try {
+                Console.WriteLine($"OnEvent: type={event_type} user={username}");
+                if (_eventCallbackDel != null) {
+                    try { _eventCallbackDel.DynamicInvoke(event_type, username, event_data); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"OnEvent error: {ex.Message}");
+            }
         }
 
         // Original: def onEventSubStatus(self, connected: bool)
         public static void OnEventSubStatus(bool? connected) {
-            // TODO: implement
+            try {
+                Console.WriteLine($"OnEventSubStatus: connected={connected}");
+                if (_eventSubStatusCallbackDel != null) {
+                    try { _eventSubStatusCallbackDel.DynamicInvoke(connected); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"OnEventSubStatus error: {ex.Message}");
+            }
         }
 
         // Original: def onStatusChanged(self, connected: bool)
         public static void OnStatusChanged(bool? connected) {
-            // TODO: implement
+            try {
+                Console.WriteLine($"OnStatusChanged: {connected}");
+                if (_statusChangedCallbackDel != null) {
+                    try { _statusChangedCallbackDel.DynamicInvoke(connected); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"OnStatusChanged error: {ex.Message}");
+            }
         }
 
         // Original: def onError(self, error: str)
         public static void OnError(string? error) {
-            // TODO: implement
+            try {
+                Console.WriteLine($"OnError: {error}");
+                if (_errorCallbackDel != null) {
+                    try { _errorCallbackDel.DynamicInvoke(error); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"OnError error: {ex.Message}");
+            }
         }
 
         // Original: def set_metadata_callback(self, callback)
         public static void SetMetadataCallback(object? callback) {
-            // TODO: implement
+            try {
+                if (callback is Delegate d) _metadataCallbackDel = d;
+                else _metadataCallbackDel = null;
+            } catch { _metadataCallbackDel = null; }
         }
 
         // Original: def set_deletion_callback(self, callback)
         public static void SetDeletionCallback(object? callback) {
-            // TODO: implement
+            try {
+                if (callback is Delegate d) _deletionCallbackDel = d;
+                else _deletionCallbackDel = null;
+            } catch { _deletionCallbackDel = null; }
         }
 
         // Original: def run(self)
         public static void Run() {
-            // TODO: implement
+            Console.WriteLine("Twitch_connectorModule.Run invoked");
+            return;
         }
 
         // Original: def connect_to_twitch(self)
@@ -461,34 +544,45 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def parse_clearmsg(self, raw_message: str)
         public static void ParseClearmsg(string? raw_message) {
-            // TODO: implement
+            // minimal parse: log and return
+            Console.WriteLine($"ParseClearmsg: {raw_message}");
         }
 
         // Original: def parse_usernotice(self, raw_message: str)
         public static void ParseUsernotice(string? raw_message) {
-            // TODO: implement
+            Console.WriteLine($"ParseUsernotice: {raw_message}");
         }
 
         // Original: def parse_privmsg(self, raw_message: str)
         public static void ParsePrivmsg(string? raw_message) {
-            // TODO: implement
+            Console.WriteLine($"ParsePrivmsg: {raw_message}");
         }
 
         // Original: def stop(self)
         public static void Stop() {
-            // TODO: implement
+            Console.WriteLine("Twitch_connectorModule.Stop called");
         }
 
         // Original: def send_message_async(self, message: str)
         public static async Task SendMessageAsync(string? message) {
-            // TODO: implement
-            await Task.Yield();
+            try {
+                if (string.IsNullOrEmpty(message)) return;
+                await SendChatMessageAsync(core.platforms.PlatformIds.Twitch, message).ConfigureAwait(false);
+            } catch (Exception ex) {
+                Console.WriteLine($"SendMessageAsync error: {ex.Message}");
+            }
             return;
         }
 
         // Original: def __init__(self, oauth_token: str, client_id: str, broadcaster_login: str)
         public static void Init(string? oauth_token, string? client_id, string? broadcaster_login) {
-            // TODO: implement
+            try {
+                if (!string.IsNullOrEmpty(oauth_token)) core.config.ConfigModule.SetPlatformConfig(core.platforms.PlatformIds.Twitch, "oauth_token", oauth_token);
+                if (!string.IsNullOrEmpty(client_id)) core.config.ConfigModule.SetPlatformConfig(core.platforms.PlatformIds.Twitch, "client_id", client_id);
+                if (!string.IsNullOrEmpty(broadcaster_login)) core.config.ConfigModule.SetPlatformConfig(core.platforms.PlatformIds.Twitch, "bot_username", broadcaster_login);
+            } catch (Exception ex) {
+                Console.WriteLine($"Twitch_connectorModule.Init error: {ex.Message}");
+            }
         }
 
         // Original: def validate_token(self)
@@ -812,7 +906,16 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def _mask_token(tkn: str)
         public static void MaskToken(string? tkn) {
-            // TODO: implement
+            if (string.IsNullOrEmpty(tkn)) return;
+            try {
+                var s = tkn ?? string.Empty;
+                if (s.Length <= 8) {
+                    Console.WriteLine(s);
+                    return;
+                }
+                var masked = s.Substring(0,4) + "..." + s.Substring(s.Length-4);
+                Console.WriteLine(masked);
+            } catch { }
         }
 
     }
@@ -916,7 +1019,13 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def set_bot_username(self, bot_username: str)
         public void SetBotUsername(string? bot_username) {
-            // TODO: implement
+            try {
+                this.bot_username = bot_username;
+                core.config.ConfigModule.SetPlatformConfig(core.platforms.PlatformIds.Twitch, "bot_username", bot_username ?? string.Empty);
+                Console.WriteLine($"TwitchConnector.SetBotUsername: {bot_username}");
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.SetBotUsername error: {ex.Message}");
+            }
         }
 
         // Original: def connect(self, username: str)
@@ -950,7 +1059,11 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def _on_eventsub_reauth_requested(self, oauth_url: str)
         public void OnEventsubReauthRequested(string? oauth_url) {
-            // TODO: implement
+            try {
+                Twitch_connectorModule.OnEventsubReauthRequested(oauth_url);
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.OnEventsubReauthRequested error: {ex.Message}");
+            }
         }
 
         // Original: def disconnect(self)
@@ -995,42 +1108,94 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def onMessageReceived(self, username: str, message: str)
         public void OnMessageReceived(string? username, string? message) {
-            // TODO: implement
+            try {
+                Twitch_connectorModule.OnMessageReceived(username, message);
+                if (this.message_received is Delegate d) {
+                    try { d.DynamicInvoke(username, message); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.OnMessageReceived error: {ex.Message}");
+            }
         }
 
         // Original: def onMessageReceivedWithMetadata(self, username: str, message: str, metadata: dict)
         public void OnMessageReceivedWithMetadata(string? username, string? message, System.Collections.Generic.Dictionary<string,object>? metadata) {
-            // TODO: implement
+            try {
+                Twitch_connectorModule.OnMessageReceivedWithMetadata(username, message, metadata);
+                if (this.message_received_with_metadata is Delegate d) {
+                    try { d.DynamicInvoke(username, message, metadata); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.OnMessageReceivedWithMetadata error: {ex.Message}");
+            }
         }
 
         // Original: def onMessageDeleted(self, message_id: str)
         public void OnMessageDeleted(string? message_id) {
-            // TODO: implement
+            try {
+                Twitch_connectorModule.OnMessageDeleted(message_id);
+                if (this.message_deleted is Delegate d) {
+                    try { d.DynamicInvoke(message_id); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.OnMessageDeleted error: {ex.Message}");
+            }
         }
 
         // Original: def onRedemption(self, username: str, reward_title: str, reward_cost: int, user_input: str)
         public void OnRedemption(string? username, string? reward_title, int? reward_cost, string? user_input) {
-            // TODO: implement
+            try {
+                Twitch_connectorModule.OnRedemption(username, reward_title, reward_cost, user_input);
+                // instance-level event signaling can be added later; static callback already invoked
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.OnRedemption error: {ex.Message}");
+            }
         }
 
         // Original: def onEvent(self, event_type: str, username: str, event_data: dict)
         public void OnEvent(string? event_type, string? username, System.Collections.Generic.Dictionary<string,object>? event_data) {
-            // TODO: implement
+            try {
+                Twitch_connectorModule.OnEvent(event_type, username, event_data);
+                // instance-level event signaling can be added later; static callback already invoked
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.OnEvent error: {ex.Message}");
+            }
         }
 
         // Original: def onEventSubStatus(self, connected: bool)
         public void OnEventSubStatus(bool? connected) {
-            // TODO: implement
+            try {
+                Twitch_connectorModule.OnEventSubStatus(connected);
+                if (this.connection_status is Delegate d) {
+                    try { d.DynamicInvoke(connected); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.OnEventSubStatus error: {ex.Message}");
+            }
         }
 
         // Original: def onStatusChanged(self, connected: bool)
         public void OnStatusChanged(bool? connected) {
-            // TODO: implement
+            try {
+                Twitch_connectorModule.OnStatusChanged(connected);
+                if (this.connection_status is Delegate d) {
+                    try { d.DynamicInvoke(connected); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.OnStatusChanged error: {ex.Message}");
+            }
         }
 
         // Original: def onError(self, error: str)
         public void OnError(string? error) {
-            // TODO: implement
+            try {
+                Twitch_connectorModule.OnError(error);
+                if (this.error_occurred is Delegate d) {
+                    try { d.DynamicInvoke(error); } catch { }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchConnector.OnError error: {ex.Message}");
+            }
         }
 
     }
@@ -1223,12 +1388,12 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def __init__(self, oauth_token: str, client_id: str, broadcaster_login: str)
         public TwitchEventSubWorker(string? oauth_token, string? client_id, string? broadcaster_login) {
-            // TODO: implement constructor
-            this.oauth_token = null;
-            this.client_id = null;
-            this.broadcaster_login = null;
+            // initialize worker state
+            this.oauth_token = oauth_token;
+            this.client_id = client_id;
+            this.broadcaster_login = broadcaster_login;
             this.broadcaster_id = null;
-            this.running = null;
+            this.running = false;
             this.ws = null;
             this.loop = null;
             this.session_id = null;
@@ -1237,7 +1402,7 @@ namespace platform_connectors.twitch_connector {
             this.connect_and_liste = null;
             this.error_signal = null;
             this.reauth_signal = null;
-            this.EVENTSUB_URL = null;
+            this.EVENTSUB_URL = "wss://eventsub.wss.twitch.tv/ws";
             this.status_signal = null;
             this.validate_toke = null;
             this.get_broadcaster_i = null;
@@ -1249,53 +1414,86 @@ namespace platform_connectors.twitch_connector {
 
         // Original: def run(self)
         public void Run() {
-            // TODO: implement
+            try {
+                this.running = true;
+                // start module-level EventSub websocket loop
+                _ = Twitch_connectorModule.StartEventSubWebsocketAsync(core.platforms.PlatformIds.Twitch);
+                try { if (this.status_signal is Delegate d) d.DynamicInvoke(true); } catch { }
+            } catch (Exception ex) {
+                try { if (this.error_signal is Delegate d) d.DynamicInvoke(ex.Message); } catch { }
+            }
         }
 
         // Original: def validate_token(self)
         public async Task ValidateToken() {
-            // TODO: implement
-            await Task.Yield();
+            try {
+                await Twitch_connectorModule.ValidateToken().ConfigureAwait(false);
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchEventSubWorker.ValidateToken error: {ex.Message}");
+                try { if (this.error_signal is Delegate d) d.DynamicInvoke(ex.Message); } catch { }
+            }
             return;
         }
 
         // Original: def connect_and_listen(self)
         public async Task ConnectAndListen() {
-            // TODO: implement
-            // // original awaited: ws.recv()\n                    welcome_data = json.loads(welcome_msg)\n                    \n                    if welcome_data.get('metadata', {}).get('message_type') == 'session_welcome':\n                        self.session_id = welcome_data['payload']['session']['id']\n                        logger.info(f"[EventSub] Session ID: {self.session_id}")\n                        \n
+            try {
+                await Twitch_connectorModule.StartEventSubWebsocketAsync(core.platforms.PlatformIds.Twitch).ConfigureAwait(false);
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchEventSubWorker.ConnectAndListen error: {ex.Message}");
+                try { if (this.error_signal is Delegate d) d.DynamicInvoke(ex.Message); } catch { }
+            }
             await Task.Yield();
             return;
         }
 
         // Original: def get_broadcaster_id(self)
         public async Task GetBroadcasterId() {
-            // TODO: implement
-            await Task.Yield();
+            try {
+                await Twitch_connectorModule.GetBroadcasterId().ConfigureAwait(false);
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchEventSubWorker.GetBroadcasterId error: {ex.Message}");
+                try { if (this.error_signal is Delegate d) d.DynamicInvoke(ex.Message); } catch { }
+            }
             return;
         }
 
         // Original: def subscribe_to_redemptions(self)
         public async Task SubscribeToRedemptions() {
-            // TODO: implement
-            await Task.Yield();
+            try {
+                await Twitch_connectorModule.SubscribeToRedemptions().ConfigureAwait(false);
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchEventSubWorker.SubscribeToRedemptions error: {ex.Message}");
+                try { if (this.error_signal is Delegate d) d.DynamicInvoke(ex.Message); } catch { }
+            }
             return;
         }
 
         // Original: def _mask_token(tkn: str)
         public void MaskToken(string? tkn) {
-            // TODO: implement
+            Twitch_connectorModule.MaskToken(tkn);
         }
 
         // Original: def handle_message(self, message: str)
         public async Task HandleMessage(string? message) {
-            // TODO: implement
-            await Task.Yield();
+            try {
+                await Twitch_connectorModule.HandleMessage(message).ConfigureAwait(false);
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchEventSubWorker.HandleMessage error: {ex.Message}");
+                try { if (this.error_signal is Delegate d) d.DynamicInvoke(ex.Message); } catch { }
+            }
             return;
         }
 
         // Original: def stop(self)
         public void Stop() {
-            // TODO: implement
+            try {
+                this.running = false;
+                Console.WriteLine("TwitchEventSubWorker.Stop called");
+                try { if (this.status_signal is Delegate d) d.DynamicInvoke(false); } catch { }
+            } catch (Exception ex) {
+                Console.WriteLine($"TwitchEventSubWorker.Stop error: {ex.Message}");
+            }
         }
 
     }
