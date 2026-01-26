@@ -1,0 +1,9 @@
+{
+  "platforms": {
+    "twitch": {
+      "oauth_token": "ENC:AQAAANCMnd8BFdERjHoAwE/Cl\u002BsBAAAAc8NtF\u002BweVEunsYJ\u002BBSRYOgAAAAACAAAAAAAQZgAAAAEAACAAAACZLN4i3U5wXQdAsPM8oOY\u002BBWzE9IBLsZvje9gr8RFAqwAAAAAOgAAAAAIAACAAAABnyxXh7DZDTC8QNBQDYX2eTyh/EnllPhGlJBveOMtwAxAAAAAKWpCcREURqDaGoCbJPVO2QAAAAFuyOXKkvLByUD0hKkRJUyEO3Wbc4O4MRQWA1enDcAQKCmkntw0r4PTTZC5/srWqmd0b/jKqCBycSgQyKqi8rpI=",
+      "client_id": "dummy-client",
+      "broadcaster_id": "12345"
+    }
+  }
+}

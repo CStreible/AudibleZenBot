@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("AudibleZenBot.Tests")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a8557dfed340a4da5acb6ae9aef5bd5bdbee459d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+610b3280b5c88d674c1211b44734d24fad3ab61b")]
 [assembly: System.Reflection.AssemblyProductAttribute("AudibleZenBot.Tests")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AudibleZenBot.Tests")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

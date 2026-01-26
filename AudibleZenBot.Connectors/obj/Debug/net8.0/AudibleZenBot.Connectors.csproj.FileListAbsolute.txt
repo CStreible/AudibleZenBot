@@ -1,7 +1,6 @@
 C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Connectors\bin\Debug\net8.0\AudibleZenBot.Connectors.deps.json
 C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Connectors\bin\Debug\net8.0\AudibleZenBot.Connectors.dll
 C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Connectors\bin\Debug\net8.0\AudibleZenBot.Connectors.pdb
-C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Connectors\obj\Debug\net8.0\AudibleZenBot.Connectors.csproj.AssemblyReference.cache
 C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Connectors\obj\Debug\net8.0\AudibleZenBot.Connectors.GeneratedMSBuildEditorConfig.editorconfig
 C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Connectors\obj\Debug\net8.0\AudibleZenBot.Connectors.AssemblyInfoInputs.cache
 C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.Connectors\obj\Debug\net8.0\AudibleZenBot.Connectors.AssemblyInfo.cs

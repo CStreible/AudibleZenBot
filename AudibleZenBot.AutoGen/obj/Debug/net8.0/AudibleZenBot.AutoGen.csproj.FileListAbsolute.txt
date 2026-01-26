@@ -9,3 +9,5 @@ C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\Audib
 C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\refint\AudibleZenBot.AutoGen.dll
 C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\AudibleZenBot.AutoGen.pdb
 C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\ref\AudibleZenBot.AutoGen.dll
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\AudibleZenBot.AutoGen.AssemblyInfoInputs.cache
+C:\Users\cstre\Dev\VS\AudibleZenBot\AudibleZenBot.AutoGen\obj\Debug\net8.0\AudibleZenBot.AutoGen.AssemblyInfo.cs
