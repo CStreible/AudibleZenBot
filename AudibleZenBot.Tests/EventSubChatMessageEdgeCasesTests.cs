@@ -11,12 +11,12 @@ namespace AudibleZenBot.Tests {
             ConfigTestHelper.InitUniqueRepoConfig();
 
             var payload = @"{
-  \"metadata\": { \"message_type\": \"notification\" },
-  \"payload\": {
-    \"subscription\": { \"type\": \"channel.chat.message\", \"version\": \"1\" },
-    \"event\": {
-      \"user_name\": \"someuser\",
-      \"user_login\": \"someuser\"
+  ""metadata"": { ""message_type"": ""notification"" },
+  ""payload"": {
+    ""subscription"": { ""type"": ""channel.chat.message"", ""version"": ""1"" },
+    ""event"": {
+      ""user_name"": ""someuser"",
+      ""user_login"": ""someuser""
     }
   }
 }";
@@ -40,15 +40,15 @@ namespace AudibleZenBot.Tests {
             ConfigTestHelper.InitUniqueRepoConfig();
 
             var payload = @"{
-  \"metadata\": { \"message_type\": \"notification\" },
-  \"payload\": {
-    \"subscription\": { \"type\": \"channel.chat.message\", \"version\": \"1\" },
-    \"event\": {
-      \"user_name\": \"moduser\",
-      \"user_login\": \"moduser\",
-      \"message\": \"Hello Kappa\",
-      \"emotes\": [{ \"start\": 6, \"end\": 10, \"id\": \"25\" }],
-      \"badges\": [{ \"id\": \"moderator\", \"version\": \"1\" }]
+  ""metadata"": { ""message_type"": ""notification"" },
+  ""payload"": {
+    ""subscription"": { ""type"": ""channel.chat.message"", ""version"": ""1"" },
+    ""event"": {
+      ""user_name"": ""moduser"",
+      ""user_login"": ""moduser"",
+      ""message"": ""Hello Kappa"",
+      ""emotes"": [{ ""start"": 6, ""end"": 10, ""id"": ""25"" }],
+      ""badges"": [{ ""id"": ""moderator"", ""version"": ""1"" }]
     }
   }
 }";
@@ -72,12 +72,12 @@ namespace AudibleZenBot.Tests {
             ConfigTestHelper.InitUniqueRepoConfig();
 
             var payload = @"{
-  \"metadata\": { \"message_type\": \"notification\" },
-  \"payload\": {
-    \"subscription\": { \"type\": \"channel.chat.message\", \"version\": \"1\" },
-    \"event\": {
-      \"is_anonymous\": true,
-      \"message\": \"Anonymous hello\"
+  ""metadata"": { ""message_type"": ""notification"" },
+  ""payload"": {
+    ""subscription"": { ""type"": ""channel.chat.message"", ""version"": ""1"" },
+    ""event"": {
+      ""is_anonymous"": true,
+      ""message"": ""Anonymous hello""
     }
   }
 }";
@@ -102,12 +102,12 @@ namespace AudibleZenBot.Tests {
             ConfigTestHelper.InitUniqueRepoConfig();
 
             var payload = @"{
-  \"metadata\": { \"message_type\": \"notification\" },
-  \"payload\": {
-    \"subscription\": { \"type\": \"channel.chat.message\", \"version\": \"1\" },
-    \"event\": {
-      \"user_name\": \"nulluser\",
-      \"message\": null
+  ""metadata"": { ""message_type"": ""notification"" },
+  ""payload"": {
+    ""subscription"": { ""type"": ""channel.chat.message"", ""version"": ""1"" },
+    ""event"": {
+      ""user_name"": ""nulluser"",
+      ""message"": null
     }
   }
 }";

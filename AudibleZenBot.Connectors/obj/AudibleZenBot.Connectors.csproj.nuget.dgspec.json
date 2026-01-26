@@ -49,20 +49,6 @@
       "frameworks": {
         "net8.0": {
           "targetAlias": "net8.0",
-          "dependencies": {
-            "IdentityModel": {
-              "target": "Package",
-              "version": "[6.0.0, )"
-            },
-            "Microsoft.Extensions.Http": {
-              "target": "Package",
-              "version": "[10.0.2, )"
-            },
-            "Websocket.Client": {
-              "target": "Package",
-              "version": "[5.3.0, )"
-            }
-          },
           "imports": [
             "net461",
             "net462",

@@ -52,7 +52,7 @@
           "dependencies": {
             "System.Security.Cryptography.ProtectedData": {
               "target": "Package",
-              "version": "[6.0.0, )"
+              "version": "[7.0.0, )"
             }
           },
           "imports": [
